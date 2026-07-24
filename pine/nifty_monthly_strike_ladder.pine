@@ -1,0 +1,88 @@
+//@version=6
+indicator("NIFTY Monthly LTP Ladder", overlay = true, max_labels_count = 20, dynamic_requests = true)
+
+// Phase 1 visual target:
+//   23,750   C 450.85 | P 312.00
+// One label per 50-point strike. No historical lines. No strategy logic.
+
+groupLadder = "NIFTY monthly ladder"
+groupSymbols = "Option contracts — select exact symbols"
+
+centerStrike = input.float(23800.0, "Center strike", minval = 0.0, step = 50.0, group = groupLadder)
+strikeStep = input.float(50.0, "Strike interval", minval = 50.0, step = 50.0, group = groupLadder)
+showRows = input.int(5, "Visible strikes", options = [3, 5], group = groupLadder)
+
+// Pick each contract from TradingView Symbol Search.
+// Leave blank until contract is selected; blank displays NA, never 0.
+callMinus2 = input.symbol("", "Strike -2 Call", group = groupSymbols)
+putMinus2 = input.symbol("", "Strike -2 Put", group = groupSymbols)
+callMinus1 = input.symbol("", "Strike -1 Call", group = groupSymbols)
+putMinus1 = input.symbol("", "Strike -1 Put", group = groupSymbols)
+callAtm = input.symbol("", "Center Call", group = groupSymbols)
+putAtm = input.symbol("", "Center Put", group = groupSymbols)
+callPlus1 = input.symbol("", "Strike +1 Call", group = groupSymbols)
+putPlus1 = input.symbol("", "Strike +1 Put", group = groupSymbols)
+callPlus2 = input.symbol("", "Strike +2 Call", group = groupSymbols)
+putPlus2 = input.symbol("", "Strike +2 Put", group = groupSymbols)
+
+f_ltp(string symbol) =>
+    symbol == "" ? na : request.security(symbol, timeframe.period, close, ignore_invalid_symbol = true)
+
+f_price(float value) =>
+    na(value) ? "NA" : str.tostring(value, format.mintick)
+
+f_rowText(float strike, float callLtp, float putLtp) =>
+    str.tostring(strike, format.mintick) + "   C " + f_price(callLtp) + " | P " + f_price(putLtp)
+
+strikeMinus2 = centerStrike - strikeStep * 2.0
+strikeMinus1 = centerStrike - strikeStep
+strikeAtm = centerStrike
+strikePlus1 = centerStrike + strikeStep
+strikePlus2 = centerStrike + strikeStep * 2.0
+
+ltpCallMinus2 = f_ltp(callMinus2)
+ltpPutMinus2 = f_ltp(putMinus2)
+ltpCallMinus1 = f_ltp(callMinus1)
+ltpPutMinus1 = f_ltp(putMinus1)
+ltpCallAtm = f_ltp(callAtm)
+ltpPutAtm = f_ltp(putAtm)
+ltpCallPlus1 = f_ltp(callPlus1)
+ltpPutPlus1 = f_ltp(putPlus1)
+ltpCallPlus2 = f_ltp(callPlus2)
+ltpPutPlus2 = f_ltp(putPlus2)
+
+showMinus2 = showRows == 5
+showMinus1 = true
+showAtm = true
+showPlus1 = true
+showPlus2 = showRows == 5
+
+var label[] ladderLabels = array.new<label>()
+
+f_clearLabels() =>
+    if array.size(ladderLabels) > 0
+        for i = 0 to array.size(ladderLabels) - 1
+            label.delete(array.get(ladderLabels, i))
+        array.clear(ladderLabels)
+
+f_drawRow(bool visible, float strike, float callLtp, float putLtp, bool isCenter) =>
+    if visible
+        background = isCenter ? color.new(color.orange, 0) : color.new(color.rgb(67, 71, 82), 8)
+        row = label.new(
+             bar_index + 1,
+             strike,
+             f_rowText(strike, callLtp, putLtp),
+             xloc = xloc.bar_index,
+             style = label.style_label_left,
+             color = background,
+             textcolor = color.white,
+             size = size.small)
+        array.push(ladderLabels, row)
+
+if barstate.islast
+    f_clearLabels()
+    f_drawRow(showMinus2, strikeMinus2, ltpCallMinus2, ltpPutMinus2, false)
+    f_drawRow(showMinus1, strikeMinus1, ltpCallMinus1, ltpPutMinus1, false)
+    f_drawRow(showAtm, strikeAtm, ltpCallAtm, ltpPutAtm, true)
+    f_drawRow(showPlus1, strikePlus1, ltpCallPlus1, ltpPutPlus1, false)
+    f_drawRow(showPlus2, strikePlus2, ltpCallPlus2, ltpPutPlus2, false)

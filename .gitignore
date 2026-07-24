@@ -1,0 +1,20 @@
+# Dependencies and build output
+node_modules/
+dist/
+.vite/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.local/
+
+# Hosted project metadata
+.vercel/
+
+# TradingView Advanced Charts distribution (licensed separately)
+charting_library/
+datafeeds/
+
+# Operating system files
+.DS_Store
