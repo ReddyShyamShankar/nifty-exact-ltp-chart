@@ -91,7 +91,7 @@ test("temporary axis debugger never detaches a pre-existing trusted debugger ses
   ]);
 });
 
-test("temporary axis debugger serializes concurrent captures without sharing cleanup", async () => {
+test("temporary axis debugger serializes concurrent captures under one debugger lease", async () => {
   const { api, calls } = loadBackground();
   let releaseFirst;
   let firstEntered;
@@ -113,8 +113,6 @@ test("temporary axis debugger serializes concurrent captures without sharing cle
     ["attach", 79],
     ["send", 79, "Accessibility.enable"],
     ["send", 79, "Accessibility.disable"],
-    ["detach", 79],
-    ["attach", 79],
     ["send", 79, "Accessibility.enable"],
     ["send", 79, "Accessibility.disable"],
     ["detach", 79]
@@ -138,6 +136,44 @@ test("capture cleanup cannot detach a trusted debugger session started during ca
   assert.equal(calls.some(([kind]) => kind === "detach"), false);
   await api.detach(80);
   assert.equal(calls.filter(([kind]) => kind === "detach").length, 1);
+});
+
+test("borrowed capture detaches after trusted session ends during capture", async () => {
+  const { api, calls, listeners } = loadBackground();
+  await api.ensureAttached(82);
+  calls.splice(0);
+
+  let releaseCapture;
+  let captureEntered;
+  const entered = new Promise((resolve) => { captureEntered = resolve; });
+  const capture = api.withTemporaryAxisDebugger(82, async () => {
+    captureEntered();
+    await new Promise((resolve) => { releaseCapture = resolve; });
+  });
+  await entered;
+
+  await new Promise((resolve, reject) => {
+    listeners.message(
+      { type: "TRUSTED_SESSION_END" },
+      { tab: { id: 82 }, url: "https://www.tradingview.com/chart" },
+      (response) => {
+        try {
+          assert.deepEqual(response, { ok: true });
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      }
+    );
+  });
+  releaseCapture();
+  await capture;
+
+  assert.deepEqual(calls.map((call) => call.slice(0, 3)), [
+    ["send", 82, "Accessibility.enable"],
+    ["send", 82, "Accessibility.disable"],
+    ["detach", 82]
+  ]);
 });
 
 test("trusted start shares an in-flight capture attach instead of attaching twice", async () => {

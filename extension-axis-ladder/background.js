@@ -45,6 +45,11 @@ async function ensureAttached(tabId) {
   attachedTabs.add(tabId);
 }
 
+async function detachIfUnused(tabId) {
+  if (attachedTabs.has(tabId) || activeCaptureTabs.has(tabId) || captureLeaseTails.has(tabId)) return;
+  await detachDebugger(tabId);
+}
+
 async function send(tabId, method, params = {}) {
   await ensureAttached(tabId);
   return chrome.debugger.sendCommand({ tabId }, method, params);
@@ -138,7 +143,7 @@ async function replaceFieldText(tabId, x, y, text) {
 async function detach(tabId) {
   if (!attachedTabs.has(tabId)) return;
   attachedTabs.delete(tabId);
-  if (!activeCaptureTabs.has(tabId)) await detachDebugger(tabId);
+  await detachIfUnused(tabId);
 }
 
 function finiteNumber(value) {
@@ -185,18 +190,19 @@ function withCaptureLease(tabId, callback) {
   const run = previous.catch(() => undefined).then(callback);
   const tail = run.then(() => undefined, () => undefined);
   captureLeaseTails.set(tabId, tail);
-  return run.finally(() => {
-    if (captureLeaseTails.get(tabId) === tail) captureLeaseTails.delete(tabId);
+  return run.finally(async () => {
+    if (captureLeaseTails.get(tabId) !== tail) return;
+    captureLeaseTails.delete(tabId);
+    await detachIfUnused(tabId);
   });
 }
 
 async function withTemporaryAxisDebugger(tabId, callback) {
   return withCaptureLease(tabId, async () => {
-    const attachedHere = !hasDebugger(tabId);
     let accessibilityEnabled = false;
     activeCaptureTabs.add(tabId);
     try {
-      if (attachedHere) await attachDebugger(tabId);
+      if (!hasDebugger(tabId)) await attachDebugger(tabId);
       const sendCommand = (method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
       await sendCommand("Accessibility.enable");
       accessibilityEnabled = true;
@@ -206,7 +212,6 @@ async function withTemporaryAxisDebugger(tabId, callback) {
         try { await chrome.debugger.sendCommand({ tabId }, "Accessibility.disable"); } catch {}
       }
       activeCaptureTabs.delete(tabId);
-      if (attachedHere && !attachedTabs.has(tabId)) await detachDebugger(tabId);
     }
   });
 }
