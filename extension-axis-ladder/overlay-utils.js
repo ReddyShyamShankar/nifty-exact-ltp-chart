@@ -35,6 +35,101 @@
     return (price) => Number(lowerAnchor.y) + (Number(price) - Number(lowerPrice)) * slope;
   }
 
+  function boundedRegion(region, width, height) {
+    const value = (name, fallback) => Number.isFinite(Number(region?.[name])) ? Number(region[name]) : fallback;
+    return {
+      left: Math.max(0, Math.floor(value("left", 0))),
+      top: Math.max(0, Math.floor(value("top", 0))),
+      right: Math.min(width, Math.ceil(value("right", width))),
+      bottom: Math.min(height, Math.ceil(value("bottom", height)))
+    };
+  }
+
+  function isNeutralGridPixel(data, index) {
+    const red = data[index], green = data[index + 1], blue = data[index + 2], alpha = data[index + 3];
+    return alpha > 180
+      && Math.max(red, green, blue) - Math.min(red, green, blue) <= 7
+      && red >= 205 && red <= 245;
+  }
+
+  function findHorizontalGridRows(data, width, height, region) {
+    if (!data || !Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || data.length < width * height * 4) return [];
+    const { left, top, right, bottom } = boundedRegion(region, width, height);
+    if (right <= left || bottom <= top) return [];
+    const candidates = [];
+    for (let y = top; y < bottom; y += 1) {
+      let samples = 0, neutralSamples = 0;
+      for (let x = left; x < right; x += 4) {
+        samples += 1;
+        if (isNeutralGridPixel(data, (y * width + x) * 4)) neutralSamples += 1;
+      }
+      if (samples > 0 && neutralSamples / samples >= 0.55) candidates.push(y);
+    }
+    const rows = [];
+    for (const y of candidates) {
+      const previous = rows[rows.length - 1];
+      if (!previous || y > previous.lastY + 1) rows.push({ firstY: y, lastY: y });
+      else previous.lastY = y;
+    }
+    return rows.map(({ firstY, lastY }) => Math.round((firstY + lastY) / 2));
+  }
+
+  function dominantGridGap(rows) {
+    if (!Array.isArray(rows)) return null;
+    const sorted = rows.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    const gaps = [];
+    for (let index = 1; index < sorted.length; index += 1) {
+      const gap = sorted[index] - sorted[index - 1];
+      if (gap >= 20 && gap <= 220) gaps.push(gap);
+    }
+    if (gaps.length === 0) return null;
+    gaps.sort((a, b) => a - b);
+    const middle = Math.floor(gaps.length / 2);
+    const median = gaps.length % 2 === 0 ? (gaps[middle - 1] + gaps[middle]) / 2 : gaps[middle];
+    return Math.round(median);
+  }
+
+  function priceIntervalFromPixels(gap, lower, upper, lowerPrice, upperPrice) {
+    const pixelGap = Number(gap);
+    const lowerY = Number(lower?.y ?? lower);
+    const upperY = Number(upper?.y ?? upper);
+    const anchorSpan = Math.abs(upperY - lowerY);
+    const priceSpan = Math.abs(Number(upperPrice) - Number(lowerPrice));
+    if (!Number.isFinite(pixelGap) || !Number.isFinite(anchorSpan) || !Number.isFinite(priceSpan) || pixelGap <= 0 || anchorSpan <= 0 || priceSpan <= 0) return null;
+    return pixelGap * priceSpan / anchorSpan;
+  }
+
+  function normalizeAxisPrice(value) {
+    if (typeof value === "string") {
+      const normalized = value.replaceAll(",", "").trim();
+      if (normalized === "") return null;
+      value = normalized;
+    }
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function pairAxisPricesWithRows(prices, rows) {
+    if (!Array.isArray(prices) || !Array.isArray(rows) || prices.length < 2 || prices.length !== rows.length) return null;
+    const numericPrices = prices.map(normalizeAxisPrice);
+    const numericRows = rows.map(Number);
+    if (numericPrices.includes(null) || !numericRows.every(Number.isFinite)) return null;
+    const sortedPrices = numericPrices.slice().sort((a, b) => b - a);
+    const sortedRows = numericRows.slice().sort((a, b) => a - b);
+    if (new Set(sortedPrices).size !== sortedPrices.length || new Set(sortedRows).size !== sortedRows.length) return null;
+    const paired = sortedPrices.map((price, index) => ({ price, y: sortedRows[index] }));
+    const lowest = paired[paired.length - 1];
+    const highest = paired[0];
+    const totalPriceSpan = highest.price - lowest.price;
+    const totalPixelSpan = lowest.y - highest.y;
+    if (totalPriceSpan <= 0 || totalPixelSpan <= 0) return null;
+    for (const point of paired) {
+      const expectedY = highest.y + (highest.price - point.price) * totalPixelSpan / totalPriceSpan;
+      if (Math.abs(point.y - expectedY) > 1) return null;
+    }
+    return paired;
+  }
+
   function spreadAroundAnchor(rawPositions, anchorIndex, minimumGap) {
     const positions = rawPositions.map(Number);
     const anchor = Number(anchorIndex);
@@ -49,7 +144,15 @@
     return positions;
   }
 
-  const api = { findColorBounds, priceToY, spreadAroundAnchor };
+  const api = {
+    findColorBounds,
+    findHorizontalGridRows,
+    dominantGridGap,
+    priceIntervalFromPixels,
+    pairAxisPricesWithRows,
+    priceToY,
+    spreadAroundAnchor
+  };
   root.NiftyOverlay = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);
