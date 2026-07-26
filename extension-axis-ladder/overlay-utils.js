@@ -89,31 +89,44 @@
     return Math.round(median);
   }
 
+  function strictFiniteNumber(value, allowCommas = false) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (typeof value !== "string") return null;
+    const normalized = (allowCommas ? value.replaceAll(",", "") : value).trim();
+    if (normalized === "") return null;
+    const number = Number(normalized);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function anchorY(anchor) {
+    if (anchor !== null && typeof anchor === "object" && !Array.isArray(anchor)) {
+      return strictFiniteNumber(anchor.y);
+    }
+    return strictFiniteNumber(anchor);
+  }
+
   function priceIntervalFromPixels(gap, lower, upper, lowerPrice, upperPrice) {
-    const pixelGap = Number(gap);
-    const lowerY = Number(lower?.y ?? lower);
-    const upperY = Number(upper?.y ?? upper);
+    const pixelGap = strictFiniteNumber(gap);
+    const lowerY = anchorY(lower);
+    const upperY = anchorY(upper);
+    const numericLowerPrice = strictFiniteNumber(lowerPrice, true);
+    const numericUpperPrice = strictFiniteNumber(upperPrice, true);
+    if ([pixelGap, lowerY, upperY, numericLowerPrice, numericUpperPrice].includes(null)) return null;
     const anchorSpan = Math.abs(upperY - lowerY);
-    const priceSpan = Math.abs(Number(upperPrice) - Number(lowerPrice));
-    if (!Number.isFinite(pixelGap) || !Number.isFinite(anchorSpan) || !Number.isFinite(priceSpan) || pixelGap <= 0 || anchorSpan <= 0 || priceSpan <= 0) return null;
+    const priceSpan = Math.abs(numericUpperPrice - numericLowerPrice);
+    if (pixelGap <= 0 || anchorSpan <= 0 || priceSpan <= 0) return null;
     return pixelGap * priceSpan / anchorSpan;
   }
 
   function normalizeAxisPrice(value) {
-    if (typeof value === "string") {
-      const normalized = value.replaceAll(",", "").trim();
-      if (normalized === "") return null;
-      value = normalized;
-    }
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
+    return strictFiniteNumber(value, true);
   }
 
   function pairAxisPricesWithRows(prices, rows) {
     if (!Array.isArray(prices) || !Array.isArray(rows) || prices.length < 2 || prices.length !== rows.length) return null;
     const numericPrices = prices.map(normalizeAxisPrice);
-    const numericRows = rows.map(Number);
-    if (numericPrices.includes(null) || !numericRows.every(Number.isFinite)) return null;
+    const numericRows = rows.map((row) => strictFiniteNumber(row));
+    if (numericPrices.includes(null) || numericRows.includes(null)) return null;
     const sortedPrices = numericPrices.slice().sort((a, b) => b - a);
     const sortedRows = numericRows.slice().sort((a, b) => a - b);
     if (new Set(sortedPrices).size !== sortedPrices.length || new Set(sortedRows).size !== sortedRows.length) return null;

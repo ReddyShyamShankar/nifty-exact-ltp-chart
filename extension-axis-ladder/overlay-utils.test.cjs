@@ -70,6 +70,18 @@ test("priceIntervalFromPixels calibrates an interval from absolute TradingView a
   assert.equal(priceIntervalFromPixels(50, { y: 120 }, { y: 20 }, 23000, 24000), 500);
 });
 
+test("priceIntervalFromPixels strictly rejects invalid raw calibration values", () => {
+  assert.equal(priceIntervalFromPixels(50, null, 20, 23000, 24000), null, "null lower anchor");
+  assert.equal(priceIntervalFromPixels(50, 120, { y: null }, 23000, 24000), null, "null upper anchor y");
+  assert.equal(priceIntervalFromPixels(50, 120, 20, null, 24000), null, "null lower price");
+  assert.equal(priceIntervalFromPixels(50, 120, 20, 23000, null), null, "null upper price");
+  assert.equal(priceIntervalFromPixels(true, 120, 20, 23000, 24000), null, "boolean gap");
+  assert.equal(priceIntervalFromPixels(50, " ", 20, 23000, 24000), null, "blank anchor");
+  assert.equal(priceIntervalFromPixels(50, undefined, 20, 23000, 24000), null, "undefined anchor");
+  assert.equal(priceIntervalFromPixels(50, 120, {}, 23000, 24000), null, "object without y");
+  assert.equal(priceIntervalFromPixels(50, 120, 20, [], 24000), null, "array price");
+});
+
 test("pairAxisPricesWithRows produces absolute TradingView price and pixel references", () => {
   const paired = pairAxisPricesWithRows(["23,000", 24000, 22500, 23500], [20, 70, 120, 170]);
   assert.deepEqual(paired, [
@@ -87,6 +99,16 @@ test("pairAxisPricesWithRows rejects missing, duplicate, nonfinite, and nonlinea
   assert.equal(pairAxisPricesWithRows([24000, 23500, 23500], [20, 70, 120]), null, "duplicate price");
   assert.equal(pairAxisPricesWithRows([24000, "bad", 23000], [20, 70, 120]), null, "nonfinite price");
   assert.equal(pairAxisPricesWithRows([24000, 23500, 23000], [20, 70, 140]), null, "nonlinear mapping");
+});
+
+test("pairAxisPricesWithRows strictly rejects invalid raw prices and rows", () => {
+  assert.equal(pairAxisPricesWithRows([24000, null], [20, 70]), null, "null price");
+  assert.equal(pairAxisPricesWithRows([24000, false], [20, 70]), null, "boolean price");
+  assert.equal(pairAxisPricesWithRows([24000, 23500], [20, null]), null, "null row");
+  assert.equal(pairAxisPricesWithRows([24000, 23500], [20, " "]), null, "blank row");
+  assert.equal(pairAxisPricesWithRows([24000, 23500], [20, true]), null, "boolean row");
+  assert.equal(pairAxisPricesWithRows([24000, undefined], [20, 70]), null, "undefined price");
+  assert.equal(pairAxisPricesWithRows([24000, 23500], [20, {}]), null, "object row");
 });
 
 test("priceToY maps five strikes between Pine anchors", () => {
