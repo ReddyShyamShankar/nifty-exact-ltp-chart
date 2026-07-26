@@ -4,33 +4,37 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
-function installChromeMock() {
+function installChromeMock(options = {}) {
   const calls = [];
+  const listeners = {};
   global.chrome = {
     debugger: {
-      attach: async (target) => calls.push(["attach", target.tabId]),
+      attach: async (target) => {
+        calls.push(["attach", target.tabId]);
+        return options.attach?.(target);
+      },
       detach: async (target) => calls.push(["detach", target.tabId]),
       sendCommand: async (target, method, params) => {
         calls.push(["send", target.tabId, method, params]);
         return {};
       },
-      onDetach: { addListener() {} }
+      onDetach: { addListener(listener) { listeners.debuggerDetach = listener; } }
     },
     tabs: {
-      onRemoved: { addListener() {} },
+      onRemoved: { addListener(listener) { listeners.tabRemoved = listener; } },
       captureVisibleTab: async () => { throw new Error("not used in unit tests"); }
     },
-    runtime: { onMessage: { addListener() {} } }
+    runtime: { onMessage: { addListener(listener) { listeners.message = listener; } } }
   };
   global.importScripts = () => { global.NiftyOverlay = require("./overlay-utils.js"); };
-  return calls;
+  return { calls, listeners };
 }
 
-function loadBackground() {
+function loadBackground(options) {
   const filename = path.join(__dirname, "background.js");
   delete require.cache[filename];
-  const calls = installChromeMock();
-  return { api: require(filename), calls };
+  const mock = installChromeMock(options);
+  return { api: require(filename), ...mock };
 }
 
 test("exports native-axis capture API and supports both capture message names", () => {
@@ -38,6 +42,9 @@ test("exports native-axis capture API and supports both capture message names", 
   assert.equal(typeof api.captureAxisScale, "function");
   assert.equal(typeof api.withTemporaryAxisDebugger, "function");
   assert.equal(typeof api.extractAxisPrices, "function");
+  assert.equal(typeof api.matchAxisCandidatesToGridRows, "function");
+  assert.equal(typeof api.cssGridCalibration, "function");
+  assert.equal(typeof api.capturePineAnchors, "function");
   assert.equal(typeof api.isCaptureMessage, "function");
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), true);
@@ -84,6 +91,116 @@ test("temporary axis debugger never detaches a pre-existing trusted debugger ses
   ]);
 });
 
+test("temporary axis debugger serializes concurrent captures without sharing cleanup", async () => {
+  const { api, calls } = loadBackground();
+  let releaseFirst;
+  let firstEntered;
+  const firstEnteredPromise = new Promise((resolve) => { firstEntered = resolve; });
+  const first = api.withTemporaryAxisDebugger(79, async () => {
+    firstEntered();
+    await new Promise((resolve) => { releaseFirst = resolve; });
+  });
+  await firstEnteredPromise;
+  const second = api.withTemporaryAxisDebugger(79, async () => {});
+  await Promise.resolve();
+  assert.deepEqual(calls.map((call) => call.slice(0, 3)), [
+    ["attach", 79],
+    ["send", 79, "Accessibility.enable"]
+  ]);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(calls.map((call) => call.slice(0, 3)), [
+    ["attach", 79],
+    ["send", 79, "Accessibility.enable"],
+    ["send", 79, "Accessibility.disable"],
+    ["detach", 79],
+    ["attach", 79],
+    ["send", 79, "Accessibility.enable"],
+    ["send", 79, "Accessibility.disable"],
+    ["detach", 79]
+  ]);
+});
+
+test("capture cleanup cannot detach a trusted debugger session started during capture", async () => {
+  const { api, calls } = loadBackground();
+  let releaseCapture;
+  let captureEntered;
+  const entered = new Promise((resolve) => { captureEntered = resolve; });
+  const capture = api.withTemporaryAxisDebugger(80, async () => {
+    captureEntered();
+    await new Promise((resolve) => { releaseCapture = resolve; });
+  });
+  await entered;
+  await api.ensureAttached(80);
+  releaseCapture();
+  await capture;
+  assert.equal(calls.filter(([kind]) => kind === "attach").length, 1);
+  assert.equal(calls.some(([kind]) => kind === "detach"), false);
+  await api.detach(80);
+  assert.equal(calls.filter(([kind]) => kind === "detach").length, 1);
+});
+
+test("trusted start shares an in-flight capture attach instead of attaching twice", async () => {
+  const releases = [];
+  let announceAttach;
+  const attachStarted = new Promise((resolve) => { announceAttach = resolve; });
+  const { api, calls } = loadBackground({
+    attach: async () => {
+      announceAttach();
+      await new Promise((resolve) => { releases.push(resolve); });
+    }
+  });
+  const capture = api.withTemporaryAxisDebugger(81, async () => {});
+  await attachStarted;
+  const trusted = api.ensureAttached(81);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const attachCount = calls.filter(([kind]) => kind === "attach").length;
+  releases.splice(0).forEach((release) => release());
+  await Promise.all([capture, trusted]);
+  assert.equal(attachCount, 1);
+  assert.equal(calls.filter(([kind]) => kind === "detach").length, 0);
+  await api.detach(81);
+});
+
+test("grid calibration converts Retina device rows before CSS gap thresholds", () => {
+  const { api } = loadBackground();
+  assert.deepEqual(api.cssGridCalibration([20, 40, 60, 80], 2), {
+    gridRows: [10, 20, 30, 40],
+    gridGapPx: null
+  });
+  assert.deepEqual(api.cssGridCalibration([40, 80, 120, 160], 2), {
+    gridRows: [20, 40, 60, 80],
+    gridGapPx: 20
+  });
+});
+
+test("axis candidates retain AX y coordinates and match only their nearby screenshot grid rows", () => {
+  const { api } = loadBackground();
+  assert.deepEqual(api.matchAxisCandidatesToGridRows([
+    { price: 24000, y: 10.5 }, { price: 23800, y: 20.5 },
+    { price: 23600, y: 29.5 }, { price: 23400, y: 40.5 }
+  ], [10, 20, 30, 40], 1), [
+    { price: 24000, y: 10 }, { price: 23800, y: 20 },
+    { price: 23600, y: 30 }, { price: 23400, y: 40 }
+  ]);
+});
+
+test("axis candidate matching rejects unrelated, ambiguous, and nonlinear mappings", () => {
+  const { api } = loadBackground();
+  assert.equal(api.matchAxisCandidatesToGridRows([
+    { price: 24000, y: 10 }, { price: 23800, y: 20 }, { price: 23600, y: 30 }, { price: 23400, y: 76 }
+  ], [10, 20, 30, 40], 1), null, "unrelated axis label");
+  assert.equal(api.matchAxisCandidatesToGridRows([
+    { price: 24000, y: 10 }, { price: 23900, y: 10.5 }, { price: 23800, y: 20 }, { price: 23600, y: 30 }, { price: 23400, y: 40 }
+  ], [10, 20, 30, 40], 1), null, "two labels target one grid row");
+  assert.equal(api.matchAxisCandidatesToGridRows([
+    { price: 24000, y: 40 }, { price: 23800, y: 30 }, { price: 23600, y: 20 }, { price: 23400, y: 10 }
+  ], [10, 20, 30, 40], 1), null, "sorted prices and rows must not erase reversed AX positions");
+  assert.equal(api.matchAxisCandidatesToGridRows([
+    { price: 24000, y: 10 }, { price: 23800, y: 20 }, { price: 23500, y: 30 }, { price: 23300, y: 40 }
+  ], [10, 20, 30, 40], 1), null, "nonlinear price scale");
+});
+
 test("axis capture reuses one screenshot and returns only reliable CSS-pixel calibration", async () => {
   const { api } = loadBackground();
   let screenshots = 0;
@@ -98,7 +215,10 @@ test("axis capture reuses one screenshot and returns only reliable CSS-pixel cal
           gridRows: [20, 40, 60, 80], gridGapPx: 20, scaleY: 2
         };
       },
-      readNativeAxisPrices: async () => ["24,000", "23,800", "23,600", "23,400"]
+      readNativeAxisPrices: async () => [
+        { price: 24000, y: 20 }, { price: 23800, y: 40 },
+        { price: 23600, y: 60 }, { price: 23400, y: 80 }
+      ]
     }
   );
   assert.equal(screenshots, 1);
@@ -106,12 +226,12 @@ test("axis capture reuses one screenshot and returns only reliable CSS-pixel cal
     ok: true,
     lower: { y: 40 },
     upper: { y: 10 },
-    gridRows: [10, 20, 30, 40],
-    gridGapPx: 10,
+    gridRows: [20, 40, 60, 80],
+    gridGapPx: 20,
     axisPrices: [24000, 23800, 23600, 23400],
     axisPairs: [
-      { price: 24000, y: 10 }, { price: 23800, y: 20 },
-      { price: 23600, y: 30 }, { price: 23400, y: 40 }
+      { price: 24000, y: 20 }, { price: 23800, y: 40 },
+      { price: 23600, y: 60 }, { price: 23400, y: 80 }
     ]
   });
 });
@@ -123,9 +243,21 @@ test("axis capture fails closed when native labels and grid rows cannot make exa
     { viewportWidth: 100, viewportHeight: 100, plotRect: { left: 0, top: 0, right: 100, bottom: 100 } },
     {
       captureScreenshot: async () => ({ lower: null, upper: null, gridRows: [20, 40, 60], gridGapPx: 20, scaleY: 1 }),
-      readNativeAxisPrices: async () => ["24,000", "23,800"]
+      readNativeAxisPrices: async () => [{ price: 24000, y: 20 }, { price: 23800, y: 40 }]
     }
   );
   assert.equal(result.ok, false);
   assert.match(result.error, /reliable/i);
+});
+
+test("legacy Pine-anchor capture stays screenshot-only when native axis capture is unavailable", async () => {
+  const { api } = loadBackground();
+  const result = await api.capturePineAnchors(
+    { tab: { id: 9, windowId: 3 } },
+    { viewportWidth: 100, viewportHeight: 100, plotRect: { left: 0, top: 0, right: 100, bottom: 100 } },
+    {
+      captureScreenshot: async () => ({ lower: { y: 80 }, upper: { y: 20 }, scaleX: 2, scaleY: 2 })
+    }
+  );
+  assert.deepEqual(result, { lower: { y: 40 }, upper: { y: 10 } });
 });

@@ -3,12 +3,45 @@
 importScripts("overlay-utils.js");
 
 const attachedTabs = new Set();
+const debuggerTabs = new Set();
+const debuggerAttachTails = new Map();
+const activeCaptureTabs = new Set();
+const captureLeaseTails = new Map();
 const DEBUGGER_VERSION = "1.3";
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function hasDebugger(tabId) {
+  return debuggerTabs.has(tabId) || attachedTabs.has(tabId);
+}
+
+async function attachDebugger(tabId) {
+  if (hasDebugger(tabId)) return;
+  const inFlight = debuggerAttachTails.get(tabId);
+  if (inFlight) return inFlight;
+  const attach = chrome.debugger.attach({ tabId }, DEBUGGER_VERSION).then(() => {
+    debuggerTabs.add(tabId);
+  });
+  debuggerAttachTails.set(tabId, attach);
+  try {
+    await attach;
+  } finally {
+    if (debuggerAttachTails.get(tabId) === attach) debuggerAttachTails.delete(tabId);
+  }
+}
+
+async function detachDebugger(tabId) {
+  if (!debuggerTabs.has(tabId)) return;
+  debuggerTabs.delete(tabId);
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch {
+    // Tab may have closed or detached itself.
+  }
+}
+
 async function ensureAttached(tabId) {
   if (attachedTabs.has(tabId)) return;
-  await chrome.debugger.attach({ tabId }, DEBUGGER_VERSION);
+  await attachDebugger(tabId);
   attachedTabs.add(tabId);
 }
 
@@ -105,11 +138,7 @@ async function replaceFieldText(tabId, x, y, text) {
 async function detach(tabId) {
   if (!attachedTabs.has(tabId)) return;
   attachedTabs.delete(tabId);
-  try {
-    await chrome.debugger.detach({ tabId });
-  } catch {
-    // Tab may have closed or detached itself.
-  }
+  if (!activeCaptureTabs.has(tabId)) await detachDebugger(tabId);
 }
 
 function finiteNumber(value) {
@@ -151,26 +180,35 @@ function isCaptureMessage(type) {
   return type === "CAPTURE_AXIS_SCALE" || type === "CAPTURE_PINE_ANCHORS";
 }
 
+function withCaptureLease(tabId, callback) {
+  const previous = captureLeaseTails.get(tabId) || Promise.resolve();
+  const run = previous.catch(() => undefined).then(callback);
+  const tail = run.then(() => undefined, () => undefined);
+  captureLeaseTails.set(tabId, tail);
+  return run.finally(() => {
+    if (captureLeaseTails.get(tabId) === tail) captureLeaseTails.delete(tabId);
+  });
+}
+
 async function withTemporaryAxisDebugger(tabId, callback) {
-  const alreadyAttached = attachedTabs.has(tabId);
-  let attachedHere = false;
-  let accessibilityEnabled = false;
-  try {
-    if (!alreadyAttached) {
-      await chrome.debugger.attach({ tabId }, DEBUGGER_VERSION);
-      attachedTabs.add(tabId);
-      attachedHere = true;
+  return withCaptureLease(tabId, async () => {
+    const attachedHere = !hasDebugger(tabId);
+    let accessibilityEnabled = false;
+    activeCaptureTabs.add(tabId);
+    try {
+      if (attachedHere) await attachDebugger(tabId);
+      const sendCommand = (method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
+      await sendCommand("Accessibility.enable");
+      accessibilityEnabled = true;
+      return await callback(sendCommand);
+    } finally {
+      if (accessibilityEnabled) {
+        try { await chrome.debugger.sendCommand({ tabId }, "Accessibility.disable"); } catch {}
+      }
+      activeCaptureTabs.delete(tabId);
+      if (attachedHere && !attachedTabs.has(tabId)) await detachDebugger(tabId);
     }
-    const sendCommand = (method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
-    await sendCommand("Accessibility.enable");
-    accessibilityEnabled = true;
-    return await callback(sendCommand);
-  } finally {
-    if (accessibilityEnabled) {
-      try { await chrome.debugger.sendCommand({ tabId }, "Accessibility.disable"); } catch {}
-    }
-    if (attachedHere) await detach(tabId);
-  }
+  });
 }
 
 function domAttributes(node) {
@@ -250,13 +288,49 @@ async function axisCandidates(sendCommand, nodes, message) {
     if (!validAxisBox(center, message)) continue;
     candidates.push({ price, y: center.y });
   }
-  candidates.sort((a, b) => a.y - b.y);
+  return candidates;
+}
+
+function uniqueAxisCandidates(candidates) {
   const seen = new Set();
-  return candidates.filter((candidate) => {
-    if (seen.has(candidate.price)) return false;
-    seen.add(candidate.price);
+  return (candidates || []).filter((candidate) => {
+    const key = `${candidate.price}:${candidate.y}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
+}
+
+function matchAxisCandidatesToGridRows(candidates, gridRows, tolerance = 3) {
+  if (!Array.isArray(candidates) || !Array.isArray(gridRows) || candidates.length < 2 || candidates.length !== gridRows.length) return null;
+  const numericTolerance = finiteNumber(tolerance);
+  if (numericTolerance === null || numericTolerance < 0) return null;
+  const rows = gridRows.map(finiteNumber);
+  if (rows.includes(null) || new Set(rows).size !== rows.length) return null;
+  const matches = new Map();
+  for (const candidate of candidates) {
+    const price = finiteNumber(candidate?.price);
+    const y = finiteNumber(candidate?.y);
+    if (price === null || y === null) return null;
+    const nearby = rows.filter((row) => Math.abs(row - y) <= numericTolerance);
+    if (nearby.length !== 1 || matches.has(nearby[0])) return null;
+    matches.set(nearby[0], price);
+  }
+  if (matches.size !== rows.length) return null;
+  const pairs = rows.map((y) => ({ price: matches.get(y), y })).sort((a, b) => a.y - b.y);
+  if (new Set(pairs.map((pair) => pair.price)).size !== pairs.length) return null;
+  const first = pairs[0];
+  const last = pairs[pairs.length - 1];
+  const pixelSpan = last.y - first.y;
+  const priceSpan = last.price - first.price;
+  if (pixelSpan <= 0 || priceSpan >= 0) return null;
+  const pricePerPixel = priceSpan / pixelSpan;
+  const allowedPriceError = Math.max(0.01, Math.abs(pricePerPixel) * Math.max(1, numericTolerance));
+  for (const pair of pairs) {
+    const expectedPrice = first.price + (pair.y - first.y) * pricePerPixel;
+    if (Math.abs(pair.price - expectedPrice) > allowedPriceError) return null;
+  }
+  return pairs;
 }
 
 async function readNativeAxisPrices(tabId, message) {
@@ -277,13 +351,12 @@ async function readNativeAxisPrices(tabId, message) {
           // A canvas may not expose an accessibility subtree; use the full tree below.
         }
       }
-      preferred.sort((a, b) => a.y - b.y);
-      const preferredPrices = extractAxisPrices(preferred.map((candidate) => String(candidate.price)));
-      if (preferredPrices.length >= 2) return preferredPrices;
+      const preferredCandidates = uniqueAxisCandidates(preferred);
+      if (preferredCandidates.length >= 2) return preferredCandidates;
 
       const full = await sendCommand("Accessibility.getFullAXTree");
       const found = await axisCandidates(sendCommand, full?.nodes, message);
-      return found.map((candidate) => candidate.price);
+      return uniqueAxisCandidates(found);
     } finally {
       try { await sendCommand("DOM.disable"); } catch {}
     }
@@ -295,6 +368,13 @@ function scaledCoordinate(value, scale) {
   const ratio = finiteNumber(scale);
   if (number === null || ratio === null || ratio <= 0) return null;
   return number / ratio;
+}
+
+function cssGridCalibration(deviceRows, scaleY) {
+  if (!Array.isArray(deviceRows)) return null;
+  const gridRows = deviceRows.map((row) => scaledCoordinate(row, scaleY));
+  if (gridRows.some((row) => row === null)) return null;
+  return { gridRows, gridGapPx: NiftyOverlay.dominantGridGap(gridRows) };
 }
 
 function toCssAnchor(anchor, scaleX, scaleY) {
@@ -353,7 +433,8 @@ async function captureScreenshot(sender, message) {
   };
   const lower = NiftyOverlay.findColorBounds(image.data, surface.width, surface.height, [255, 0, 254], region, 22);
   const upper = NiftyOverlay.findColorBounds(image.data, surface.width, surface.height, [0, 255, 254], region, 22);
-  const gridRows = NiftyOverlay.findHorizontalGridRows(image.data, surface.width, surface.height, region);
+  const deviceGridRows = NiftyOverlay.findHorizontalGridRows(image.data, surface.width, surface.height, region);
+  const gridCalibration = cssGridCalibration(deviceGridRows, scaleY);
   const toDevice = (bounds) => bounds && ({
     left: bounds.minX,
     right: bounds.maxX + 1,
@@ -366,10 +447,24 @@ async function captureScreenshot(sender, message) {
   return {
     lower: toDevice(lower),
     upper: toDevice(upper),
-    gridRows,
-    gridGapPx: NiftyOverlay.dominantGridGap(gridRows),
+    gridRows: gridCalibration?.gridRows || [],
+    gridGapPx: gridCalibration?.gridGapPx ?? null,
     scaleX,
     scaleY
+  };
+}
+
+async function capturePineAnchors(sender, message, dependencies = {}) {
+  const capture = dependencies.captureScreenshot || captureScreenshot;
+  const screenshot = await capture(sender, message);
+  const scaleX = finiteNumber(screenshot?.scaleX);
+  const scaleY = finiteNumber(screenshot?.scaleY);
+  if (scaleX === null || scaleX <= 0 || scaleY === null || scaleY <= 0) {
+    throw new Error("Screenshot scale is unavailable.");
+  }
+  return {
+    lower: toCssAnchor(screenshot.lower, scaleX, scaleY),
+    upper: toCssAnchor(screenshot.upper, scaleX, scaleY)
   };
 }
 
@@ -381,34 +476,48 @@ async function captureAxisScale(sender, message, dependencies = {}) {
   const scaleY = finiteNumber(screenshot?.scaleY);
   if (scaleY === null || scaleY <= 0) return axisScaleError("Screenshot scale is unavailable.");
 
-  const rawRows = Array.isArray(screenshot?.gridRows) ? screenshot.gridRows : [];
-  const gridRows = rawRows.map((row) => scaledCoordinate(row, scaleY));
-  if (gridRows.some((row) => row === null)) return axisScaleError("Grid rows are not reliable.");
-  const rawGap = finiteNumber(screenshot?.gridGapPx);
-  const detectedGap = rawGap === null ? NiftyOverlay.dominantGridGap(rawRows) : rawGap;
-  const gridGapPx = detectedGap === null ? null : detectedGap / scaleY;
+  const gridRows = Array.isArray(screenshot?.gridRows) ? screenshot.gridRows.map(finiteNumber) : [];
+  if (gridRows.includes(null)) return axisScaleError("Grid rows are not reliable.");
+  const gridGapPx = finiteNumber(screenshot?.gridGapPx);
   if (!Number.isFinite(gridGapPx) || gridGapPx <= 0) return axisScaleError("Grid spacing is not reliable.");
 
-  const nativeNodes = await readAxis(sender.tab.id, message);
-  const axisPrices = extractAxisPrices(nativeNodes);
-  const axisPairs = NiftyOverlay.pairAxisPricesWithRows(axisPrices, gridRows);
+  const nativeCandidates = await readAxis(sender.tab.id, message);
+  const axisPairs = matchAxisCandidatesToGridRows(nativeCandidates, gridRows);
   if (!axisPairs) return axisScaleError("Native axis labels and grid rows do not form a reliable calibration.");
 
   const lower = toCssAnchor(screenshot.lower, scaleX, scaleY);
   const upper = toCssAnchor(screenshot.upper, scaleX, scaleY);
-  return { ok: true, lower, upper, gridRows, gridGapPx, axisPrices, axisPairs };
+  return { ok: true, lower, upper, gridRows, gridGapPx, axisPrices: axisPairs.map((pair) => pair.price), axisPairs };
 }
 
 chrome.debugger.onDetach.addListener(({ tabId }) => {
-  if (Number.isInteger(tabId)) attachedTabs.delete(tabId);
+  if (!Number.isInteger(tabId)) return;
+  attachedTabs.delete(tabId);
+  debuggerTabs.delete(tabId);
+  debuggerAttachTails.delete(tabId);
+  activeCaptureTabs.delete(tabId);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedTabs.delete(tabId);
+  debuggerTabs.delete(tabId);
+  debuggerAttachTails.delete(tabId);
+  activeCaptureTabs.delete(tabId);
+  captureLeaseTails.delete(tabId);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (isCaptureMessage(message?.type)) {
+  if (message?.type === "CAPTURE_PINE_ANCHORS") {
+    if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
+      sendResponse({ ok: false, error: "Chart capture is limited to TradingView tabs." });
+      return;
+    }
+    capturePineAnchors(sender, message)
+      .then((anchors) => sendResponse({ ok: true, ...anchors }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "CAPTURE_AXIS_SCALE") {
     if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
       sendResponse({ ok: false, error: "Chart capture is limited to TradingView tabs." });
       return;
@@ -451,8 +560,13 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     attachedTabs,
     captureAxisScale,
+    capturePineAnchors,
+    cssGridCalibration,
+    detach,
+    ensureAttached,
     extractAxisPrices,
     isCaptureMessage,
+    matchAxisCandidatesToGridRows,
     readNativeAxisPrices,
     withTemporaryAxisDebugger
   };
