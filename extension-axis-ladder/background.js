@@ -216,6 +216,24 @@ async function withTemporaryAxisDebugger(tabId, callback) {
   });
 }
 
+async function captureTabPng(tabId) {
+  return withCaptureLease(tabId, async () => {
+    activeCaptureTabs.add(tabId);
+    try {
+      if (!hasDebugger(tabId)) await attachDebugger(tabId);
+      const result = await chrome.debugger.sendCommand(
+        { tabId },
+        "Page.captureScreenshot",
+        { format: "png", fromSurface: true }
+      );
+      if (!result?.data) throw new Error("Chrome returned an empty chart screenshot.");
+      return `data:image/png;base64,${result.data}`;
+    } finally {
+      activeCaptureTabs.delete(tabId);
+    }
+  });
+}
+
 function domAttributes(node) {
   const attributes = {};
   for (let index = 0; index < (node?.attributes || []).length; index += 2) {
@@ -307,35 +325,57 @@ function uniqueAxisCandidates(candidates) {
 }
 
 function matchAxisCandidatesToGridRows(candidates, gridRows, tolerance = 3) {
-  if (!Array.isArray(candidates) || !Array.isArray(gridRows) || candidates.length < 2 || candidates.length !== gridRows.length) return null;
+  if (!Array.isArray(candidates) || !Array.isArray(gridRows) || candidates.length < 3 || gridRows.length < 3) return null;
   const numericTolerance = finiteNumber(tolerance);
   if (numericTolerance === null || numericTolerance < 0) return null;
   const rows = gridRows.map(finiteNumber);
   if (rows.includes(null) || new Set(rows).size !== rows.length) return null;
-  const matches = new Map();
-  for (const candidate of candidates) {
-    const price = finiteNumber(candidate?.price);
-    const y = finiteNumber(candidate?.y);
-    if (price === null || y === null) return null;
-    const nearby = rows.filter((row) => Math.abs(row - y) <= numericTolerance);
-    if (nearby.length !== 1 || matches.has(nearby[0])) return null;
-    matches.set(nearby[0], price);
+  const numericCandidates = candidates.map((candidate) => ({
+    price: finiteNumber(candidate?.price),
+    y: finiteNumber(candidate?.y)
+  }));
+  if (numericCandidates.some((candidate) => candidate.price === null || candidate.y === null)) return null;
+
+  // TradingView exposes native ticks, current-price badges, drawing labels, and
+  // indicator labels in the same right-axis accessibility region. Only native
+  // ticks sit on screenshot grid rows. Keep unambiguous row matches and ignore
+  // unrelated labels instead of requiring both lists to have identical sizes.
+  const rowMatches = [];
+  for (const y of rows) {
+    const nearby = numericCandidates.filter((candidate) => Math.abs(candidate.y - y) <= numericTolerance);
+    if (nearby.length === 1) rowMatches.push({ price: nearby[0].price, y });
   }
-  if (matches.size !== rows.length) return null;
-  const pairs = rows.map((y) => ({ price: matches.get(y), y })).sort((a, b) => a.y - b.y);
-  if (new Set(pairs.map((pair) => pair.price)).size !== pairs.length) return null;
-  const first = pairs[0];
-  const last = pairs[pairs.length - 1];
-  const pixelSpan = last.y - first.y;
-  const priceSpan = last.price - first.price;
-  if (pixelSpan <= 0 || priceSpan >= 0) return null;
-  const pricePerPixel = priceSpan / pixelSpan;
+  if (rowMatches.length < 3) return null;
+
+  // One shifted badge can still land near a grid row. Select the largest
+  // negative-slope linear subset and require at least three independent anchors.
+  let best = [];
+  for (let left = 0; left < rowMatches.length - 1; left += 1) {
+    for (let right = left + 1; right < rowMatches.length; right += 1) {
+      const first = rowMatches[left];
+      const second = rowMatches[right];
+      const pixelSpan = second.y - first.y;
+      const priceSpan = second.price - first.price;
+      if (pixelSpan <= 0 || priceSpan >= 0) continue;
+      const pricePerPixel = priceSpan / pixelSpan;
+      const allowedPriceError = Math.max(0.01, Math.abs(pricePerPixel) * Math.max(1, numericTolerance));
+      const inliers = rowMatches.filter((pair) => {
+        const expectedPrice = first.price + (pair.y - first.y) * pricePerPixel;
+        return Math.abs(pair.price - expectedPrice) <= allowedPriceError;
+      });
+      if (inliers.length > best.length) best = inliers;
+    }
+  }
+  if (best.length < 3 || new Set(best.map((pair) => pair.price)).size !== best.length) return null;
+  best.sort((a, b) => a.y - b.y);
+  const first = best[0];
+  const last = best[best.length - 1];
+  const pricePerPixel = (last.price - first.price) / (last.y - first.y);
   const allowedPriceError = Math.max(0.01, Math.abs(pricePerPixel) * Math.max(1, numericTolerance));
-  for (const pair of pairs) {
+  return best.every((pair) => {
     const expectedPrice = first.price + (pair.y - first.y) * pricePerPixel;
-    if (Math.abs(pair.price - expectedPrice) > allowedPriceError) return null;
-  }
-  return pairs;
+    return Math.abs(pair.price - expectedPrice) <= allowedPriceError;
+  }) ? best : null;
 }
 
 async function readNativeAxisPrices(tabId, message) {
@@ -412,7 +452,7 @@ function axisScaleError(message) {
 }
 
 async function captureScreenshot(sender, message) {
-  const dataUrl = await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: "png" });
+  const dataUrl = await captureTabPng(sender.tab.id);
   const blob = await (await fetch(dataUrl)).blob();
   const bitmap = await createImageBitmap(blob);
   const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -486,9 +526,12 @@ async function captureAxisScale(sender, message, dependencies = {}) {
   const gridGapPx = finiteNumber(screenshot?.gridGapPx);
   if (!Number.isFinite(gridGapPx) || gridGapPx <= 0) return axisScaleError("Grid spacing is not reliable.");
 
-  const nativeCandidates = await readAxis(sender.tab.id, message);
+  const observedCandidates = Array.isArray(message?.axisCandidates) ? message.axisCandidates : [];
+  const nativeCandidates = observedCandidates.length >= 3
+    ? observedCandidates
+    : await readAxis(sender.tab.id, message);
   const axisPairs = matchAxisCandidatesToGridRows(nativeCandidates, gridRows);
-  if (!axisPairs) return axisScaleError("Native axis labels and grid rows do not form a reliable calibration.");
+  if (!axisPairs) return axisScaleError("Axis calibration is not reliable yet. Change timeframe or zoom once to redraw chart scale.");
 
   const lower = toCssAnchor(screenshot.lower, scaleX, scaleY);
   const upper = toCssAnchor(screenshot.upper, scaleX, scaleY);
@@ -564,6 +607,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     attachedTabs,
+    captureTabPng,
     captureAxisScale,
     capturePineAnchors,
     cssGridCalibration,

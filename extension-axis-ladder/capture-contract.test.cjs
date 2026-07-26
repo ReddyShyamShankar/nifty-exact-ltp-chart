@@ -16,7 +16,7 @@ function installChromeMock(options = {}) {
       detach: async (target) => calls.push(["detach", target.tabId]),
       sendCommand: async (target, method, params) => {
         calls.push(["send", target.tabId, method, params]);
-        return {};
+        return options.sendCommand?.(target, method, params) || {};
       },
       onDetach: { addListener(listener) { listeners.debuggerDetach = listener; } }
     },
@@ -76,6 +76,18 @@ test("temporary axis debugger enables Accessibility then cleans up its own sessi
     ["send", 77, "Accessibility.getFullAXTree"],
     ["send", 77, "Accessibility.disable"],
     ["detach", 77]
+  ]);
+});
+
+test("chart screenshot uses debugger permission without an activeTab user gesture", async () => {
+  const { api, calls } = loadBackground({
+    sendCommand: (_target, method) => method === "Page.captureScreenshot" ? { data: "cG5n" } : {}
+  });
+  assert.equal(await api.captureTabPng(76), "data:image/png;base64,cG5n");
+  assert.deepEqual(calls.map((call) => call.slice(0, 3)), [
+    ["attach", 76],
+    ["send", 76, "Page.captureScreenshot"],
+    ["detach", 76]
   ]);
 });
 
@@ -221,14 +233,16 @@ test("axis candidates retain AX y coordinates and match only their nearby screen
   ]);
 });
 
-test("axis candidate matching rejects unrelated, ambiguous, and nonlinear mappings", () => {
+test("axis candidate matching ignores unrelated labels but rejects ambiguous and nonlinear mappings", () => {
   const { api } = loadBackground();
-  assert.equal(api.matchAxisCandidatesToGridRows([
+  assert.deepEqual(api.matchAxisCandidatesToGridRows([
     { price: 24000, y: 10 }, { price: 23800, y: 20 }, { price: 23600, y: 30 }, { price: 23400, y: 76 }
-  ], [10, 20, 30, 40], 1), null, "unrelated axis label");
+  ], [10, 20, 30, 40], 1), [
+    { price: 24000, y: 10 }, { price: 23800, y: 20 }, { price: 23600, y: 30 }
+  ], "unrelated axis label is ignored");
   assert.equal(api.matchAxisCandidatesToGridRows([
-    { price: 24000, y: 10 }, { price: 23900, y: 10.5 }, { price: 23800, y: 20 }, { price: 23600, y: 30 }, { price: 23400, y: 40 }
-  ], [10, 20, 30, 40], 1), null, "two labels target one grid row");
+    { price: 24000, y: 10 }, { price: 23900, y: 10.5 }, { price: 23800, y: 20 }, { price: 23600, y: 30 }
+  ], [10, 20, 30], 1), null, "two labels target one row and leave fewer than three anchors");
   assert.equal(api.matchAxisCandidatesToGridRows([
     { price: 24000, y: 40 }, { price: 23800, y: 30 }, { price: 23600, y: 20 }, { price: 23400, y: 10 }
   ], [10, 20, 30, 40], 1), null, "sorted prices and rows must not erase reversed AX positions");
@@ -270,6 +284,28 @@ test("axis capture reuses one screenshot and returns only reliable CSS-pixel cal
       { price: 23600, y: 60 }, { price: 23400, y: 80 }
     ]
   });
+});
+
+test("axis capture prefers main-world canvas observations over inaccessible AX labels", async () => {
+  const { api } = loadBackground();
+  const result = await api.captureAxisScale(
+    { tab: { id: 9, windowId: 3 } },
+    {
+      viewportWidth: 100,
+      viewportHeight: 100,
+      plotRect: { left: 0, top: 0, right: 100, bottom: 100 },
+      axisCandidates: [
+        { price: 24000, y: 20 }, { price: 23800, y: 40 },
+        { price: 23600, y: 60 }, { price: 23400, y: 80 }
+      ]
+    },
+    {
+      captureScreenshot: async () => ({ gridRows: [20, 40, 60, 80], gridGapPx: 20, scaleX: 1, scaleY: 1 }),
+      readNativeAxisPrices: async () => { throw new Error("AX fallback must not run"); }
+    }
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.axisPairs.length, 4);
 });
 
 test("axis capture fails closed when native labels and grid rows cannot make exact pairs", async () => {

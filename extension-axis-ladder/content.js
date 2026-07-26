@@ -379,11 +379,21 @@
     const canvas = chartCanvas();
     if (!canvas) throw new Error("TradingView chart canvas is unavailable.");
     const rect = canvas.getBoundingClientRect();
+    let axisCandidates = [];
+    try {
+      const observed = JSON.parse(document.documentElement.getAttribute("data-nifty-axis-ticks") || "null");
+      if (Date.now() - Number(observed?.at) < 10000 && Array.isArray(observed?.candidates)) {
+        axisCandidates = observed.candidates;
+      }
+    } catch {
+      // Background keeps a debugger-based fallback when page observation is unavailable.
+    }
     const result = await chrome.runtime.sendMessage({
       type: "CAPTURE_AXIS_SCALE",
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
-      plotRect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+      plotRect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      axisCandidates
     });
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (!result?.ok) throw new Error(result?.error || "TradingView axis capture failed.");
