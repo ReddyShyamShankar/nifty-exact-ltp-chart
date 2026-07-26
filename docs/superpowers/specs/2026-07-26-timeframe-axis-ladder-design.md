@@ -37,8 +37,8 @@ Supported chart timeframes:
 On initial load or timeframe change:
 
 1. Wait until TradingView finishes primary scale transition.
-2. Read current chart price-to-pixel calibration from controlled Pine anchors.
-3. Detect current major right-axis/grid interval from chart pixels.
+2. Read TradingView's own numeric right-axis labels from its accessibility tree.
+3. Pair those values with captured horizontal grid rows to build an absolute price-to-pixel map. Controlled Pine anchors remain a fallback and scale sanity check.
 4. Convert that interval to a valid NIFTY strike interval, rounded to nearest 50 points.
 5. Select nearest ATM on that interval.
 6. Build thirteen strikes from ATM minus six intervals through ATM plus six intervals.
@@ -72,13 +72,13 @@ Expected healthy-path performance:
 
 Stores v0.14.0 extension files, Pine source, version metadata, and checksum. Backup remains outside active extension folder.
 
-### Pine calibration indicator
+### Native axis reader and Pine fallback
 
-Produces two controlled-color anchors around current NIFTY price. Anchor range adapts by chart timeframe so both calibration points remain visible. No per-contract `request.security()` calls required for new overlay.
+Reads numeric right-axis values from TradingView's accessibility tree and pairs them with captured grid rows. This supplies both scale and absolute price origin from TradingView itself, so Upstox spot never controls screen placement. A lightweight Pine indicator produces two controlled-color anchors only when native axis reading needs a fallback or sanity check. No per-contract `request.security()` calls are required.
 
 ### Axis-scale detector
 
-Uses captured chart pixels to locate repeated horizontal grid rows. Combines grid pixel spacing with controlled Pine price-to-pixel calibration. Returns current major price interval and confidence score.
+Uses captured chart pixels to locate repeated horizontal grid rows. Combines those rows with TradingView's native numeric axis labels; controlled Pine anchors provide fallback scale validation. Returns an absolute price-to-pixel map, current major price interval, and confidence score.
 
 ### Timeframe ladder selector
 

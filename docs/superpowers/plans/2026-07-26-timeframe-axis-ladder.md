@@ -151,11 +151,11 @@ git commit -m "feat: add timeframe ladder selector"
 - Modify: `extension-axis-ladder/overlay-utils.test.cjs`
 
 **Interfaces:**
-- Produces: `findHorizontalGridRows(data,width,height,region)`, `dominantGridGap(rows)`, `priceIntervalFromPixels(gap,lower,upper,lowerPrice,upperPrice)`.
+- Produces: `findHorizontalGridRows(data,width,height,region)`, `dominantGridGap(rows)`, `priceIntervalFromPixels(gap,lower,upper,lowerPrice,upperPrice)`, `pairAxisPricesWithRows(prices, rows)`.
 
 - [ ] **Step 1: Add failing synthetic tests**
 
-Create white image with neutral horizontal lines at y `20,70,120,170`. Assert rows match, dominant gap equals 50, and a 50-pixel gap across calibration `23000..24000` spanning 100 pixels equals 500 price points. Add noise and dotted-crosshair cases.
+Create white image with neutral horizontal lines at y `20,70,120,170`. Assert rows match, dominant gap equals 50, and a 50-pixel gap across calibration `23000..24000` spanning 100 pixels equals 500 price points. Assert native axis prices `[24000,23500,23000,22500]` pair with ascending rows and produce an absolute linear price-to-pixel map. Add noise, missing-label, and dotted-crosshair cases.
 
 - [ ] **Step 2: Verify failure**
 
@@ -172,7 +172,7 @@ const neutral = alpha > 180
   && red >= 205 && red <= 245;
 ```
 
-Sample each plot row every 4 pixels. Candidate ratio: at least `0.55`. Cluster adjacent y rows. `dominantGridGap()` returns rounded median for gaps `20..220` CSS pixels. Price interval uses absolute anchor pixel span divided by known price span.
+Sample each plot row every 4 pixels. Candidate ratio: at least `0.55`. Cluster adjacent y rows. `dominantGridGap()` returns rounded median for gaps `20..220` CSS pixels. Price interval uses absolute anchor pixel span divided by known price span. `pairAxisPricesWithRows()` sorts prices descending and rows ascending, rejects mismatched or nonlinear pairs, and returns known numeric reference points from TradingView itself.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -191,8 +191,8 @@ git commit -m "feat: detect TradingView grid spacing"
 - Create: `extension-axis-ladder/capture-contract.test.cjs`
 
 **Interfaces:**
-- Consumes: `CAPTURE_AXIS_SCALE` with viewport and plot rectangle.
-- Produces: `{ok, lower, upper, gridRows, gridGapPx}` in CSS pixels.
+- Consumes: `CAPTURE_AXIS_SCALE` with viewport, plot rectangle, and tab id.
+- Produces: `{ok, lower, upper, gridRows, gridGapPx, axisPrices}` in CSS pixels and numeric TradingView prices.
 
 - [ ] **Step 1: Write failing source-contract test**
 
@@ -201,6 +201,7 @@ const source = require("node:fs").readFileSync(require("node:path").join(__dirna
 assert.match(source,/CAPTURE_AXIS_SCALE/);
 assert.match(source,/gridRows/);
 assert.match(source,/gridGapPx/);
+assert.match(source,/axisPrices/);
 ```
 
 - [ ] **Step 2: Verify failure**
@@ -209,7 +210,7 @@ Run: `node --test extension-axis-ladder/capture-contract.test.cjs`.
 
 - [ ] **Step 3: Extend capture**
 
-Reuse one screenshot for colored-anchor and horizontal-grid detection. Convert device-pixel y values and gap to CSS pixels. Keep old capture message as compatibility alias inside new extension.
+Reuse one screenshot for colored-anchor and horizontal-grid detection. Read numeric right-axis labels from TradingView's accessibility tree through the debugger protocol, normalize comma-formatted prices, and return them in visual order. Convert device-pixel y values and gap to CSS pixels. Keep old capture message as compatibility alias inside new extension.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -272,7 +273,7 @@ git commit -m "feat: add Pine axis calibrator"
 - Create: `extension-axis-ladder/content-contract.test.cjs`
 
 **Interfaces:**
-- Consumes: chain response, timeframe label, axis capture, expiry/enabled state.
+- Consumes: chain response, timeframe label, TradingView native axis values, axis capture, expiry/enabled state.
 - Produces: thirteen `.nifty-axis-ladder__row` elements; frozen membership until timeframe changes.
 
 - [ ] **Step 1: Write failing source-contract tests**
@@ -297,7 +298,7 @@ Use:
 let ladder = { timeframe:null, interval:null, atm:null, strikes:[], rows:[] };
 ```
 
-`rebuildLadder()` runs only on initial load, timeframe change, or expiry change. It captures scale, derives snapped interval, builds thirteen strikes, maps chain rows, and freezes membership. `placeLabels()` runs during resize/zoom/pan and maps frozen strikes to new y coordinates without collision spread.
+`rebuildLadder()` runs only on initial load, timeframe change, or expiry change. It captures scale, pairs TradingView's native numeric axis values with screenshot grid rows, derives snapped interval, builds thirteen strikes, maps chain rows, and freezes membership. Upstox spot selects ATM/contracts only; it must never define screen coordinates. `placeLabels()` runs during resize/zoom/pan and maps frozen strikes through the absolute TradingView axis map without collision spread. Pine anchors are fallback validation only.
 
 - [ ] **Step 4: Render row text and exact position**
 
