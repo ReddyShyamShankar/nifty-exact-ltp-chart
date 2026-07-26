@@ -17,8 +17,12 @@
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height || !canvas.width || !canvas.height) return null;
     const transform = context.getTransform();
+    const metrics = typeof context.measureText === "function" ? context.measureText(String(text)) : null;
+    const ascent = Number(metrics?.actualBoundingBoxAscent);
+    const descent = Number(metrics?.actualBoundingBoxDescent);
+    const centerOffset = Number.isFinite(ascent) && Number.isFinite(descent) ? (ascent - descent) / 2 : 0;
     const deviceX = transform.a * Number(x) + transform.c * Number(y) + transform.e;
-    const deviceY = transform.b * Number(x) + transform.d * Number(y) + transform.f;
+    const deviceY = transform.b * Number(x) + transform.d * (Number(y) - centerOffset) + transform.f;
     const screenX = rect.left + deviceX * rect.width / canvas.width;
     const screenY = rect.top + deviceY * rect.height / canvas.height;
     if (![screenX, screenY].every(Number.isFinite) || screenX < viewportWidth - 220) return null;

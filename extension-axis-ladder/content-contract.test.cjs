@@ -41,6 +41,17 @@ test("renders only genuine finite quotes and never coerces missing values to zer
   assert.equal(api.formatRow({ strike: 26000, call: "12.5", put: 0 }), "C 12.50 | P 0.00 | 26,000");
 });
 
+test("native canvas tick map tolerates two pixels of text raster rounding", () => {
+  const toY = api.axisPriceToY([
+    { price: 24200, y: 80 },
+    { price: 24100, y: 120.8 },
+    { price: 24000, y: 160.2 },
+    { price: 23900, y: 200 }
+  ]);
+  assert.equal(typeof toY, "function");
+  assert.equal(toY(24000), 160);
+});
+
 test("builds thirteen frozen contracts from spot but maps their y positions from native axis pairs", async () => {
   const placements = [];
   const controller = api.createLadderController({

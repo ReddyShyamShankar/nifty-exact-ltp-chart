@@ -2,150 +2,6 @@
 
 importScripts("overlay-utils.js");
 
-const attachedTabs = new Set();
-const debuggerTabs = new Set();
-const debuggerAttachTails = new Map();
-const activeCaptureTabs = new Set();
-const captureLeaseTails = new Map();
-const DEBUGGER_VERSION = "1.3";
-const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function hasDebugger(tabId) {
-  return debuggerTabs.has(tabId) || attachedTabs.has(tabId);
-}
-
-async function attachDebugger(tabId) {
-  if (hasDebugger(tabId)) return;
-  const inFlight = debuggerAttachTails.get(tabId);
-  if (inFlight) return inFlight;
-  const attach = chrome.debugger.attach({ tabId }, DEBUGGER_VERSION).then(() => {
-    debuggerTabs.add(tabId);
-  });
-  debuggerAttachTails.set(tabId, attach);
-  try {
-    await attach;
-  } finally {
-    if (debuggerAttachTails.get(tabId) === attach) debuggerAttachTails.delete(tabId);
-  }
-}
-
-async function detachDebugger(tabId) {
-  if (!debuggerTabs.has(tabId)) return;
-  debuggerTabs.delete(tabId);
-  try {
-    await chrome.debugger.detach({ tabId });
-  } catch {
-    // Tab may have closed or detached itself.
-  }
-}
-
-async function ensureAttached(tabId) {
-  if (attachedTabs.has(tabId)) return;
-  await attachDebugger(tabId);
-  attachedTabs.add(tabId);
-}
-
-async function detachIfUnused(tabId) {
-  if (attachedTabs.has(tabId) || activeCaptureTabs.has(tabId) || captureLeaseTails.has(tabId)) return;
-  await detachDebugger(tabId);
-}
-
-async function send(tabId, method, params = {}) {
-  await ensureAttached(tabId);
-  return chrome.debugger.sendCommand({ tabId }, method, params);
-}
-
-async function click(tabId, x, y) {
-  await send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await pause(140);
-  await send(tabId, "Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x,
-    y,
-    button: "left",
-    buttons: 1,
-    clickCount: 1
-  });
-  await send(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x,
-    y,
-    button: "left",
-    buttons: 0,
-    clickCount: 1
-  });
-}
-
-async function doubleClick(tabId, x, y) {
-  await send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await pause(140);
-  for (const clickCount of [1, 2]) {
-    await send(tabId, "Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x,
-      y,
-      button: "left",
-      buttons: 1,
-      clickCount
-    });
-    await send(tabId, "Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x,
-      y,
-      button: "left",
-      buttons: 0,
-      clickCount
-    });
-    await pause(80);
-  }
-}
-
-async function replaceText(tabId, text) {
-  await send(tabId, "Input.dispatchKeyEvent", {
-    type: "keyDown",
-    key: "a",
-    code: "KeyA",
-    windowsVirtualKeyCode: 65,
-    nativeVirtualKeyCode: 0,
-    modifiers: 4
-  });
-  await send(tabId, "Input.dispatchKeyEvent", {
-    type: "keyUp",
-    key: "a",
-    code: "KeyA",
-    windowsVirtualKeyCode: 65,
-    nativeVirtualKeyCode: 0,
-    modifiers: 4
-  });
-  await send(tabId, "Input.dispatchKeyEvent", {
-    type: "keyDown",
-    key: "Backspace",
-    code: "Backspace",
-    windowsVirtualKeyCode: 8,
-    nativeVirtualKeyCode: 51
-  });
-  await send(tabId, "Input.dispatchKeyEvent", {
-    type: "keyUp",
-    key: "Backspace",
-    code: "Backspace",
-    windowsVirtualKeyCode: 8,
-    nativeVirtualKeyCode: 51
-  });
-  await send(tabId, "Input.insertText", { text });
-}
-
-async function replaceFieldText(tabId, x, y, text) {
-  await doubleClick(tabId, x, y);
-  await pause(100);
-  await send(tabId, "Input.insertText", { text });
-}
-
-async function detach(tabId) {
-  if (!attachedTabs.has(tabId)) return;
-  attachedTabs.delete(tabId);
-  await detachIfUnused(tabId);
-}
-
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -182,136 +38,7 @@ function extractAxisPrices(nodes) {
 }
 
 function isCaptureMessage(type) {
-  return type === "CAPTURE_AXIS_SCALE" || type === "CAPTURE_PINE_ANCHORS";
-}
-
-function withCaptureLease(tabId, callback) {
-  const previous = captureLeaseTails.get(tabId) || Promise.resolve();
-  const run = previous.catch(() => undefined).then(callback);
-  const tail = run.then(() => undefined, () => undefined);
-  captureLeaseTails.set(tabId, tail);
-  return run.finally(async () => {
-    if (captureLeaseTails.get(tabId) !== tail) return;
-    captureLeaseTails.delete(tabId);
-    await detachIfUnused(tabId);
-  });
-}
-
-async function withTemporaryAxisDebugger(tabId, callback) {
-  return withCaptureLease(tabId, async () => {
-    let accessibilityEnabled = false;
-    activeCaptureTabs.add(tabId);
-    try {
-      if (!hasDebugger(tabId)) await attachDebugger(tabId);
-      const sendCommand = (method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
-      await sendCommand("Accessibility.enable");
-      accessibilityEnabled = true;
-      return await callback(sendCommand);
-    } finally {
-      if (accessibilityEnabled) {
-        try { await chrome.debugger.sendCommand({ tabId }, "Accessibility.disable"); } catch {}
-      }
-      activeCaptureTabs.delete(tabId);
-    }
-  });
-}
-
-async function captureTabPng(tabId) {
-  return withCaptureLease(tabId, async () => {
-    activeCaptureTabs.add(tabId);
-    try {
-      if (!hasDebugger(tabId)) await attachDebugger(tabId);
-      const result = await chrome.debugger.sendCommand(
-        { tabId },
-        "Page.captureScreenshot",
-        { format: "png", fromSurface: true }
-      );
-      if (!result?.data) throw new Error("Chrome returned an empty chart screenshot.");
-      return `data:image/png;base64,${result.data}`;
-    } finally {
-      activeCaptureTabs.delete(tabId);
-    }
-  });
-}
-
-function domAttributes(node) {
-  const attributes = {};
-  for (let index = 0; index < (node?.attributes || []).length; index += 2) {
-    attributes[node.attributes[index]] = node.attributes[index + 1];
-  }
-  return attributes;
-}
-
-function walkDom(node, visit) {
-  if (!node) return;
-  visit(node);
-  for (const child of node.childNodes || []) walkDom(child, visit);
-  for (const shadowRoot of node.shadowRoots || []) walkDom(shadowRoot, visit);
-}
-
-function canvasBackendIds(root) {
-  const canvases = [];
-  walkDom(root, (node) => {
-    if (node.nodeName !== "CANVAS" || !node.backendNodeId) return;
-    const attributes = domAttributes(node);
-    const hint = `${attributes["aria-label"] || ""} ${attributes.class || ""} ${attributes.id || ""}`;
-    canvases.push({
-      backendNodeId: node.backendNodeId,
-      preferred: /chart|pane|tradingview/i.test(hint)
-    });
-  });
-  return canvases.sort((a, b) => Number(b.preferred) - Number(a.preferred));
-}
-
-function boxCenter(box) {
-  if (!Array.isArray(box) || box.length < 8) return null;
-  const xs = [box[0], box[2], box[4], box[6]].map(Number);
-  const ys = [box[1], box[3], box[5], box[7]].map(Number);
-  if (![...xs, ...ys].every(Number.isFinite)) return null;
-  return {
-    x: xs.reduce((sum, value) => sum + value, 0) / xs.length,
-    y: ys.reduce((sum, value) => sum + value, 0) / ys.length
-  };
-}
-
-function validAxisBox(center, message) {
-  const viewportWidth = finiteNumber(message?.viewportWidth);
-  const viewportHeight = finiteNumber(message?.viewportHeight);
-  const plot = message?.plotRect;
-  const left = finiteNumber(plot?.left);
-  const top = finiteNumber(plot?.top);
-  const right = finiteNumber(plot?.right);
-  const bottom = finiteNumber(plot?.bottom);
-  if (![center?.x, center?.y, viewportWidth, viewportHeight, left, top, right, bottom].every(Number.isFinite)) return false;
-  if (viewportWidth <= 0 || viewportHeight <= 0 || right <= left || bottom <= top) return false;
-  return center.x >= Math.max(0, right - 60)
-    && center.x <= viewportWidth
-    && center.y >= top
-    && center.y <= Math.min(viewportHeight, bottom);
-}
-
-async function frontendBox(sendCommand, backendNodeId) {
-  if (!Number.isInteger(backendNodeId) || backendNodeId <= 0) return null;
-  try {
-    const pushed = await sendCommand("DOM.pushNodesByBackendIdsToFrontend", { backendNodeIds: [backendNodeId] });
-    const nodeId = pushed?.nodeIds?.[0];
-    if (!Number.isInteger(nodeId)) return null;
-    return (await sendCommand("DOM.getBoxModel", { nodeId })).model?.content || null;
-  } catch {
-    return null;
-  }
-}
-
-async function axisCandidates(sendCommand, nodes, message) {
-  const candidates = [];
-  for (const node of nodes || []) {
-    const price = normalizedAxisText(axisText(node?.name ?? node));
-    if (price === null || !node?.backendDOMNodeId) continue;
-    const center = boxCenter(await frontendBox(sendCommand, node.backendDOMNodeId));
-    if (!validAxisBox(center, message)) continue;
-    candidates.push({ price, y: center.y });
-  }
-  return candidates;
+  return type === "CAPTURE_AXIS_SCALE";
 }
 
 function uniqueAxisCandidates(candidates) {
@@ -324,299 +51,83 @@ function uniqueAxisCandidates(candidates) {
   });
 }
 
-function matchAxisCandidatesToGridRows(candidates, gridRows, tolerance = 3) {
-  if (!Array.isArray(candidates) || !Array.isArray(gridRows) || candidates.length < 3 || gridRows.length < 3) return null;
+function axisPairsFromCandidates(candidates, tolerance = 1.5) {
+  if (!Array.isArray(candidates) || candidates.length < 3) return null;
   const numericTolerance = finiteNumber(tolerance);
   if (numericTolerance === null || numericTolerance < 0) return null;
-  const rows = gridRows.map(finiteNumber);
-  if (rows.includes(null) || new Set(rows).size !== rows.length) return null;
-  const numericCandidates = candidates.map((candidate) => ({
+  const numericCandidates = uniqueAxisCandidates(candidates.map((candidate) => ({
     price: finiteNumber(candidate?.price),
     y: finiteNumber(candidate?.y)
-  }));
-  if (numericCandidates.some((candidate) => candidate.price === null || candidate.y === null)) return null;
+  }))).filter((candidate) => candidate.price !== null && candidate.y !== null);
+  if (numericCandidates.length < 3) return null;
 
-  // TradingView exposes native ticks, current-price badges, drawing labels, and
-  // indicator labels in the same right-axis accessibility region. Only native
-  // ticks sit on screenshot grid rows. Keep unambiguous row matches and ignore
-  // unrelated labels instead of requiring both lists to have identical sizes.
-  const rowMatches = [];
-  for (const y of rows) {
-    const nearby = numericCandidates.filter((candidate) => Math.abs(candidate.y - y) <= numericTolerance);
-    if (nearby.length === 1) rowMatches.push({ price: nearby[0].price, y });
-  }
-  if (rowMatches.length < 3) return null;
-
-  // One shifted badge can still land near a grid row. Select the largest
-  // negative-slope linear subset and require at least three independent anchors.
   let best = [];
-  for (let left = 0; left < rowMatches.length - 1; left += 1) {
-    for (let right = left + 1; right < rowMatches.length; right += 1) {
-      const first = rowMatches[left];
-      const second = rowMatches[right];
+  let bestSpan = -1;
+  for (let left = 0; left < numericCandidates.length - 1; left += 1) {
+    for (let right = left + 1; right < numericCandidates.length; right += 1) {
+      const first = numericCandidates[left];
+      const second = numericCandidates[right];
       const pixelSpan = second.y - first.y;
       const priceSpan = second.price - first.price;
-      if (pixelSpan <= 0 || priceSpan >= 0) continue;
+      if (pixelSpan === 0 || priceSpan === 0 || pixelSpan * priceSpan >= 0) continue;
       const pricePerPixel = priceSpan / pixelSpan;
-      const allowedPriceError = Math.max(0.01, Math.abs(pricePerPixel) * Math.max(1, numericTolerance));
-      const inliers = rowMatches.filter((pair) => {
+      const allowedPriceError = Math.max(0.01, Math.abs(pricePerPixel) * numericTolerance);
+      const inliers = numericCandidates.filter((pair) => {
         const expectedPrice = first.price + (pair.y - first.y) * pricePerPixel;
         return Math.abs(pair.price - expectedPrice) <= allowedPriceError;
-      });
-      if (inliers.length > best.length) best = inliers;
-    }
-  }
-  if (best.length < 3 || new Set(best.map((pair) => pair.price)).size !== best.length) return null;
-  best.sort((a, b) => a.y - b.y);
-  const first = best[0];
-  const last = best[best.length - 1];
-  const pricePerPixel = (last.price - first.price) / (last.y - first.y);
-  const allowedPriceError = Math.max(0.01, Math.abs(pricePerPixel) * Math.max(1, numericTolerance));
-  return best.every((pair) => {
-    const expectedPrice = first.price + (pair.y - first.y) * pricePerPixel;
-    return Math.abs(pair.price - expectedPrice) <= allowedPriceError;
-  }) ? best : null;
-}
-
-async function readNativeAxisPrices(tabId, message) {
-  return withTemporaryAxisDebugger(tabId, async (sendCommand) => {
-    await sendCommand("DOM.enable");
-    try {
-      const document = (await sendCommand("DOM.getDocument", { depth: -1, pierce: true })).root;
-      const preferred = [];
-      for (const canvas of canvasBackendIds(document)) {
-        try {
-          const partial = await sendCommand("Accessibility.getPartialAXTree", {
-            backendDOMNodeId: canvas.backendNodeId,
-            fetchRelatives: true
-          });
-          const found = await axisCandidates(sendCommand, partial?.nodes, message);
-          if (found.length >= 2) preferred.push(...found);
-        } catch {
-          // A canvas may not expose an accessibility subtree; use the full tree below.
-        }
+      }).sort((a, b) => a.y - b.y);
+      const distinct = inliers.filter((pair, index) => index === 0
+        || Math.abs(pair.y - inliers[index - 1].y) > 0.25)
+        .filter((pair, index, rows) => rows.findIndex((row) => row.price === pair.price) === index);
+      const span = distinct.length > 1 ? distinct.at(-1).y - distinct[0].y : 0;
+      if (distinct.length > best.length || (distinct.length === best.length && span > bestSpan)) {
+        best = distinct;
+        bestSpan = span;
       }
-      const preferredCandidates = uniqueAxisCandidates(preferred);
-      if (preferredCandidates.length >= 2) return preferredCandidates;
-
-      const full = await sendCommand("Accessibility.getFullAXTree");
-      const found = await axisCandidates(sendCommand, full?.nodes, message);
-      return uniqueAxisCandidates(found);
-    } finally {
-      try { await sendCommand("DOM.disable"); } catch {}
-    }
-  });
-}
-
-function scaledCoordinate(value, scale) {
-  const number = finiteNumber(value);
-  const ratio = finiteNumber(scale);
-  if (number === null || ratio === null || ratio <= 0) return null;
-  return number / ratio;
-}
-
-function cssGridCalibration(deviceRows, scaleY) {
-  if (!Array.isArray(deviceRows)) return null;
-  const gridRows = deviceRows.map((row) => scaledCoordinate(row, scaleY));
-  if (gridRows.some((row) => row === null)) return null;
-  return { gridRows, gridGapPx: NiftyOverlay.dominantGridGap(gridRows) };
-}
-
-function toCssAnchor(anchor, scaleX, scaleY) {
-  if (!anchor || typeof anchor !== "object" || Array.isArray(anchor)) return null;
-  const result = {};
-  for (const key of ["left", "right", "x"]) {
-    if (anchor[key] !== undefined) {
-      const value = scaledCoordinate(anchor[key], scaleX);
-      if (value === null) return null;
-      result[key] = value;
     }
   }
-  for (const key of ["top", "bottom", "y"]) {
-    if (anchor[key] !== undefined) {
-      const value = scaledCoordinate(anchor[key], scaleY);
-      if (value === null) return null;
-      result[key] = value;
-    }
-  }
-  if (anchor.count !== undefined) {
-    const count = finiteNumber(anchor.count);
-    if (count === null) return null;
-    result.count = count;
-  }
-  return Object.keys(result).length ? result : null;
+  return best.length >= 3 ? best : null;
 }
 
 function axisScaleError(message) {
   return { ok: false, error: message };
 }
 
-async function captureScreenshot(sender, message) {
-  const dataUrl = await captureTabPng(sender.tab.id);
-  const blob = await (await fetch(dataUrl)).blob();
-  const bitmap = await createImageBitmap(blob);
-  const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const context = surface.getContext("2d", { willReadFrequently: true });
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  const image = context.getImageData(0, 0, surface.width, surface.height);
-  const viewportWidth = finiteNumber(message?.viewportWidth);
-  const viewportHeight = finiteNumber(message?.viewportHeight);
-  const source = message.plotRect;
-  const sourceValues = [source?.left, source?.top, source?.right, source?.bottom];
-  if (viewportWidth === null || viewportHeight === null || viewportWidth <= 0 || viewportHeight <= 0
-    || sourceValues.some((value) => finiteNumber(value) === null)) {
-    throw new Error("Viewport and plot rectangle are required for axis capture.");
-  }
-  const scaleX = surface.width / viewportWidth;
-  const scaleY = surface.height / viewportHeight;
-  const region = {
-    left: source.left * scaleX,
-    top: source.top * scaleY,
-    right: source.right * scaleX,
-    bottom: source.bottom * scaleY
-  };
-  const lower = NiftyOverlay.findColorBounds(image.data, surface.width, surface.height, [255, 0, 254], region, 22);
-  const upper = NiftyOverlay.findColorBounds(image.data, surface.width, surface.height, [0, 255, 254], region, 22);
-  const deviceGridRows = NiftyOverlay.findHorizontalGridRows(image.data, surface.width, surface.height, region);
-  const gridCalibration = cssGridCalibration(deviceGridRows, scaleY);
-  const toDevice = (bounds) => bounds && ({
-    left: bounds.minX,
-    right: bounds.maxX + 1,
-    top: bounds.minY,
-    bottom: bounds.maxY + 1,
-    x: bounds.x,
-    y: bounds.y,
-    count: bounds.count
-  });
-  return {
-    lower: toDevice(lower),
-    upper: toDevice(upper),
-    gridRows: gridCalibration?.gridRows || [],
-    gridGapPx: gridCalibration?.gridGapPx ?? null,
-    scaleX,
-    scaleY
-  };
-}
-
-async function capturePineAnchors(sender, message, dependencies = {}) {
-  const capture = dependencies.captureScreenshot || captureScreenshot;
-  const screenshot = await capture(sender, message);
-  const scaleX = finiteNumber(screenshot?.scaleX);
-  const scaleY = finiteNumber(screenshot?.scaleY);
-  if (scaleX === null || scaleX <= 0 || scaleY === null || scaleY <= 0) {
-    throw new Error("Screenshot scale is unavailable.");
-  }
-  return {
-    lower: toCssAnchor(screenshot.lower, scaleX, scaleY),
-    upper: toCssAnchor(screenshot.upper, scaleX, scaleY)
-  };
-}
-
-async function captureAxisScale(sender, message, dependencies = {}) {
-  const capture = dependencies.captureScreenshot || captureScreenshot;
-  const readAxis = dependencies.readNativeAxisPrices || ((tabId, details) => readNativeAxisPrices(tabId, details));
-  const screenshot = await capture(sender, message);
-  const scaleX = finiteNumber(screenshot?.scaleX);
-  const scaleY = finiteNumber(screenshot?.scaleY);
-  if (scaleY === null || scaleY <= 0) return axisScaleError("Screenshot scale is unavailable.");
-
-  const gridRows = Array.isArray(screenshot?.gridRows) ? screenshot.gridRows.map(finiteNumber) : [];
-  if (gridRows.includes(null)) return axisScaleError("Grid rows are not reliable.");
-  const gridGapPx = finiteNumber(screenshot?.gridGapPx);
-  if (!Number.isFinite(gridGapPx) || gridGapPx <= 0) return axisScaleError("Grid spacing is not reliable.");
-
+async function captureAxisScale(_sender, message) {
   const observedCandidates = Array.isArray(message?.axisCandidates) ? message.axisCandidates : [];
-  const nativeCandidates = observedCandidates.length >= 3
-    ? observedCandidates
-    : await readAxis(sender.tab.id, message);
-  const axisPairs = matchAxisCandidatesToGridRows(nativeCandidates, gridRows);
-  if (!axisPairs) return axisScaleError("Axis calibration is not reliable yet. Change timeframe or zoom once to redraw chart scale.");
-
-  const lower = toCssAnchor(screenshot.lower, scaleX, scaleY);
-  const upper = toCssAnchor(screenshot.upper, scaleX, scaleY);
-  return { ok: true, lower, upper, gridRows, gridGapPx, axisPrices: axisPairs.map((pair) => pair.price), axisPairs };
+  const observedPairs = axisPairsFromCandidates(observedCandidates);
+  const observedGap = observedPairs && NiftyOverlay.dominantGridGap(observedPairs.map((pair) => pair.y));
+  if (!observedPairs || !Number.isFinite(observedGap) || observedGap <= 0) {
+    return axisScaleError("Native axis ticks are still loading.");
+  }
+  return {
+    ok: true,
+    lower: null,
+    upper: null,
+    gridRows: observedPairs.map((pair) => pair.y),
+    gridGapPx: observedGap,
+    axisPrices: observedPairs.map((pair) => pair.price),
+    axisPairs: observedPairs
+  };
 }
-
-chrome.debugger.onDetach.addListener(({ tabId }) => {
-  if (!Number.isInteger(tabId)) return;
-  attachedTabs.delete(tabId);
-  debuggerTabs.delete(tabId);
-  debuggerAttachTails.delete(tabId);
-  activeCaptureTabs.delete(tabId);
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  attachedTabs.delete(tabId);
-  debuggerTabs.delete(tabId);
-  debuggerAttachTails.delete(tabId);
-  activeCaptureTabs.delete(tabId);
-  captureLeaseTails.delete(tabId);
-});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "CAPTURE_PINE_ANCHORS") {
-    if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
-      sendResponse({ ok: false, error: "Chart capture is limited to TradingView tabs." });
-      return;
-    }
-    capturePineAnchors(sender, message)
-      .then((anchors) => sendResponse({ ok: true, ...anchors }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
-    return true;
-  }
-  if (message?.type === "CAPTURE_AXIS_SCALE") {
-    if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
-      sendResponse({ ok: false, error: "Chart capture is limited to TradingView tabs." });
-      return;
-    }
-    captureAxisScale(sender, message)
-      .then((capture) => sendResponse(capture))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
-    return true;
-  }
-  if (!message?.type?.startsWith("TRUSTED_")) return;
-  const tabId = sender.tab?.id;
-  if (!tabId || !sender.url?.startsWith("https://www.tradingview.com/")) {
-    sendResponse({ ok: false, error: "Trusted input is limited to active TradingView tabs." });
+  if (!isCaptureMessage(message?.type)) return;
+  if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
+    sendResponse({ ok: false, error: "Axis capture is limited to TradingView tabs." });
     return;
   }
-
-  (async () => {
-    if (message.type === "TRUSTED_SESSION_START") {
-      await ensureAttached(tabId);
-    } else if (message.type === "TRUSTED_CLICK") {
-      await click(tabId, Number(message.x), Number(message.y));
-    } else if (message.type === "TRUSTED_DOUBLE_CLICK") {
-      await doubleClick(tabId, Number(message.x), Number(message.y));
-    } else if (message.type === "TRUSTED_REPLACE_TEXT") {
-      await replaceText(tabId, String(message.text || ""));
-    } else if (message.type === "TRUSTED_REPLACE_FIELD") {
-      await replaceFieldText(tabId, Number(message.x), Number(message.y), String(message.text || ""));
-    } else if (message.type === "TRUSTED_SESSION_END") {
-      await detach(tabId);
-    } else {
-      throw new Error(`Unknown trusted input command: ${message.type}`);
-    }
-    return { ok: true };
-  })().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message }));
-
+  captureAxisScale(sender, message)
+    .then(sendResponse)
+    .catch((error) => sendResponse({ ok: false, error: error.message }));
   return true;
 });
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    attachedTabs,
-    captureTabPng,
+    axisPairsFromCandidates,
     captureAxisScale,
-    capturePineAnchors,
-    cssGridCalibration,
-    detach,
-    ensureAttached,
     extractAxisPrices,
-    isCaptureMessage,
-    matchAxisCandidatesToGridRows,
-    readNativeAxisPrices,
-    withTemporaryAxisDebugger
+    isCaptureMessage
   };
 }

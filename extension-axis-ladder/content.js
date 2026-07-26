@@ -36,7 +36,7 @@
     const slope = pixelSpan / priceSpan;
     if (!Number.isFinite(slope)) return null;
     for (const pair of pairs) {
-      if (Math.abs((first.y + (pair.price - first.price) * slope) - pair.y) > 1) return null;
+      if (Math.abs((first.y + (pair.price - first.price) * slope) - pair.y) > 2) return null;
     }
     return (price) => first.y + (Number(price) - first.price) * slope;
   }
