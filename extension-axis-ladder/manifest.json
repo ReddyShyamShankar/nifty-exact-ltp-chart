@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "NIFTY Axis LTP Ladder",
+  "version": "0.1.0",
+  "description": "Thirteen timeframe-aware NIFTY option LTP rows locked to TradingView price coordinates.",
+  "permissions": ["storage", "activeTab", "debugger"],
+  "host_permissions": [
+    "http://127.0.0.1:8787/*",
+    "https://tradingview.com/*",
+    "https://www.tradingview.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "NIFTY Options",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "MacCtrl+Shift+Y"
+      }
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://tradingview.com/*", "https://www.tradingview.com/*"],
+      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

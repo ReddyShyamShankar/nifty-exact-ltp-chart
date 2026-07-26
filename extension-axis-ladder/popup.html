@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NIFTY Options</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand"><span class="mark" aria-hidden="true"></span><span>NIFTY OPTIONS</span><span class="brand-sub mono">/ chart</span></div>
+        <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show on chart"><i></i></button>
+      </header>
+
+      <section class="block intro">
+        <div class="block-head"><span class="kicker">TradingView overlay</span><span class="status-pill" id="status">OFF</span></div>
+        <p id="summary">Open only when wanted. Nothing shown on chart.</p>
+        <button class="canvas-button" id="open-canvas" type="button">OPEN EXACT PRICE CHART</button>
+        <button class="sync-button" id="sync-pine" type="button">SYNC PINE INPUTS</button>
+        <div class="sync-status" id="sync-status" role="status"></div>
+      </section>
+
+      <section class="block">
+        <div class="block-head"><span class="kicker">Expiry</span><span class="hint" id="expiry-hint">Loading dates…</span></div>
+        <label class="field"><span>CONTRACT EXPIRY <em>exact NIFTY date</em></span><select id="expiry"><option value="current_month">Current monthly</option></select></label>
+      </section>
+
+      <section class="block">
+        <div class="block-head"><span class="kicker">Chart labels</span><span class="hint">clean chart default</span></div>
+        <div class="seg" role="group" aria-label="Chart label count">
+          <button type="button" data-count="5">5 NEAR ATM</button>
+          <button type="button" data-count="9">9 NEAR ATM</button>
+          <button type="button" data-count="all">ALL</button>
+        </div>
+      </section>
+
+      <section class="block chain-block">
+        <div class="block-head"><span class="kicker">Full option chain</span><span class="hint" id="spot">—</span></div>
+        <div class="chain-head mono"><span>CALL</span><span>STRIKE</span><span>PUT</span></div>
+        <div class="chain" id="chain"><div class="empty">Choose an expiry. Full chain loads here.</div></div>
+      </section>
+
+      <footer class="foot mono">UPSTOX LTP · INFORMATION ONLY</footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
