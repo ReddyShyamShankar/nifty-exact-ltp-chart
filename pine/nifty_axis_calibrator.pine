@@ -1,0 +1,35 @@
+//@version=6
+indicator("NIFTY Axis Calibrator", overlay = true, max_lines_count = 2)
+
+center = math.round(close / 50.0) * 50.0
+span = timeframe.isminutes and timeframe.multiplier <= 15 ? 300.0 :
+       timeframe.isminutes and timeframe.multiplier <= 240 ? 600.0 :
+       timeframe.isdaily ? 800.0 :
+       timeframe.isweekly ? 2000.0 :
+       timeframe.ismonthly and timeframe.multiplier == 1 ? 4000.0 : 7000.0
+
+var line lowerAnchor = na
+var line upperAnchor = na
+
+if barstate.islast
+    if not na(lowerAnchor)
+        line.delete(lowerAnchor)
+    if not na(upperAnchor)
+        line.delete(upperAnchor)
+
+    lowerAnchor := line.new(
+         x1 = bar_index,
+         y1 = center - span,
+         x2 = bar_index + 1,
+         y2 = center - span,
+         xloc = xloc.bar_index,
+         color = color.rgb(255, 0, 254),
+         width = 2)
+    upperAnchor := line.new(
+         x1 = bar_index,
+         y1 = center + span,
+         x2 = bar_index + 1,
+         y2 = center + span,
+         xloc = xloc.bar_index,
+         color = color.rgb(0, 255, 254),
+         width = 2)
