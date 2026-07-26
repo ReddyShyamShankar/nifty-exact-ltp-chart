@@ -1,4 +1,4 @@
-#nifty-chain-overlay {
+#nifty-axis-ladder {
   position: fixed;
   z-index: 2147483647;
   inset: 0;
@@ -7,21 +7,20 @@
   pointer-events: none;
 }
 
-.nifty-chain-overlay__row {
+.nifty-axis-ladder__row {
   position: fixed;
-  z-index: 1;
-  min-width: 132px;
+  min-width: 220px;
   padding: 4px 8px;
   border-radius: 3px 2px 2px 3px;
   background: rgba(66, 71, 82, 0.96);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
   font: 11px/1.25 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;
-  text-align: center;
+  text-align: right;
   white-space: pre;
 }
 
-.nifty-chain-overlay__row::after {
+.nifty-axis-ladder__row::after {
   position: absolute;
   right: -7px;
   top: 50%;
@@ -34,60 +33,22 @@
   transform: translateY(-50%);
 }
 
-.nifty-chain-overlay__row.is-atm {
+.nifty-axis-ladder__row.is-atm {
   background: #ff9f0a;
   color: #1b1d22;
   font-weight: 700;
 }
 
-.nifty-chain-overlay__row.is-atm::after {
+.nifty-axis-ladder__row.is-atm::after {
   border-left-color: #ff9f0a;
 }
 
-.nifty-chain-overlay__row.has-leader::after {
-  display: none;
-}
-
-.nifty-chain-overlay__row.has-leader::before {
-  position: absolute;
-  right: -7px;
-  width: 7px;
-  height: var(--nifty-leader-height);
-  border-right: 1px solid rgba(66, 71, 82, 0.78);
-  content: "";
-}
-
-.nifty-chain-overlay__row.has-leader.leader-down::before {
-  top: 50%;
-  border-top: 1px solid rgba(66, 71, 82, 0.78);
-  border-bottom: 1px solid rgba(66, 71, 82, 0.78);
-}
-
-.nifty-chain-overlay__row.has-leader.leader-up::before {
-  bottom: 50%;
-  border-top: 1px solid rgba(66, 71, 82, 0.78);
-  border-bottom: 1px solid rgba(66, 71, 82, 0.78);
-}
-
-.nifty-chain-overlay__anchor-mask {
+.nifty-axis-ladder__status {
   position: fixed;
-  z-index: 0;
-  display: block;
-  background: #ffffff;
+  top: 8px;
+  right: 8px;
+  padding: 4px 6px;
+  color: #a1a1aa;
+  background: rgba(10, 10, 10, 0.82);
+  font: 10px/1.2 "Geist Mono", ui-monospace, monospace;
 }
-
-#nifty-exact-price-chart {
-  position: fixed; z-index: 2147483647; top: 72px; right: 18px; width: min(650px, calc(100vw - 36px)); height: min(700px, calc(100vh - 100px));
-  display: flex; flex-direction: column; overflow: hidden; color: #f4f4f5; background: #0a0a0a; border: 1px solid #2a2a30;
-  box-shadow: 0 20px 60px rgba(0,0,0,.38); font: 12px/1.4 Geist, -apple-system, BlinkMacSystemFont, sans-serif;
-}
-#nifty-exact-price-chart header { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid #1f1f23; font-family:"Geist Mono",monospace; font-size:11px; letter-spacing:.08em; }
-#nifty-exact-price-chart .mark { display:inline-block; width:8px; height:8px; margin-right:8px; background:#34d399; box-shadow:0 0 10px rgba(52,211,153,.55); }
-#nifty-exact-price-chart em { margin-left:8px; color:#71717a; font-style:normal; font-weight:400; }
-#nifty-exact-price-chart button { width:26px; height:26px; border:1px solid #2a2a30; background:#111113; color:#a1a1aa; font-size:18px; line-height:1; cursor:pointer; }
-#nifty-exact-price-chart .meta { display:flex; justify-content:space-between; gap:12px; padding:9px 16px; border-bottom:1px solid #1f1f23; color:#a1a1aa; font:10px "Geist Mono",monospace; letter-spacing:.06em; }
-#nifty-exact-price-chart .meta span:nth-child(2) { color:#34d399; }
-#nifty-exact-price-chart .meta span:last-child { color:#34d399; }
-#nifty-exact-price-chart .instruction { padding:8px 16px; color:#71717a; border-bottom:1px solid #1f1f23; font:9px "Geist Mono",monospace; letter-spacing:.08em; }
-#nifty-exact-price-chart canvas { flex:1; width:100%; min-height:0; cursor:crosshair; }
-#nifty-exact-price-chart .readout { padding:12px 16px; border-top:1px solid #1f1f23; color:#34d399; background:#111113; font:11px "Geist Mono",monospace; letter-spacing:.04em; }
