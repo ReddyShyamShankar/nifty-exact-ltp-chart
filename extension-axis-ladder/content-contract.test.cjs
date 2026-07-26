@@ -105,6 +105,36 @@ test("LTP refresh reuses cached exact positions while zoom placement captures a 
   assert.equal(captures, 3, "refresh uses cached coordinates; explicit zoom placement captures once");
 });
 
+test("in-flight zoom placement survives concurrent LTP refresh and places latest quotes", async () => {
+  let resolvePlacementScale;
+  const pendingPlacementScale = new Promise((resolve) => { resolvePlacementScale = resolve; });
+  const placements = [];
+  const hidden = [];
+  let fetches = 0;
+  let captures = 0;
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => chain(23767.45, fetches++ === 0 ? 0 : 50),
+    captureAxisScale: async () => {
+      captures += 1;
+      return captures <= 2 ? scale() : pendingPlacementScale;
+    },
+    renderRows: () => {},
+    placeRows: (rows) => placements.push(rows),
+    hideRows: (message) => hidden.push(message)
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  const placement = controller.place();
+  assert.equal(await controller.refreshLtp(), true);
+  resolvePlacementScale(scale());
+
+  assert.equal(await placement, true);
+  assert.deepEqual(hidden, []);
+  assert.equal(controller.membership().rows.find((row) => row.strike === 23800).call, 156);
+  assert.equal(placements.at(-1).find((row) => row.strike === 23800).call, 156);
+});
+
 test("refresh normalizes invalid live quotes to null without changing frozen contract membership", async () => {
   let fetches = 0;
   const controller = api.createLadderController({

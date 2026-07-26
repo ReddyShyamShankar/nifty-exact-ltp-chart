@@ -1,9 +1,10 @@
 const API = "http://127.0.0.1:8787";
-const PINE_STRIKE_STEP = 100;
-const DEFAULTS = { enabled: false, expiry: "current_month", labelCount: "5", panelOpen: false };
+const DEFAULTS = { enabled: false, expiry: "current_month" };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
 let refreshTimer = null;
+let chainRequestId = 0;
+let chainAbort = null;
 
 function money(value) { return Number.isFinite(value) ? value.toFixed(2) : "—"; }
 function formatDate(value) { return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${value}T00:00:00`)); }
@@ -28,7 +29,7 @@ async function loadHealth() {
   } catch (error) {
     setStatus("ERROR", "err");
     $("#expiry-hint").textContent = friendlyError(error);
-    $("#sync-status").textContent = friendlyError(error);
+    $("#placement-status").textContent = friendlyError(error);
     return false;
   }
 }
@@ -36,19 +37,26 @@ async function loadHealth() {
 async function save(next) { state = { ...state, ...next }; await chrome.storage.local.set(state); renderState(); }
 function renderState() {
   $("#enabled").setAttribute("aria-checked", String(state.enabled));
-  $("#summary").textContent = state.enabled ? "Labels shown only on active NIFTY chart tabs." : "Open only when wanted. Nothing shown on chart.";
+  $("#summary").textContent = state.enabled
+    ? "Automatic ladder active on supported NIFTY chart tabs."
+    : "Enable on a supported NIFTY chart. Contracts rebuild only when timeframe or expiry changes.";
   setStatus(state.enabled ? "LIVE" : "OFF", state.enabled ? "live" : "");
-  document.querySelectorAll("[data-count]").forEach((button) => button.classList.toggle("on", button.dataset.count === state.labelCount));
   $("#expiry").value = state.expiry;
 }
 
 async function loadChain() {
+  const requestId = ++chainRequestId;
+  const requestedExpiry = state.expiry;
+  chainAbort?.abort();
+  chainAbort = new AbortController();
+  const signal = chainAbort.signal;
   const chain = $("#chain");
   chain.innerHTML = '<div class="empty">Loading live LTP…</div>';
   try {
-    const response = await fetch(`${API}/api/nifty-chain?expiry=${encodeURIComponent(state.expiry)}`, { cache: "no-store" });
+    const response = await fetch(`${API}/api/nifty-chain?expiry=${encodeURIComponent(requestedExpiry)}`, { cache: "no-store", signal });
     const data = await responseData(response);
-    setStatus("LIVE", "live");
+    if (requestId !== chainRequestId || requestedExpiry !== state.expiry) return;
+    setStatus(state.enabled ? "LIVE" : "OFF", state.enabled ? "live" : "");
     $("#spot").textContent = `SPOT ${money(data.spot)}`;
     const rows = [...data.rows].sort((a, b) => b.strike - a.strike);
     chain.replaceChildren(...rows.map((row) => {
@@ -58,6 +66,7 @@ async function loadChain() {
       return item;
     }));
   } catch (error) {
+    if (signal.aborted || requestId !== chainRequestId) return;
     setStatus("ERROR", "err");
     $("#spot").textContent = "BRIDGE OFFLINE";
     chain.innerHTML = `<div class="empty">${friendlyError(error)}</div>`;
@@ -83,45 +92,28 @@ async function loadExpiries() {
   }
 }
 
-async function syncPineInputs() {
-  const status = $("#sync-status");
-  const button = $("#sync-pine");
+async function retryChartPlacement() {
+  const status = $("#placement-status");
+  const button = $("#retry-placement");
   button.disabled = true;
-  status.textContent = "Reading live contracts…";
+  status.textContent = "Capturing exact axis…";
   try {
-    const response = await fetch(`${API}/api/nifty-chain?expiry=${encodeURIComponent(state.expiry)}`, { cache: "no-store" });
-    const data = await responseData(response);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error("No active TradingView tab.");
-    const result = await chrome.tabs.sendMessage(tab.id, {
-      type: "SYNC_PINE_INPUTS",
-      expiry: data.expiry,
-      rows: data.rows,
-      spot: data.spot,
-      strikeStep: PINE_STRIKE_STEP
-    });
-    if (!result?.ok) throw new Error(result?.error || "Pine settings not ready.");
-    status.textContent = `ATM ${result.center.toLocaleString("en-IN")} · ${result.step}-point spacing · ${result.count} fields synced.`;
+    if (!tab?.id || !tab.url?.startsWith("https://www.tradingview.com/")) throw new Error("Open active TradingView chart first.");
+    const result = await chrome.tabs.sendMessage(tab.id, { type: "RETRY_LABEL_PLACEMENT" });
+    if (!result?.ok) throw new Error(result?.error || "Exact-axis retry failed.");
+    status.textContent = "Exact-axis placement restored.";
   } catch (error) {
     status.textContent = friendlyError(error);
   } finally { button.disabled = false; }
 }
 
-async function retryChartPlacement() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url?.startsWith("https://www.tradingview.com/")) return;
-  await chrome.tabs.sendMessage(tab.id, { type: "RETRY_LABEL_PLACEMENT" }).catch(() => {});
-}
-
 async function init() {
   state = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
   $("#enabled").addEventListener("click", () => save({ enabled: !state.enabled }));
-  $("#open-canvas").addEventListener("click", () => save({ panelOpen: true }));
-  $("#sync-pine").addEventListener("click", syncPineInputs);
+  $("#retry-placement").addEventListener("click", retryChartPlacement);
   $("#expiry").addEventListener("change", async (event) => { await save({ expiry: event.target.value }); await loadChain(); });
-  document.querySelectorAll("[data-count]").forEach((button) => button.addEventListener("click", () => save({ labelCount: button.dataset.count })));
   renderState();
-  await retryChartPlacement();
   if (!(await loadHealth())) return;
   await loadExpiries();
   renderState();

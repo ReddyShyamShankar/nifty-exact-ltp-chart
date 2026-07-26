@@ -261,16 +261,19 @@
     async function place() {
       const snapshot = current;
       if (!snapshot) return false;
+      const placementGeneration = generation;
       try {
         const scale = await captureAxisScale();
-        if (current !== snapshot || !scale?.ok || !validPineSanity(scale)) throw new Error("Axis calibration unavailable.");
+        if (generation !== placementGeneration || !current) return false;
+        if (!scale?.ok || !validPineSanity(scale)) throw new Error("Axis calibration unavailable.");
         const toY = axisPriceToY(scale.axisPairs);
         if (!toY) throw new Error("Native axis map is unavailable.");
         cachedAxisToY = toY;
-        if (!placeCached(snapshot)) throw new Error("Exact strike positions are unavailable.");
+        if (!placeCached(current)) throw new Error("Exact strike positions are unavailable.");
         setStatus("LIVE");
         return true;
       } catch (error) {
+        if (generation !== placementGeneration || !current) return false;
         hideRows(error?.message || "AXIS CALIBRATION UNAVAILABLE");
         return false;
       }
@@ -501,5 +504,20 @@
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
       if (settings.enabled) controller?.setExpiry(settings.expiry).then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
     }
+  });
+
+  chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== "RETRY_LABEL_PLACEMENT") return false;
+    if (!settings.enabled || !controller?.membership()) {
+      sendResponse({ ok: false, error: "Enable ladder and wait for contracts first." });
+      return false;
+    }
+    controller.place().then((ok) => {
+      if (!ok) requestPlacementRetries();
+      sendResponse(ok
+        ? { ok: true }
+        : { ok: false, error: "Axis capture unavailable. Automatic retries started." });
+    }).catch((error) => sendResponse({ ok: false, error: error?.message || "Exact-axis retry failed." }));
+    return true;
   });
 })(typeof globalThis === "undefined" ? this : globalThis);

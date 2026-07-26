@@ -15,24 +15,16 @@
 
       <section class="block intro">
         <div class="block-head"><span class="kicker">TradingView overlay</span><span class="status-pill" id="status">OFF</span></div>
-        <p id="summary">Open only when wanted. Nothing shown on chart.</p>
-        <button class="canvas-button" id="open-canvas" type="button">OPEN EXACT PRICE CHART</button>
-        <button class="sync-button" id="sync-pine" type="button">SYNC PINE INPUTS</button>
-        <div class="sync-status" id="sync-status" role="status"></div>
+        <p id="summary">Enable on a supported NIFTY chart. Contracts rebuild only when timeframe or expiry changes.</p>
+        <div class="auto-contract mono">AUTO · 13 STRIKES · EXACT AXIS</div>
+        <p class="auto-note">Timeframe chooses contracts. Zoom preserves them.</p>
+        <button class="retry-button" id="retry-placement" type="button">RETRY PLACEMENT</button>
+        <div class="placement-status" id="placement-status" role="status"></div>
       </section>
 
       <section class="block">
         <div class="block-head"><span class="kicker">Expiry</span><span class="hint" id="expiry-hint">Loading dates…</span></div>
         <label class="field"><span>CONTRACT EXPIRY <em>exact NIFTY date</em></span><select id="expiry"><option value="current_month">Current monthly</option></select></label>
-      </section>
-
-      <section class="block">
-        <div class="block-head"><span class="kicker">Chart labels</span><span class="hint">clean chart default</span></div>
-        <div class="seg" role="group" aria-label="Chart label count">
-          <button type="button" data-count="5">5 NEAR ATM</button>
-          <button type="button" data-count="9">9 NEAR ATM</button>
-          <button type="button" data-count="all">ALL</button>
-        </div>
       </section>
 
       <section class="block chain-block">

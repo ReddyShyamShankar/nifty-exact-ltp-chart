@@ -1,45 +1,30 @@
-# NIFTY Chain LTP Overlay — v0.14.0
+# NIFTY Exact Axis Ladder — independent test build
 
-Same-window TradingView extension with one-click Pine-input synchronization.
+Side-by-side extension. Existing NIFTY Chain LTP Overlay v0.14.0 remains unchanged.
 
-It reads local NIFTY data bridge every two seconds. Bridge requests Upstox option-chain data for selected monthly expiry.
+## What it does
 
-## Daily workflow
+- Shows 13 contracts: six below ATM, ATM, six above ATM.
+- Row format: `C 266.60 | P 388.70 | 26,000`.
+- Anchors every row to its exact TradingView right-axis price coordinate.
+- Supports 15m, 1h, 4h, D, W, M, 3M, and 6M.
+- Rebuilds contract membership only when timeframe or expiry changes.
+- Preserves same contracts while zooming or panning; only screen position changes.
+- Refreshes Upstox LTP values every two seconds without reopening TradingView settings.
 
-1. Complete `bin/nifty-bridge setup` once. The bridge then runs automatically.
-2. Open normal logged-in Chrome and TradingView NIFTY chart.
-3. Keep `NIFTY Monthly LTP Ladder` indicator on chart.
-4. Click NIFTY extension icon, choose expiry, then click **SYNC PINE INPUTS**.
+## Workflow
 
-Extension automatically opens indicator Settings, calculates nearest 100-point ATM from live NIFTY spot, fills all ten exact option symbols, and presses **Ok**. No manual center entry or second Chrome profile is needed.
+1. Keep local NIFTY bridge running at `http://127.0.0.1:8787`.
+2. Open logged-in TradingView NIFTY chart.
+3. Open extension popup and enable ladder.
+4. Select exact expiry.
 
-Keyboard shortcut `Control+Shift+Y` opens extension popup on macOS.
-
-## Result
-
-Pine receives Call and Put contracts for five strikes:
-
-- Strike -2
-- Strike -1
-- Center
-- Strike +1
-- Strike +2
-
-Spacing is 100 points. At spot 23,767.45, sync writes center 23,800 and strikes 23,600 / 23,700 / 23,800 / 23,900 / 24,000.
-
-TradingView then supplies live LTP values to Pine. Chart labels show:
-
-```text
-C Call-LTP | P Put-LTP
-```
-
-Labels stay beside TradingView's right price scale. ATM stays on its exact price. When weekly or monthly chart scaling compresses 100-point strikes, other rows spread apart to prevent overlap and use small connector brackets back to exact strike coordinates. Placement retries while TradingView finishes timeframe re-scaling.
+Status reads `AUTO · 13 STRIKES · EXACT AXIS`. No Pine symbol injection or manual center strike is required. Use **RETRY PLACEMENT** only when TradingView finishes a slow layout change and automatic placement did not recover.
 
 ## Security and limits
 
-- Extension does not store Upstox token.
-- Token remains in local bridge process only.
-- Chrome debugger permission is attached only during sync and detached afterward.
-- TradingView UI changes can require selector maintenance.
-- Expiry sync explicitly opens TradingView's expiry menu and selects the date chosen in the extension.
-- Sync recalculates center from live spot and updates contracts; it does not place orders.
+- Extension never stores Upstox token.
+- Token stays in local bridge process.
+- Chrome debugger attaches only for short axis captures, then detaches.
+- Unsupported timeframes fail closed and hide rows.
+- Extension places no orders.
