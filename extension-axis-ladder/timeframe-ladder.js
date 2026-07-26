@@ -35,6 +35,15 @@
     return Array.from({ length: 13 }, (_, index) => center + (index - 6) * step);
   }
 
+  function nearestAvailableStrike(rows, spot) {
+    const price = Number(spot);
+    if (!Array.isArray(rows) || !Number.isFinite(price)) return null;
+    return rows
+      .map((row) => Number(row?.strike))
+      .filter(Number.isFinite)
+      .sort((left, right) => Math.abs(left - price) - Math.abs(right - price) || left - right)[0] ?? null;
+  }
+
   function selectAvailable(rows, strikes) {
     if (!Array.isArray(rows) || !Array.isArray(strikes)) return [];
     const byStrike = new Map();
@@ -42,12 +51,22 @@
       const strike = Number(row?.strike);
       if (Number.isFinite(strike) && !byStrike.has(strike)) byStrike.set(strike, row);
     }
-    return strikes
-      .map((strike) => byStrike.get(Number(strike)))
-      .filter(Boolean);
+    const available = [...byStrike.values()];
+    const unused = new Set(byStrike.keys());
+    const selected = [];
+    for (const target of strikes) {
+      const price = Number(target);
+      if (!Number.isFinite(price)) continue;
+      const nearest = [...unused]
+        .sort((left, right) => Math.abs(left - price) - Math.abs(right - price) || left - right)[0];
+      if (nearest === undefined) break;
+      selected.push(byStrike.get(nearest));
+      unused.delete(nearest);
+    }
+    return selected.sort((left, right) => Number(left.strike) - Number(right.strike));
   }
 
-  const api = { timeframeKey, snapStrikeInterval, thirteenStrikes, selectAvailable };
+  const api = { timeframeKey, snapStrikeInterval, thirteenStrikes, selectAvailable, nearestAvailableStrike };
   root.NiftyTimeframeLadder = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

@@ -34,6 +34,13 @@ test("formats each visible row as Call, Put, then rightmost strike", () => {
   assert.equal(api.formatRow({ strike: 26000, call: 266.6, put: 388.7 }), "C 266.60 | P 388.70 | 26,000");
 });
 
+test("renders only genuine finite quotes and never coerces missing values to zero", () => {
+  for (const invalid of [null, undefined, "", "   ", true, false, Infinity, -Infinity, NaN, "Infinity"]) {
+    assert.equal(api.formatRow({ strike: 26000, call: invalid, put: invalid }), "C — | P — | 26,000");
+  }
+  assert.equal(api.formatRow({ strike: 26000, call: "12.5", put: 0 }), "C 12.50 | P 0.00 | 26,000");
+});
+
 test("builds thirteen frozen contracts from spot but maps their y positions from native axis pairs", async () => {
   const placements = [];
   const controller = api.createLadderController({
@@ -69,7 +76,7 @@ test("builds thirteen frozen contracts from spot but maps their y positions from
   });
 });
 
-test("LTP refresh and zoom placement keep frozen membership while updating only matching values", async () => {
+test("LTP refresh reuses cached exact positions while zoom placement captures a fresh scale", async () => {
   const placements = [];
   let fetches = 0;
   let captures = 0;
@@ -82,9 +89,10 @@ test("LTP refresh and zoom placement keep frozen membership while updating only 
   });
 
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  assert.equal(captures, 2, "initial rebuild requires two matching calibration captures");
   const before = controller.membership();
   await controller.refreshLtp();
-  assert.equal(captures, 2, "refresh places the frozen rows against a fresh axis capture");
+  assert.equal(captures, 2, "initial rebuild requires two matching calibration captures");
   await controller.place();
   const after = controller.membership();
 
@@ -94,7 +102,33 @@ test("LTP refresh and zoom placement keep frozen membership while updating only 
   assert.equal(after.timeframe, before.timeframe);
   assert.equal(after.rows.find((row) => row.strike === 23800).call, 108);
   assert.equal(placements.at(-1).find((row) => row.strike === 23800).y, 140);
-  assert.equal(captures, 3, "initial rebuild, refresh placement, and explicit zoom placement each capture scale without rebuilding membership");
+  assert.equal(captures, 3, "refresh uses cached coordinates; explicit zoom placement captures once");
+});
+
+test("refresh normalizes invalid live quotes to null without changing frozen contract membership", async () => {
+  let fetches = 0;
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => {
+      fetches += 1;
+      return fetches === 1 ? chain(23767.45) : {
+        spot: 23767.45,
+        rows: chain(23767.45).rows.map((row) => ({ ...row, call: null, put: " " }))
+      };
+    },
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => {}
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  await controller.refreshLtp();
+
+  assert.deepEqual(controller.membership().strikes, [
+    23200, 23300, 23400, 23500, 23600, 23700, 23800,
+    23900, 24000, 24100, 24200, 24300, 24400
+  ]);
+  assert.deepEqual(controller.membership().rows.find((row) => row.strike === 23800), { strike: 23800, call: null, put: null });
 });
 
 test("timeframe transition rebuilds once while an unchanged label does not", async () => {
@@ -114,6 +148,91 @@ test("timeframe transition rebuilds once while an unchanged label does not", asy
   assert.equal(controller.membership().timeframe, "1D");
 });
 
+test("returning to committed A cancels an in-flight B request and rebuilds desired A", async () => {
+  let resolveB;
+  const bCapture = new Promise((resolve) => { resolveB = resolve; });
+  let bStarted = false;
+  const requests = [];
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => chain(23767.45),
+    captureAxisScale: async () => {
+      const timeframe = requests.at(-1);
+      if (timeframe === "1D" && !bStarted) {
+        bStarted = true;
+        return bCapture;
+      }
+      return scale();
+    },
+    renderRows: (_rows, membership) => requests.push(membership.timeframe),
+    placeRows: () => {}
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  const b = controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 day");
+  const a = controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  resolveB(scale());
+
+  assert.equal(await b, false);
+  assert.equal(await a, true);
+  assert.equal(controller.membership().timeframe, "1h");
+});
+
+test("expiry change invalidates an initial response and rebuilds the latest desired timeframe", async () => {
+  let resolveOld;
+  const oldExpiry = new Promise((resolve) => { resolveOld = resolve; });
+  const requestedExpiries = [];
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async (expiry) => {
+      requestedExpiries.push(expiry);
+      return expiry === "current_month" ? oldExpiry : chain(23767.45, 20);
+    },
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => {}
+  });
+
+  const initial = controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  const replacement = controller.setExpiry("next_month");
+  resolveOld(chain(23767.45, 99));
+
+  assert.equal(await initial, false);
+  assert.equal(await replacement, true);
+  assert.deepEqual(requestedExpiries, ["current_month", "next_month"]);
+  assert.equal(controller.membership().timeframe, "1h");
+  assert.equal(controller.membership().expiry, "next_month");
+  assert.equal(controller.membership().rows.find((row) => row.strike === 23800).call, 126);
+});
+
+test("failed calibration retries the bounded rebuild schedule and commits only after two matching intervals", async () => {
+  const scheduled = [];
+  let captures = 0;
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => chain(23767.45),
+    captureAxisScale: async () => {
+      captures += 1;
+      if (captures === 1) return { ...scale(), ok: false };
+      if (captures === 2) return scale();
+      return { ...scale(), gridGapPx: 30 };
+    },
+    renderRows: () => {},
+    placeRows: () => {},
+    scheduleRetry: (run, delay) => { scheduled.push({ run, delay }); return scheduled.length; },
+    cancelRetry: () => {}
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), false);
+  assert.deepEqual(scheduled.map((entry) => entry.delay), [0]);
+  await scheduled[0].run();
+  assert.deepEqual(scheduled.map((entry) => entry.delay), [0, 250]);
+  await scheduled[1].run();
+
+  assert.equal(controller.membership().interval, 150);
+  assert.deepEqual(scheduled.map((entry) => entry.delay), [0, 250]);
+});
+
 test("a rebuild generation discards a stale in-flight LTP refresh", async () => {
   let resolveRefresh;
   const refreshChain = new Promise((resolve) => { resolveRefresh = resolve; });
@@ -129,7 +248,7 @@ test("a rebuild generation discards a stale in-flight LTP refresh", async () => 
       if (fetches === 2) return refreshChain;
       return chain(23767.45, 20);
     },
-    captureAxisScale: async () => (++captures === 1 ? scale() : rebuildCapture),
+    captureAxisScale: async () => (++captures <= 2 ? scale() : rebuildCapture),
     renderRows: () => {},
     placeRows: () => {}
   });
@@ -170,7 +289,7 @@ test("unsupported timeframe aborts and invalidates an in-flight rebuild", async 
   const controller = api.createLadderController({
     expiry: "current_month",
     fetchChain: async () => chain(23767.45),
-    captureAxisScale: async () => (++captures === 1 ? scale() : pendingScale),
+    captureAxisScale: async () => (++captures <= 2 ? scale() : pendingScale),
     renderRows: () => {},
     placeRows: () => {}
   });
@@ -186,6 +305,7 @@ test("unsupported timeframe aborts and invalidates an in-flight rebuild", async 
 test("browser lifecycle disconnects observers and binds placement listeners only once", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const listeners = [];
+  const removedListeners = [];
   const observers = [];
   const storageListeners = [];
   const nodes = new Map();
@@ -221,7 +341,12 @@ test("browser lifecycle disconnects observers and binds placement listeners only
       getElementById(id) { return nodes.get(id); },
       querySelector() { return null; }
     },
-    window: { innerWidth: 100, innerHeight: 100, addEventListener(type) { listeners.push(type); } },
+    window: {
+      innerWidth: 100,
+      innerHeight: 100,
+      addEventListener(type) { listeners.push(type); },
+      removeEventListener(type) { removedListeners.push(type); }
+    },
     setInterval() { return 1; },
     clearInterval() {},
     setTimeout() { return 1; },
@@ -234,7 +359,8 @@ test("browser lifecycle disconnects observers and binds placement listeners only
   storageListeners[0]({ enabled: { newValue: false } }, "local");
   storageListeners[0]({ enabled: { newValue: true } }, "local");
 
-  assert.deepEqual(listeners, ["resize", "wheel", "pointerup"]);
+  assert.deepEqual(listeners, ["resize", "wheel", "pointerup", "resize", "wheel", "pointerup"]);
+  assert.deepEqual(removedListeners, ["resize", "wheel", "pointerup"]);
   assert.equal(observers.length, 2);
   assert.equal(observers[0].disconnects, 1);
 });

@@ -8,8 +8,16 @@
   const timeframeApi = root.NiftyTimeframeLadder
     || (typeof module !== "undefined" && module.exports ? require("./timeframe-ladder.js") : null);
 
+  function quote(value) {
+    if (typeof value === "boolean" || value === null || value === undefined) return null;
+    if (typeof value === "string" && value.trim() === "") return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
   function money(value) {
-    return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : "—";
+    const numeric = quote(value);
+    return numeric === null ? "—" : numeric.toFixed(2);
   }
 
   function formatRow(row) {
@@ -46,16 +54,18 @@
   }
 
   function freezeMembership({ timeframe, expiry, interval, spot, chainRows }) {
-    const strikes = timeframeApi.thirteenStrikes(spot, interval);
-    if (strikes.length !== 13) return null;
-    const available = timeframeApi.selectAvailable(chainRows, strikes);
+    const targets = timeframeApi.thirteenStrikes(spot, interval);
+    if (targets.length !== 13) return null;
+    const available = timeframeApi.selectAvailable(chainRows, targets, spot);
     if (available.length !== 13) return null;
     const rows = available.map((row) => Object.freeze({
       strike: Number(row.strike),
-      call: Number.isFinite(Number(row.call)) ? Number(row.call) : null,
-      put: Number.isFinite(Number(row.put)) ? Number(row.put) : null
+      call: quote(row.call),
+      put: quote(row.put)
     }));
-    const atm = strikes[6];
+    const strikes = rows.map((row) => row.strike);
+    const atm = timeframeApi.nearestAvailableStrike(rows, spot);
+    if (!Number.isFinite(atm)) return null;
     return Object.freeze({
       timeframe,
       expiry,
@@ -74,8 +84,8 @@
       if (!live) return row;
       return Object.freeze({
         strike: row.strike,
-        call: Number.isFinite(Number(live.call)) ? Number(live.call) : null,
-        put: Number.isFinite(Number(live.put)) ? Number(live.put) : null
+        call: quote(live.call),
+        put: quote(live.put)
       });
     });
     return Object.freeze({
@@ -99,53 +109,115 @@
     const hideRows = dependencies.hideRows || (() => {});
     const setStatus = dependencies.setStatus || (() => {});
     let expiry = dependencies.expiry || DEFAULTS.expiry;
+    const scheduleRetry = dependencies.scheduleRetry || ((run, delay) => setTimeout(run, delay));
+    const cancelRetry = dependencies.cancelRetry || clearTimeout;
     let current = null;
+    let desiredTimeframe = null;
     let generation = 0;
     let rebuildAbort = null;
     let refreshing = false;
+    let retryTimer = null;
+    let retryIndex = 0;
+    let cachedAxisToY = null;
 
-    async function rebuild(timeframe) {
+    function clearRebuildRetry() {
+      if (retryTimer !== null) cancelRetry(retryTimer);
+      retryTimer = null;
+    }
+
+    function positionedRows(membership, toY) {
+      if (!membership || typeof toY !== "function") return null;
+      const positioned = membership.rows.map((row) => ({
+        ...row,
+        text: formatRow(row),
+        isAtm: row.strike === membership.atm,
+        y: toY(row.strike)
+      }));
+      return positioned.length === 13 && positioned.every((row) => Number.isFinite(row.y)) ? positioned : null;
+    }
+
+    function placeCached(membership = current) {
+      const positioned = positionedRows(membership, cachedAxisToY);
+      if (!positioned) return false;
+      placeRows(positioned, membership);
+      return true;
+    }
+
+    function isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal) {
+      return localGeneration === generation
+        && desiredTimeframe === timeframe
+        && expiry === requestedExpiry
+        && !signal?.aborted;
+    }
+
+    function retryRebuild(localGeneration, timeframe, requestedExpiry) {
+      if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry) || retryTimer !== null) return;
+      const delay = RETRY_DELAYS[retryIndex++];
+      if (delay === undefined) return;
+      retryTimer = scheduleRetry(async () => {
+        retryTimer = null;
+        if (desiredTimeframe === timeframe && expiry === requestedExpiry) await rebuild(timeframe, false);
+      }, delay);
+    }
+
+    function failRebuild(localGeneration, timeframe, requestedExpiry, signal, message) {
+      if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+      current = null;
+      cachedAxisToY = null;
+      hideRows(message || "AXIS CALIBRATION UNAVAILABLE");
+      retryRebuild(localGeneration, timeframe, requestedExpiry);
+      return false;
+    }
+
+    async function rebuild(timeframe, resetRetry = true) {
       if (!timeframe) return false;
+      desiredTimeframe = timeframe;
+      if (resetRetry) {
+        clearRebuildRetry();
+        retryIndex = 0;
+      }
       const localGeneration = ++generation;
+      const requestedExpiry = expiry;
       rebuildAbort?.abort();
       rebuildAbort = typeof AbortController === "undefined" ? null : new AbortController();
       const signal = rebuildAbort?.signal;
       setStatus("CALIBRATING");
       try {
-        const [scale, chain] = await Promise.all([
+        const [firstScale, chain] = await Promise.all([
           captureAxisScale(signal),
-          fetchChain(expiry, signal)
+          fetchChain(requestedExpiry, signal)
         ]);
-        if (localGeneration !== generation || signal?.aborted) return false;
-        const rawInterval = intervalFromAxisScale(scale);
-        const interval = timeframeApi.snapStrikeInterval(rawInterval);
-        if (!scale?.ok || !validPineSanity(scale) || !interval || !Number.isFinite(Number(chain?.spot))) {
-          current = null;
-          hideRows("AXIS CALIBRATION UNAVAILABLE");
-          return false;
+        if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+        const firstInterval = timeframeApi.snapStrikeInterval(intervalFromAxisScale(firstScale));
+        if (!firstScale?.ok || !validPineSanity(firstScale) || !firstInterval || !Number.isFinite(Number(chain?.spot))) {
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "AXIS CALIBRATION UNAVAILABLE");
+        }
+        const secondScale = await captureAxisScale(signal);
+        if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+        const interval = timeframeApi.snapStrikeInterval(intervalFromAxisScale(secondScale));
+        if (!secondScale?.ok || !validPineSanity(secondScale) || !interval || interval !== firstInterval) {
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "AXIS CALIBRATION UNAVAILABLE");
         }
         const membership = freezeMembership({
           timeframe,
-          expiry,
+          expiry: requestedExpiry,
           interval,
           spot: Number(chain.spot),
           chainRows: chain.rows
         });
         if (!membership) {
-          current = null;
-          hideRows("13 EXACT CONTRACTS UNAVAILABLE");
-          return false;
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "13 EXACT CONTRACTS UNAVAILABLE");
         }
         current = membership;
+        cachedAxisToY = axisPriceToY(secondScale.axisPairs);
         renderRows(current.rows, current);
+        if (!placeCached(current)) return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "Exact strike positions are unavailable.");
         setStatus("LIVE");
+        clearRebuildRetry();
+        retryIndex = 0;
         return true;
       } catch (error) {
-        if (localGeneration === generation && !signal?.aborted) {
-          current = null;
-          hideRows(error?.message || "AXIS CALIBRATION UNAVAILABLE");
-        }
-        return false;
+        return failRebuild(localGeneration, timeframe, requestedExpiry, signal, error?.message || "AXIS CALIBRATION UNAVAILABLE");
       }
     }
 
@@ -155,12 +227,15 @@
         generation += 1;
         rebuildAbort?.abort();
         rebuildAbort = null;
+        clearRebuildRetry();
+        desiredTimeframe = null;
         current = null;
+        cachedAxisToY = null;
         hideRows("UNSUPPORTED TIMEFRAME");
         setStatus("UNSUPPORTED TIMEFRAME");
         return false;
       }
-      if (current?.timeframe === timeframe) return false;
+      if (desiredTimeframe === timeframe) return false;
       return rebuild(timeframe);
     }
 
@@ -174,8 +249,7 @@
         if (generation !== snapshotGeneration || current !== snapshot || snapshot.expiry !== expiry) return false;
         current = refreshMembership(snapshot, chain?.rows);
         renderRows(current.rows, current);
-        await place();
-        return true;
+        return placeCached(current);
       } catch {
         setStatus("STALE");
         return false;
@@ -192,15 +266,8 @@
         if (current !== snapshot || !scale?.ok || !validPineSanity(scale)) throw new Error("Axis calibration unavailable.");
         const toY = axisPriceToY(scale.axisPairs);
         if (!toY) throw new Error("Native axis map is unavailable.");
-        const positioned = snapshot.rows.map((row) => ({
-          ...row,
-          text: formatRow(row),
-          isAtm: row.strike === snapshot.atm,
-          y: toY(row.strike)
-        }));
-        if (positioned.length !== 13 || positioned.some((row) => !Number.isFinite(row.y))) throw new Error("Exact strike positions are unavailable.");
-        renderRows(snapshot.rows, snapshot);
-        placeRows(positioned, snapshot);
+        cachedAxisToY = toY;
+        if (!placeCached(snapshot)) throw new Error("Exact strike positions are unavailable.");
         setStatus("LIVE");
         return true;
       } catch (error) {
@@ -212,14 +279,17 @@
     async function setExpiry(nextExpiry) {
       if (!nextExpiry || nextExpiry === expiry) return false;
       expiry = nextExpiry;
-      return current ? rebuild(current.timeframe) : false;
+      return desiredTimeframe ? rebuild(desiredTimeframe) : false;
     }
 
     function invalidate() {
       generation += 1;
       rebuildAbort?.abort();
       rebuildAbort = null;
+      clearRebuildRetry();
+      desiredTimeframe = null;
       current = null;
+      cachedAxisToY = null;
     }
 
     return {
@@ -407,6 +477,12 @@
     runtimeObserver = null;
     controller?.invalidate();
     controller = null;
+    if (placementListenersBound) {
+      window.removeEventListener("resize", requestPlacementRetries);
+      window.removeEventListener("wheel", requestPlacementRetries);
+      window.removeEventListener("pointerup", requestPlacementRetries);
+      placementListenersBound = false;
+    }
     document.getElementById(LABELS_ID)?.remove();
   }
 
