@@ -1,14 +1,74 @@
 import http from "node:http";
+import { spawnSync } from "node:child_process";
+import { userInfo } from "node:os";
 
-const PORT = 8787;
+const PORT = Number(process.env.NIFTY_BRIDGE_PORT || 8787);
 const UPSTOX_CHAIN_URL = "https://api.upstox.com/v2/option/chain";
 const UPSTOX_CONTRACTS_URL = "https://api.upstox.com/v2/option/contract";
 const UPSTOX_CANDLES_URL = "https://api.upstox.com/v3/historical-candle";
 const NIFTY_KEY = "NSE_INDEX|Nifty 50";
 const STRIKE_STEP = 50;
 const EXPIRY_CACHE_MS = 15 * 60 * 1000;
+const KEYCHAIN_SERVICE = process.env.NIFTY_UPSTOX_KEYCHAIN_SERVICE || "NIFTY Options Upstox Analytics Token";
 let expiryCache = null;
 let candleCache = null;
+let keychainToken = null;
+
+function tokenExpiry(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    return Number.isFinite(payload.exp) ? new Date(payload.exp * 1000).toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveToken() {
+  const environment = process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN;
+  if (environment) return { token: environment, source: "environment", expiresAt: tokenExpiry(environment) };
+  if (keychainToken) return { token: keychainToken, source: "macOS Keychain", expiresAt: tokenExpiry(keychainToken) };
+  if (process.platform !== "darwin") return { token: null, source: null, expiresAt: null };
+  const result = spawnSync("/usr/bin/security", [
+    "find-generic-password",
+    "-a", userInfo().username,
+    "-s", KEYCHAIN_SERVICE,
+    "-w"
+  ], { encoding: "utf8", timeout: 3000 });
+  const token = result.status === 0 ? result.stdout.trim() : "";
+  if (!token) return { token: null, source: null, expiresAt: null };
+  keychainToken = token;
+  return { token, source: "macOS Keychain", expiresAt: tokenExpiry(token) };
+}
+
+function upstoxError(body, status) {
+  const message = body.errors?.[0]?.message || body.message || `Upstox returned HTTP ${status}.`;
+  const error = new Error(status === 401
+    ? "Upstox rejected the Analytics Token. Update the saved token, then restart the bridge."
+    : message);
+  error.status = status;
+  error.kind = status === 401 || status === 403 ? "auth" : status === 429 ? "rate_limit" : "upstream";
+  error.upstreamMessage = message;
+  return error;
+}
+
+async function upstoxGet(url) {
+  const token = tokenOrThrow();
+  let upstream;
+  try {
+    upstream = await fetch(url, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` }
+    });
+  } catch (cause) {
+    const error = new Error("Cannot reach Upstox. Check the internet connection.");
+    error.status = 502;
+    error.kind = "network";
+    error.cause = cause;
+    throw error;
+  }
+  const body = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) throw upstoxError(body, upstream.status);
+  return body;
+}
 
 function respond(response, status, payload) {
   response.writeHead(status, {
@@ -37,60 +97,41 @@ function formatChain(chain) {
   };
 }
 
-async function niftyChain(expiry) {
-  const token = process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN;
-  if (!token) {
-    const error = new Error("UPSTOX_ANALYTICS_TOKEN is not set.");
-    error.status = 503;
-    throw error;
-  }
+function tradingViewOptionSymbol(expiry, strike, right) {
+  const compactDate = expiry.replaceAll("-", "").slice(2);
+  return `NSE:NIFTY${compactDate}${right}${strike}`;
+}
 
+async function niftyChain(expiry) {
   const url = new URL(UPSTOX_CHAIN_URL);
   url.searchParams.set("instrument_key", NIFTY_KEY);
   url.searchParams.set("expiry_date", expiry);
-  const upstream = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`
-    }
-  });
-  const body = await upstream.json().catch(() => ({}));
-  if (!upstream.ok) {
-    const error = new Error(body.errors?.[0]?.message || `Upstox returned HTTP ${upstream.status}.`);
-    error.status = upstream.status;
-    throw error;
-  }
+  const body = await upstoxGet(url);
   const result = formatChain(body.data || []);
+  const resolvedExpiry = body.data?.[0]?.expiry || null;
+  const rows = resolvedExpiry
+    ? result.rows.map((row) => ({
+      ...row,
+      callSymbol: tradingViewOptionSymbol(resolvedExpiry, row.strike, "C"),
+      putSymbol: tradingViewOptionSymbol(resolvedExpiry, row.strike, "P")
+    }))
+    : result.rows;
   return {
     source: "Upstox",
     expiryMode: expiry,
-    expiry: body.data?.[0]?.expiry || null,
+    expiry: resolvedExpiry,
     updatedAt: new Date().toISOString(),
-    ...result
+    ...result,
+    rows
   };
 }
 
 async function niftyExpiries() {
   if (expiryCache && Date.now() - expiryCache.updatedAt < EXPIRY_CACHE_MS) return expiryCache.payload;
 
-  const token = process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN;
-  if (!token) {
-    const error = new Error("UPSTOX_ANALYTICS_TOKEN is not set.");
-    error.status = 503;
-    throw error;
-  }
-
   const url = new URL(UPSTOX_CONTRACTS_URL);
   url.searchParams.set("instrument_key", NIFTY_KEY);
-  const upstream = await fetch(url, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${token}` }
-  });
-  const body = await upstream.json().catch(() => ({}));
-  if (!upstream.ok) {
-    const error = new Error(body.errors?.[0]?.message || `Upstox returned HTTP ${upstream.status}.`);
-    error.status = upstream.status;
-    throw error;
-  }
+  const body = await upstoxGet(url);
 
   const today = new Date().toISOString().slice(0, 10);
   const payload = {
@@ -106,10 +147,11 @@ async function niftyExpiries() {
 }
 
 function tokenOrThrow() {
-  const token = process.env.UPSTOX_ANALYTICS_TOKEN || process.env.UPSTOX_ACCESS_TOKEN;
+  const { token } = resolveToken();
   if (!token) {
-    const error = new Error("UPSTOX_ANALYTICS_TOKEN is not set.");
+    const error = new Error("Upstox Analytics Token is not configured. Run bin/nifty-bridge setup once.");
     error.status = 503;
+    error.kind = "token_missing";
     throw error;
   }
   return token;
@@ -127,13 +169,7 @@ async function niftyCandles(days = 120) {
   const toDate = isoDate(0);
   const fromDate = isoDate(days);
   const url = `${UPSTOX_CANDLES_URL}/${encodeURIComponent(NIFTY_KEY)}/days/1/${toDate}/${fromDate}`;
-  const upstream = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
-  const body = await upstream.json().catch(() => ({}));
-  if (!upstream.ok) {
-    const error = new Error(body.errors?.[0]?.message || `Upstox returned HTTP ${upstream.status}.`);
-    error.status = upstream.status;
-    throw error;
-  }
+  const body = await upstoxGet(url);
   const payload = {
     source: "Upstox",
     updatedAt: new Date().toISOString(),
@@ -149,11 +185,39 @@ http.createServer(async (request, response) => {
     respond(response, 404, { error: "Not found" });
     return;
   }
+  if (url.pathname === "/") {
+    const token = resolveToken();
+    respond(response, 200, {
+      service: "NIFTY data bridge",
+      status: "running",
+      token: { configured: Boolean(token.token), source: token.source, expiresAt: token.expiresAt },
+      endpoints: ["/api/health", "/api/nifty-chain", "/api/nifty-expiries", "/api/nifty-candles"]
+    });
+    return;
+  }
+  if (url.pathname === "/api/health") {
+    const token = resolveToken();
+    if (!token.token) {
+      respond(response, 503, { status: "error", kind: "token_missing", error: "Upstox Analytics Token is not configured." });
+      return;
+    }
+    if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) {
+      respond(response, 401, { status: "error", kind: "auth", error: "The saved Upstox Analytics Token has expired.", token: { source: token.source, expiresAt: token.expiresAt } });
+      return;
+    }
+    try {
+      if (url.searchParams.get("live") === "1") await niftyExpiries();
+      respond(response, 200, { status: "ok", bridge: "online", upstox: url.searchParams.get("live") === "1" ? "reachable" : "not_checked", token: { source: token.source, expiresAt: token.expiresAt } });
+    } catch (error) {
+      respond(response, error.status || 502, { status: "error", kind: error.kind || "upstream", error: error.message, token: { source: token.source, expiresAt: token.expiresAt } });
+    }
+    return;
+  }
   if (url.pathname === "/api/nifty-expiries") {
     try {
       respond(response, 200, await niftyExpiries());
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message });
+      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
     }
     return;
   }
@@ -162,7 +226,7 @@ http.createServer(async (request, response) => {
     try {
       respond(response, 200, await niftyCandles(days));
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message });
+      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
     }
     return;
   }
@@ -178,7 +242,7 @@ http.createServer(async (request, response) => {
   try {
     respond(response, 200, await niftyChain(expiry));
   } catch (error) {
-    respond(response, error.status || 502, { error: error.message });
+    respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
   }
 }).listen(PORT, "127.0.0.1", () => {
   console.log(`NIFTY data bridge listening at http://127.0.0.1:${PORT}`);

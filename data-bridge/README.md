@@ -2,12 +2,27 @@
 
 Local bridge between Upstox market data and chart extension. It requests NIFTY's `current_month` option chain, so monthly expiry changes automatically without contract selection or TradingView Options clicks.
 
-It reads `UPSTOX_ANALYTICS_TOKEN` only from current terminal process. Token is never written into this project, extension, or browser. Upstox Analytics Token is read-only and valid for one year.
+It reads `UPSTOX_ANALYTICS_TOKEN` from the current process when present. Normal Mac setup stores the read-only one-year Analytics Token in macOS Keychain and installs a LaunchAgent that keeps the bridge alive. Token is never written into this project or browser.
+
+One-time setup:
+
+```bash
+bin/nifty-bridge setup
+```
+
+Health check:
+
+```bash
+bin/nifty-bridge status
+```
 
 Endpoint:
 
 ```text
+GET http://127.0.0.1:8787/api/health?live=1
 GET http://127.0.0.1:8787/api/nifty-chain?expiry=current_month
 ```
 
-Supported expiry modes: `current_month`, `next_month`, `far_month`.
+The root URL returns a small service-status JSON response. The extension polls the chain endpoint every two seconds while its exact-price chart is open. Each row also includes TradingView's NSE option ticker format, for browser automation that updates Pine `input.symbol` fields.
+
+Supported relative modes: `current_week`, `next_week`, `far_week`, `current_month`, `next_month`, `far_month`. Exact `YYYY-MM-DD` dates returned by `/api/nifty-expiries` are also supported.

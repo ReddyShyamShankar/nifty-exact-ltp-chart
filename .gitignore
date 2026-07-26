@@ -18,3 +18,7 @@ datafeeds/
 
 # Operating system files
 .DS_Store
+
+# Local browser automation captures and isolated worktrees
+.playwright-cli/
+.worktrees/

@@ -1,0 +1,40 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SERVICE="NIFTY Options Upstox Analytics Token"
+ACCOUNT="$(id -un)"
+COMMAND="${1:-status}"
+
+configure_token() {
+  local token
+  printf 'Paste Upstox Analytics Token (hidden): '
+  IFS= read -r -s token
+  printf '\n'
+  if [[ -z "$token" ]]; then
+    echo "Token was empty." >&2
+    return 1
+  fi
+  /usr/bin/security add-generic-password -U -a "$ACCOUNT" -s "$SERVICE" -w "$token" >/dev/null
+  unset token
+  echo "Token saved in macOS Keychain."
+}
+
+case "$COMMAND" in
+  setup)
+    configure_token
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" install
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" status
+    ;;
+  token)
+    configure_token
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" start
+    ;;
+  install|start|status)
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" "$COMMAND"
+    ;;
+  *)
+    echo "Usage: bin/nifty-bridge <setup|token|install|start|status>" >&2
+    exit 2
+    ;;
+esac
