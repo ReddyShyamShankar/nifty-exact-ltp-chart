@@ -2,6 +2,8 @@
   "use strict";
 
   const SUPPORTED_TIMEFRAMES = new Map([
+    ["1 minute", "1m"],
+    ["5 minutes", "5m"],
     ["15 minutes", "15m"],
     ["1 hour", "1h"],
     ["4 hours", "4h"],
@@ -13,6 +15,8 @@
   ]);
 
   const PREFERRED_INTERVALS = new Map([
+    ["1m", 50],
+    ["5m", 50],
     ["15m", 50],
     ["1h", 50],
     ["4h", 100],

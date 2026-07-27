@@ -3,6 +3,8 @@ const assert = require("node:assert/strict");
 const api = require("./timeframe-ladder.js");
 
 test("normalizes supported TradingView labels", () => {
+  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 1 minute"), "1m");
+  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 5 minutes"), "5m");
   assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 15 minutes"), "15m");
   assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 1 hour"), "1h");
   assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 4 hours"), "4h");
@@ -19,6 +21,8 @@ test("returns null for unsupported timeframe labels", () => {
 });
 
 test("uses stable strike spacing for each supported timeframe", () => {
+  assert.equal(api.preferredIntervalForTimeframe("1m"), 50);
+  assert.equal(api.preferredIntervalForTimeframe("5m"), 50);
   assert.equal(api.preferredIntervalForTimeframe("15m"), 50);
   assert.equal(api.preferredIntervalForTimeframe("1h"), 50);
   assert.equal(api.preferredIntervalForTimeframe("4h"), 100);

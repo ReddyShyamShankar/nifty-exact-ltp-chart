@@ -26,6 +26,10 @@
     return `C ${money(row.call)} | P ${money(row.put)} | ${Number(row.strike).toLocaleString("en-IN")}`;
   }
 
+  function isNiftyChartLabel(label) {
+    return /(?:^|\s)NSE(?:_DLY)?:NIFTY(?:\s+50)?(?:,|$)/i.test(String(label || ""));
+  }
+
   function rowLaneLayout(rows, atm, interval) {
     if (!Array.isArray(rows) || rows.length < 1 || rows.length > MAX_LANES) return null;
     const center = Number(atm);
@@ -209,6 +213,7 @@
     let transitionMinimumObservedAt = 0;
     let lastSpot = null;
     let dataStatus = "STALE";
+    let cachedChain = null;
 
     function clearRebuildRetry() {
       if (retryTimer !== null) cancelRetry(retryTimer);
@@ -252,13 +257,13 @@
       }, delay);
     }
 
-    function failRebuild(localGeneration, timeframe, requestedExpiry, signal, message, minimumObservedAt) {
+    function failRebuild(localGeneration, timeframe, requestedExpiry, signal, message, minimumObservedAt, allowRetry = true) {
       if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
       current = null;
       cachedAxisToY = null;
       hideRows(message || "AXIS CALIBRATION UNAVAILABLE");
       const delayFloor = message === "AUTO-FITTING PRICE SCALE" ? 500 : 0;
-      retryRebuild(localGeneration, timeframe, requestedExpiry, minimumObservedAt, delayFloor);
+      if (allowRetry) retryRebuild(localGeneration, timeframe, requestedExpiry, minimumObservedAt, delayFloor);
       return false;
     }
 
@@ -282,10 +287,25 @@
       setStatus("CALIBRATING");
       concealRows("CALIBRATING");
       try {
-        const [firstScale, chain] = await Promise.all([
-          captureAxisScale(signal, { minimumObservedAt, timeframe }),
-          fetchChain(requestedExpiry, signal)
-        ]);
+        let chain = cachedChain;
+        if (!chain) {
+          try {
+            chain = await fetchChain(requestedExpiry, signal);
+          } catch (error) {
+            return failRebuild(
+              localGeneration,
+              timeframe,
+              requestedExpiry,
+              signal,
+              error?.message || "Option chain unavailable.",
+              minimumObservedAt,
+              false
+            );
+          }
+          if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+          cachedChain = chain;
+        }
+        const firstScale = await captureAxisScale(signal, { minimumObservedAt, timeframe });
         if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
         const firstNativeInterval = timeframeApi.maxStrikeInterval(intervalFromAxisScale(firstScale));
         const preferredInterval = timeframeApi.preferredIntervalForTimeframe(timeframe);
@@ -382,6 +402,7 @@
           || localRefreshRevision !== refreshRevision
           || current !== snapshot
           || snapshot.expiry !== expiry) return false;
+        cachedChain = chain;
         const spot = Number(chain?.spot);
         const lowerMidpoint = snapshot.atm - snapshot.atmStep / 2;
         const upperMidpoint = snapshot.atm + snapshot.atmStep / 2;
@@ -488,7 +509,22 @@
     async function setExpiry(nextExpiry) {
       if (!nextExpiry || nextExpiry === expiry) return false;
       expiry = nextExpiry;
-      return desiredTimeframe ? rebuild(desiredTimeframe) : false;
+      generation += 1;
+      refreshRevision += 1;
+      refreshAbort?.abort();
+      refreshAbort = null;
+      refreshing = false;
+      rebuildAbort?.abort();
+      rebuildAbort = null;
+      rebuilding = false;
+      clearRebuildRetry();
+      current = null;
+      cachedChain = null;
+      cachedAxisToY = null;
+      dataStatus = "STALE";
+      hideRows("PRESS REFRESH OPTION NUMBERS");
+      setStatus("MANUAL REFRESH REQUIRED");
+      return false;
     }
 
     function invalidate() {
@@ -510,6 +546,8 @@
     }
 
     return {
+      chain: () => cachedChain,
+      hasCachedChain: () => Boolean(cachedChain),
       invalidate,
       membership: () => current,
       place,
@@ -520,7 +558,7 @@
     };
   }
 
-  const api = { axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, refreshMembership, rowLaneLayout, rowsFitPlot };
+  const api = { axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, rowLaneLayout, rowsFitPlot };
   root.NiftyAxisLadderContent = api;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
@@ -529,13 +567,11 @@
 
   let settings = { ...DEFAULTS };
   let controller = null;
-  let refreshTimer = null;
   let timeframeTimer = null;
   let axisPlacementTimer = null;
   let retryTimers = [];
   let currentLabel = null;
   let runtimeObserver = null;
-  let recoveryTicks = 0;
   let scaleFitAttempts = 0;
   let scaleFitInFlight = false;
   let scaleFitTimeframe = null;
@@ -697,7 +733,8 @@
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
       attempt: scaleFitAttempts,
-      direction
+      direction,
+      timeframe
     }).then(async (result) => {
       if (!settings.enabled || timeframe !== timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || "")) {
         scaleFitInFlight = false;
@@ -789,9 +826,16 @@
     }, delay));
   }
 
-  async function rebuildCurrent(force = false) {
+  async function rebuildCurrent(force = false, allowDataFetch = false) {
     const label = chartCanvas()?.getAttribute("aria-label") || "";
     currentLabel = label;
+    if (!isNiftyChartLabel(label)) {
+      clearRetries();
+      controller.invalidate();
+      document.getElementById(LABELS_ID)?.remove();
+      return false;
+    }
+    if (!controller.hasCachedChain() && !allowDataFetch) return false;
     const timeframe = timeframeApi.timeframeKey(label);
     if (!timeframe) return controller.syncTimeframe(label);
     const didRebuild = force ? await controller.rebuild(timeframe) : await controller.syncTimeframe(label);
@@ -850,21 +894,7 @@
       renderRows,
       setStatus: showStatus
     });
-    rebuildCurrent(false);
-    recoveryTicks = 0;
-    clearInterval(refreshTimer);
-    refreshTimer = setInterval(async () => {
-      if (controller.membership()) {
-        recoveryTicks = 0;
-        await controller.refreshLtp();
-        return;
-      }
-      recoveryTicks += 1;
-      if (recoveryTicks >= 3) {
-        recoveryTicks = 0;
-        await rebuildCurrent(false);
-      }
-    }, 2000);
+    currentLabel = chartCanvas()?.getAttribute("aria-label") || "";
     runtimeObserver = new MutationObserver(handleRuntimeMutations);
     runtimeObserver.observe(document.documentElement, {
       attributes: true,
@@ -875,12 +905,10 @@
   }
 
   function stop() {
-    clearInterval(refreshTimer);
     clearTimeout(timeframeTimer);
     timeframeTimer = null;
     clearTimeout(axisPlacementTimer);
     axisPlacementTimer = null;
-    recoveryTicks = 0;
     scaleFitAttempts = 0;
     scaleFitInFlight = false;
     scaleFitTimeframe = null;
@@ -910,17 +938,27 @@
   });
 
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "RETRY_LABEL_PLACEMENT") return false;
+    if (!["RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS"].includes(message?.type)) return false;
     if (!settings.enabled) {
       sendResponse({ ok: false, error: "Enable ladder first." });
       return false;
     }
-    if (!controller?.membership()) {
-      rebuildCurrent(true).then((ok) => sendResponse(ok
-        ? { ok: true }
-        : { ok: false, error: "Contracts unavailable. Automatic recovery remains active." }))
-        .catch((error) => sendResponse({ ok: false, error: error?.message || "Exact-axis recovery failed." }));
+    const label = chartCanvas()?.getAttribute("aria-label") || "";
+    if (!isNiftyChartLabel(label)) {
+      sendResponse({ ok: false, error: "Open NIFTY underlying chart first." });
+      return false;
+    }
+    if (message.type === "REFRESH_OPTION_NUMBERS") {
+      const refresh = controller?.membership() ? controller.refreshLtp() : rebuildCurrent(true, true);
+      refresh.then((ok) => sendResponse(ok
+        ? { ok: true, chain: controller.chain() }
+        : { ok: false, error: "Option-number refresh failed. Existing numbers were kept." }))
+        .catch((error) => sendResponse({ ok: false, error: error?.message || "Option-number refresh failed." }));
       return true;
+    }
+    if (!controller?.membership()) {
+      sendResponse({ ok: false, error: "Press refresh option numbers first." });
+      return false;
     }
     controller.place().then((ok) => {
       if (!ok) requestPlacementRetries();

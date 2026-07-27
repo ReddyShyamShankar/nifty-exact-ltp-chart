@@ -75,6 +75,26 @@ test("later trusted scale fit uses a gentle bounded drag", async () => {
   assert.deepEqual(calls.at(-1), ["detach", { tabId: 7 }]);
 });
 
+test("1-minute scale fit uses a stronger bounded drag", async () => {
+  const { api } = loadBackground();
+  const calls = [];
+  global.chrome.debugger.attach = async (...args) => calls.push(["attach", ...args]);
+  global.chrome.debugger.sendCommand = async (...args) => calls.push(["command", ...args]);
+  global.chrome.debugger.detach = async (...args) => calls.push(["detach", ...args]);
+
+  assert.deepEqual(await api.fitAxisScale({ tab: { id: 7 } }, {
+    plotRect: { left: 50, top: 40, right: 1000, bottom: 740 },
+    viewportWidth: 1120,
+    viewportHeight: 800,
+    attempt: 2,
+    direction: "out",
+    timeframe: "1m"
+  }), { ok: true });
+  const pressed = calls.find(([, , method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed");
+  const released = calls.find(([, , method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mouseReleased");
+  assert.equal(released[3].y - pressed[3].y, 96);
+});
+
 test("native-axis extractor accepts only plain comma-formatted axis labels", () => {
   const { api } = loadBackground();
   const nodes = [

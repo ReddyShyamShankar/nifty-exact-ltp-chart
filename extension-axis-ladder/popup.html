@@ -9,31 +9,61 @@
   <body>
     <main class="shell">
       <header class="topbar">
-        <div class="brand"><span class="mark" aria-hidden="true"></span><span>NIFTY OPTIONS</span><span class="brand-sub mono">/ chart</span></div>
-        <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show on chart"><i></i></button>
+        <div class="brand"><span class="mark" aria-hidden="true"></span><span>NIFTY OPTIONS</span></div>
+        <button class="header-refresh mono" id="refresh-chain" type="button">
+          <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 1-2.34-5.66L20 7.68" />
+            <path d="M20 3.75v3.93h-3.93" />
+          </svg>
+          <span id="refresh-label">REFRESH</span>
+        </button>
       </header>
 
-      <section class="block intro">
-        <div class="block-head"><span class="kicker">TradingView overlay</span><span class="status-pill" id="status">OFF</span></div>
-        <p id="summary">Enable on a supported NIFTY chart. ATM recenters at the exact midpoint on the 2-second refresh.</p>
-        <div class="auto-contract mono">AUTO · 13 STRIKES · EXACT AXIS</div>
-        <p class="auto-note">Widest complete interval. Zoom and pan move positions only.</p>
-        <button class="retry-button" id="retry-placement" type="button">RETRY PLACEMENT</button>
-        <div class="placement-status" id="placement-status" role="status"></div>
+      <section class="market-card" aria-label="NIFTY contract">
+        <div class="market-row">
+          <div>
+            <span class="kicker">NIFTY 50</span>
+            <div class="spot mono" id="spot">—</div>
+          </div>
+          <span class="status-pill" id="status">OFF</span>
+        </div>
+        <label class="expiry-row">
+          <span class="kicker">EXPIRY</span>
+          <select id="expiry" aria-label="Contract expiry"><option value="current_month">Current monthly</option></select>
+          <span class="hint" id="expiry-hint">Loading…</span>
+        </label>
       </section>
 
-      <section class="block">
-        <div class="block-head"><span class="kicker">Expiry</span><span class="hint" id="expiry-hint">Loading dates…</span></div>
-        <label class="field"><span>CONTRACT EXPIRY <em>exact NIFTY date</em></span><select id="expiry"><option value="current_month">Current monthly</option></select></label>
+      <div class="placement-status mono" id="placement-status" role="status">Ready · manual refresh only</div>
+
+      <section class="ladder-state">
+        <div>
+          <strong id="ladder-title">Option ladder is off</strong>
+          <p id="summary">Enable it under Advanced. Numbers change only when you press refresh.</p>
+        </div>
+        <span class="state-word mono">NIFTY</span>
       </section>
 
-      <section class="block chain-block">
-        <div class="block-head"><span class="kicker">Full option chain</span><span class="hint" id="spot">—</span></div>
+      <button class="disclosure mono" id="open-chain" type="button" aria-expanded="false" aria-controls="chain-panel">
+        <span>OPEN FULL CHAIN</span><span aria-hidden="true">⌄</span>
+      </button>
+      <section class="chain-panel" id="chain-panel" hidden>
         <div class="chain-head mono"><span>CALL</span><span>STRIKE</span><span>PUT</span></div>
-        <div class="chain" id="chain"><div class="empty">Choose an expiry. Full chain loads here.</div></div>
+        <div class="chain" id="chain"><div class="empty">Press refresh to load current option numbers.</div></div>
       </section>
 
-      <footer class="foot mono">UPSTOX LTP · INFORMATION ONLY</footer>
+      <button class="advanced-toggle mono" id="advanced-toggle" type="button" aria-expanded="false" aria-controls="advanced-panel">
+        <span>ADVANCED · PLACEMENT &amp; HEALTH</span><span aria-hidden="true">›</span>
+      </button>
+      <section class="advanced-panel" id="advanced-panel" hidden>
+        <div class="advanced-row">
+          <div><strong>Show ladder on chart</strong><span>13 strikes · exact axis</span></div>
+          <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show on chart"><i></i></button>
+        </div>
+        <button class="retry-button mono" id="retry-placement" type="button">RETRY PLACEMENT</button>
+      </section>
+
+      <footer class="foot mono">UPSTOX LTP · MANUAL REFRESH · INFORMATION ONLY</footer>
     </main>
     <script src="popup.js"></script>
   </body>

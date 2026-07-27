@@ -94,7 +94,8 @@ async function fitAxisScale(sender, message) {
 
   const x = Math.min(viewportWidth - 8, plot.right + 18);
   const startY = Math.max(plot.top + 24, plot.top + (plot.bottom - plot.top) * 0.50);
-  const dragDelta = direction === "in" ? -48 : 48;
+  const dragMagnitude = message?.timeframe === "1m" ? 96 : 48;
+  const dragDelta = direction === "in" ? -dragMagnitude : dragMagnitude;
   const endY = Math.max(plot.top + 24, Math.min(plot.bottom - 24, startY + dragDelta));
   if (![x, startY, endY].every(Number.isFinite) || x <= plot.right || endY === startY) {
     return { ok: false, error: "TradingView price scale is unavailable." };

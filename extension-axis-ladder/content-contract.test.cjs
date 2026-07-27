@@ -47,6 +47,15 @@ test("formats each visible row as Call, Put, then rightmost strike", () => {
   assert.equal(api.formatRow({ strike: 26000, call: 266.6, put: 388.7 }), "C 266.60 | P 388.70 | 26,000");
 });
 
+test("activates only on the NIFTY underlying chart", () => {
+  assert.equal(api.isNiftyChartLabel("Chart for NSE_DLY:NIFTY, 15 minutes"), true);
+  assert.equal(api.isNiftyChartLabel("Chart for NSE:NIFTY, 1 hour"), true);
+  assert.equal(api.isNiftyChartLabel("Chart for NSE:NIFTY 50, 1 day"), true);
+  assert.equal(api.isNiftyChartLabel("Chart for TVC:DXY, 1 hour"), false);
+  assert.equal(api.isNiftyChartLabel("Chart for FX:EURJPY, 15 minutes"), false);
+  assert.equal(api.isNiftyChartLabel("Chart for NSE:NIFTY260730C24000, 1 minute"), false);
+});
+
 test("renders only genuine finite quotes and never coerces missing values to zero", () => {
   for (const invalid of [null, undefined, "", "   ", true, false, Infinity, -Infinity, NaN, "Infinity"]) {
     assert.equal(api.formatRow({ strike: 26000, call: invalid, put: invalid }), "C — | P — | 26,000");
@@ -113,6 +122,38 @@ test("controller membership follows timeframe profile instead of mutable native 
   assert.equal(controller.membership().nativeInterval, 200);
   assert.equal(controller.membership().preferredInterval, 50);
   assert.equal(controller.membership().interval, 50);
+});
+
+test("timeframe changes rebuild from cached chain without another data request", async () => {
+  let fetches = 0;
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => { fetches += 1; return chain(23767.45); },
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => true
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 day"), true);
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 week"), true);
+  assert.equal(fetches, 1);
+});
+
+test("failed initial chain request waits for manual refresh instead of retrying automatically", async () => {
+  const scheduled = [];
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => { throw new Error("Too Many Request Sent"); },
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => true,
+    scheduleRetry: (run, delay) => { scheduled.push({ run, delay }); return scheduled.length; },
+    cancelRetry: () => {}
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), false);
+  assert.deepEqual(scheduled, []);
 });
 
 test("controller uses its own two-capture stability check without requiring observer stableCount", async () => {
@@ -721,27 +762,30 @@ test("in-flight zoom placement survives concurrent LTP refresh and places latest
   assert.equal(placements.at(-1).find((row) => row.strike === 23750).call, 167);
 });
 
-test("same-timeframe expiry rebuild blocks stale placement and quote refresh", async () => {
+test("same-timeframe expiry change blocks stale placement and waits for manual refresh", async () => {
   let resolveNextChain;
   const nextChain = new Promise((resolve) => { resolveNextChain = resolve; });
   const statuses = [];
-  const concealed = [];
+  const hidden = [];
   const controller = api.createLadderController({
     expiry: "current_month",
     fetchChain: async (expiry) => expiry === "current_month" ? chain(23767.45) : nextChain,
     captureAxisScale: async () => scale(),
     renderRows: () => {},
     placeRows: () => true,
-    concealRows: (message) => concealed.push(message),
+    hideRows: (message) => hidden.push(message),
     setStatus: (status) => statuses.push(status)
   });
 
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
-  const rebuilding = controller.setExpiry("next_month");
+  const expiryChanged = controller.setExpiry("next_month");
   assert.equal(await controller.place(), false);
   assert.equal(await controller.refreshLtp(), false);
-  assert.equal(statuses.at(-1), "CALIBRATING");
-  assert.equal(concealed.at(-1), "CALIBRATING");
+  assert.equal(statuses.at(-1), "MANUAL REFRESH REQUIRED");
+  assert.equal(hidden.at(-1), "PRESS REFRESH OPTION NUMBERS");
+  assert.equal(await expiryChanged, false);
+
+  const rebuilding = controller.rebuild("1h");
   resolveNextChain(chain(23767.45, 25));
   assert.equal(await rebuilding, true);
   assert.equal(controller.membership().expiry, "next_month");
@@ -787,7 +831,7 @@ test("timeframe transition rebuilds once while an unchanged label does not", asy
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), false);
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 day"), true);
-  assert.equal(fetches, 2);
+  assert.equal(fetches, 1);
   assert.equal(controller.membership().timeframe, "1D");
 });
 
@@ -1014,7 +1058,7 @@ test("returning to committed A cancels an in-flight B request and rebuilds desir
   assert.equal(controller.membership().timeframe, "1h");
 });
 
-test("expiry change invalidates an initial response and rebuilds the latest desired timeframe", async () => {
+test("expiry change invalidates old data and waits for manual refresh", async () => {
   let resolveOld;
   const oldExpiry = new Promise((resolve) => { resolveOld = resolve; });
   const requestedExpiries = [];
@@ -1034,7 +1078,11 @@ test("expiry change invalidates an initial response and rebuilds the latest desi
   resolveOld(chain(23767.45, 99));
 
   assert.equal(await initial, false);
-  assert.equal(await replacement, true);
+  assert.equal(await replacement, false);
+  assert.deepEqual(requestedExpiries, ["current_month"]);
+  assert.equal(controller.membership(), null);
+
+  assert.equal(await controller.rebuild("1h"), true);
   assert.deepEqual(requestedExpiries, ["current_month", "next_month"]);
   assert.equal(controller.membership().timeframe, "1h");
   assert.equal(controller.membership().expiry, "next_month");
@@ -1097,7 +1145,7 @@ test("a rebuild generation discards a stale in-flight LTP refresh", async () => 
   assert.equal(await refresh, false);
   resolveRebuildCapture(scale());
   await rebuild;
-  assert.equal(controller.membership().rows.find((row) => row.strike === 23750).call, 137);
+  assert.equal(controller.membership().rows.find((row) => row.strike === 23750).call, 117);
 });
 
 test("rebuild aborts a hung LTP request and later quote refreshes continue", async () => {
@@ -1113,7 +1161,7 @@ test("rebuild aborts a hung LTP request and later quote refreshes continue", asy
         refreshSignal = signal;
         return pendingRefresh;
       }
-      return chain(23767.45, fetches >= 4 ? 50 : 0);
+      return chain(23767.45, fetches >= 3 ? 50 : 0);
     },
     captureAxisScale: async () => scale(),
     renderRows: () => {},
@@ -1276,16 +1324,66 @@ test("browser lifecycle disconnects observers and relies only on fresh axis obse
   assert.equal(observers[0].disconnects, 1);
 });
 
+test("enabled NIFTY tab waits for manual refresh before first chain request", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  let chainFetches = 0;
+  const runtimeListeners = [];
+  const canvas = {
+    getAttribute(name) { return name === "aria-label" ? "Chart for NSE_DLY:NIFTY, 1 hour" : null; },
+    getBoundingClientRect() { return { left: 0, top: 0, right: 900, bottom: 700 }; }
+  };
+  const root = {
+    getAttribute() { return null; },
+    append() {},
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  };
+  const sandbox = {
+    NiftyTimeframeLadder: require("./timeframe-ladder.js"),
+    AbortController,
+    MutationObserver: class { observe() {} disconnect() {} },
+    chrome: {
+      runtime: {
+        async sendMessage() { return { ok: false }; },
+        onMessage: { addListener(listener) { runtimeListeners.push(listener); } }
+      },
+      storage: {
+        local: { get(_defaults, callback) { callback({ enabled: true, expiry: "current_month" }); } },
+        onChanged: { addListener() {} }
+      }
+    },
+    document: {
+      documentElement: root,
+      createElement() { return { dataset: {}, style: { setProperty() {} }, classList: { toggle() {} }, append() {}, querySelector() { return null; }, querySelectorAll() { return []; } }; },
+      getElementById() { return null; },
+      querySelector(selector) { return selector.startsWith("canvas[aria-label") ? canvas : null; }
+    },
+    fetch: async () => {
+      chainFetches += 1;
+      return { ok: true, json: async () => chain(23767.45) };
+    },
+    window: { innerWidth: 1000, innerHeight: 800 },
+    setTimeout() { return 1; },
+    clearTimeout() {},
+    console
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(source, sandbox);
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+
+  assert.equal(runtimeListeners.length, 1);
+  assert.equal(chainFetches, 0);
+});
+
 test("new content has no collision spreading or Pine input synchronization path", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   assert.doesNotMatch(source, /spreadAroundAnchor|SYNC_PINE_INPUTS|TRUSTED_REPLACE_FIELD/);
   assert.doesNotMatch(css, /has-leader|leader-down|leader-up|nifty-leader-height/);
-  const refreshLoop = source.match(/refreshTimer = setInterval\(async \(\) => \{([\s\S]*?)\}, 2000\);/)?.[1] || "";
-  assert.match(refreshLoop, /controller\.refreshLtp\(\)/);
-  assert.match(refreshLoop, /recoveryTicks >= 3/);
-  assert.match(refreshLoop, /rebuildCurrent\(false\)/);
-  assert.doesNotMatch(refreshLoop, /controller\.place\(\)/, "quote refresh must not reread native axis");
+  assert.doesNotMatch(source, /refreshTimer = setInterval/);
+  assert.match(source, /REFRESH_OPTION_NUMBERS/);
+  assert.match(source, /chain:\s*controller\.chain\(\)/);
 });
 
 test("every non-axis lane draws a full connector back to the exact right-axis anchor", () => {
@@ -1323,11 +1421,12 @@ test("timeframe detection conceals old rows before delayed recalibration", () =>
   assert.match(check, /else await controller\.place\(\)/, "A→B→A must restore concealed committed rows");
 });
 
-test("manual retry rebuilds missing membership instead of refusing recovery", () => {
+test("placement retry never fetches option numbers when membership is missing", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const listener = source.match(/chrome\.runtime\.onMessage[\s\S]*?return true;\n  \}\);/)?.[0] || "";
   assert.match(listener, /if \(!controller\?\.membership\(\)\)/);
-  assert.match(listener, /rebuildCurrent\(true\)/);
+  assert.match(listener, /Press refresh option numbers first/);
+  assert.doesNotMatch(listener, /if \(!controller\?\.membership\(\)\)[\s\S]*?rebuildCurrent/);
 });
 
 test("axis capture returns timestamp belonging to submitted candidates", () => {
@@ -1353,4 +1452,11 @@ test("new timeframe resets exhausted scale-fit budget before attempt guard", () 
     request.indexOf("scaleFitTimeframe !== timeframe") < request.indexOf("scaleFitAttempts >= 6"),
     "timeframe reset must happen before exhausted-attempt guard"
   );
+});
+
+test("trusted scale fit includes active timeframe for calibrated drag strength", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  const body = source.match(/function requestScaleFit\([\s\S]*?\n  \}/)?.[0] || "";
+  const request = body.match(/chrome\.runtime\.sendMessage\(\{([\s\S]*?)\}\)\.then/)?.[1] || "";
+  assert.match(request, /timeframe/);
 });

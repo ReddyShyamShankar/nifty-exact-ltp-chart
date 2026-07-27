@@ -2,11 +2,8 @@ const API = "http://127.0.0.1:8787";
 const DEFAULTS = { enabled: false, expiry: "current_month" };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
-let refreshTimer = null;
-let chainRequestId = 0;
-let chainAbort = null;
 
-function money(value) { return Number.isFinite(value) ? value.toFixed(2) : "—"; }
+function money(value) { return Number.isFinite(value) ? value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"; }
 function formatDate(value) { return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${value}T00:00:00`)); }
 function setStatus(label, kind = "") { const node = $("#status"); node.textContent = label; node.className = `status-pill ${kind}`; }
 function friendlyError(error) {
@@ -37,40 +34,33 @@ async function loadHealth() {
 async function save(next) { state = { ...state, ...next }; await chrome.storage.local.set(state); renderState(); }
 function renderState() {
   $("#enabled").setAttribute("aria-checked", String(state.enabled));
+  $("#ladder-title").textContent = state.enabled ? "Option ladder is on chart" : "Option ladder is off";
   $("#summary").textContent = state.enabled
-    ? "Automatic exact ladder active. ATM recenters at the exact midpoint on the 2-second refresh."
-    : "Enable on a supported NIFTY chart. ATM recenters at the exact midpoint on the 2-second refresh.";
+    ? "Numbers stay fixed until manual refresh."
+    : "Enable it under Advanced. Numbers change only when you press refresh.";
   setStatus(state.enabled ? "LIVE" : "OFF", state.enabled ? "live" : "");
   $("#expiry").value = state.expiry;
 }
 
-async function loadChain() {
-  const requestId = ++chainRequestId;
-  const requestedExpiry = state.expiry;
-  chainAbort?.abort();
-  chainAbort = new AbortController();
-  const signal = chainAbort.signal;
+function renderChain(data) {
   const chain = $("#chain");
-  chain.innerHTML = '<div class="empty">Loading live LTP…</div>';
-  try {
-    const response = await fetch(`${API}/api/nifty-chain?expiry=${encodeURIComponent(requestedExpiry)}`, { cache: "no-store", signal });
-    const data = await responseData(response);
-    if (requestId !== chainRequestId || requestedExpiry !== state.expiry) return;
-    setStatus(state.enabled ? "LIVE" : "OFF", state.enabled ? "live" : "");
-    $("#spot").textContent = `SPOT ${money(data.spot)}`;
-    const rows = [...data.rows].sort((a, b) => b.strike - a.strike);
-    chain.replaceChildren(...rows.map((row) => {
-      const item = document.createElement("div");
-      item.className = `chain-row${row.strike === data.atm ? " atm" : ""}`;
-      item.innerHTML = `<span>${money(row.call)}</span><span class="strike">${row.strike.toLocaleString("en-IN")}</span><span class="put">${money(row.put)}</span>`;
-      return item;
-    }));
-  } catch (error) {
-    if (signal.aborted || requestId !== chainRequestId) return;
-    setStatus("ERROR", "err");
-    $("#spot").textContent = "BRIDGE OFFLINE";
-    chain.innerHTML = `<div class="empty">${friendlyError(error)}</div>`;
-  }
+  setStatus(state.enabled ? "LIVE" : "OFF", state.enabled ? "live" : "");
+  $("#spot").textContent = money(data.spot);
+  const rows = [...data.rows].sort((a, b) => b.strike - a.strike);
+  chain.replaceChildren(...rows.map((row) => {
+    const item = document.createElement("div");
+    item.className = `chain-row${row.strike === data.atm ? " atm" : ""}`;
+    item.innerHTML = `<span>${money(row.call)}</span><span class="strike">${row.strike.toLocaleString("en-IN")}</span><span class="put">${money(row.put)}</span>`;
+    return item;
+  }));
+}
+
+function toggleDisclosure(buttonSelector, panelSelector) {
+  const button = $(buttonSelector);
+  const panel = $(panelSelector);
+  const expanded = button.getAttribute("aria-expanded") === "true";
+  button.setAttribute("aria-expanded", String(!expanded));
+  panel.hidden = expanded;
 }
 
 async function loadExpiries() {
@@ -108,16 +98,48 @@ async function retryChartPlacement() {
   } finally { button.disabled = false; }
 }
 
+async function refreshOptionNumbers() {
+  const status = $("#placement-status");
+  const button = $("#refresh-chain");
+  const label = $("#refresh-label");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  label.textContent = "REFRESHING…";
+  status.textContent = "Refreshing option numbers…";
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.startsWith("https://www.tradingview.com/")) throw new Error("Open active NIFTY TradingView chart first.");
+    const result = await chrome.tabs.sendMessage(tab.id, { type: "REFRESH_OPTION_NUMBERS" });
+    if (!result?.ok) throw new Error(result?.error || "Option-number refresh failed.");
+    if (!result.chain?.rows) throw new Error("Option-number refresh returned no chain data.");
+    renderChain(result.chain);
+    status.textContent = `Updated manually · ${result.chain.rows.length}/13 labels on chart`;
+  } catch (error) {
+    status.textContent = friendlyError(error);
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    label.textContent = "REFRESH";
+  }
+}
+
 async function init() {
   state = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
   $("#enabled").addEventListener("click", () => save({ enabled: !state.enabled }));
   $("#retry-placement").addEventListener("click", retryChartPlacement);
-  $("#expiry").addEventListener("change", async (event) => { await save({ expiry: event.target.value }); await loadChain(); });
+  $("#refresh-chain").addEventListener("click", refreshOptionNumbers);
+  $("#open-chain").addEventListener("click", () => toggleDisclosure("#open-chain", "#chain-panel"));
+  $("#advanced-toggle").addEventListener("click", () => toggleDisclosure("#advanced-toggle", "#advanced-panel"));
+  $("#expiry").addEventListener("change", async (event) => {
+    await save({ expiry: event.target.value });
+    $("#spot").textContent = "—";
+    $("#chain").innerHTML = '<div class="empty">Press refresh to load selected expiry.</div>';
+    $("#placement-status").textContent = "Expiry changed · press Refresh";
+  });
   renderState();
   if (!(await loadHealth())) return;
   await loadExpiries();
   renderState();
-  await loadChain();
-  refreshTimer = window.setInterval(loadChain, 2000);
 }
+
 init();

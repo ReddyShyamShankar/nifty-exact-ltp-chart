@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NIFTY Axis LTP Ladder",
-  "version": "0.3.8",
+  "version": "0.3.15",
   "description": "Thirteen timeframe-aware NIFTY option LTP rows locked to TradingView price coordinates.",
   "permissions": ["storage", "activeTab", "debugger"],
   "host_permissions": [
@@ -12,8 +12,20 @@
   "background": {
     "service_worker": "background.js"
   },
+  "icons": {
+    "16": "icons/nifty-mark-16.png",
+    "32": "icons/nifty-mark-32.png",
+    "48": "icons/nifty-mark-48.png",
+    "128": "icons/nifty-mark-128.png"
+  },
   "action": {
     "default_title": "NIFTY Options",
+    "default_icon": {
+      "16": "icons/nifty-mark-16.png",
+      "32": "icons/nifty-mark-32.png",
+      "48": "icons/nifty-mark-48.png",
+      "128": "icons/nifty-mark-128.png"
+    },
     "default_popup": "popup.html"
   },
   "commands": {
