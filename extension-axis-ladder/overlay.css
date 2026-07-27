@@ -18,6 +18,16 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: pre;
+  transform: translateY(-50%);
+}
+
+.nifty-axis-ladder__row[data-lane]:not([data-lane="0"])::before {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  width: var(--nifty-connector-width);
+  border-top: 1px solid rgba(66, 71, 82, 0.72);
+  content: "";
 }
 
 .nifty-axis-ladder__row::after {
@@ -31,6 +41,10 @@
   border-left: 7px solid rgba(66, 71, 82, 0.96);
   content: "";
   transform: translateY(-50%);
+}
+
+.nifty-axis-ladder__row[data-lane]:not([data-lane="0"])::after {
+  right: calc(-1 * (var(--nifty-connector-width) + 7px));
 }
 
 .nifty-axis-ladder__row.is-atm {

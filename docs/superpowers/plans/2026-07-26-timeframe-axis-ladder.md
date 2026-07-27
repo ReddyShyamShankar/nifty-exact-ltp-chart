@@ -2,440 +2,496 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build separate Chrome extension showing thirteen live NIFTY `Call | Put | Strike` rows at exact TradingView right-axis coordinates, recalculating contracts only when timeframe changes and updating within two seconds without Pine symbol injection.
+**Goal:** Build separate Chrome extension showing thirteen live NIFTY `Call | Put | Strike` rows at exact TradingView right-axis coordinates. Use widest complete exact interval no greater than native tick interval, recenter ATM at exact midpoint through existing two-second chain refresh, and keep zoom/pan placement-only.
 
-**Architecture:** Preserve extension v0.14.0 unchanged. Scaffold `extension-axis-ladder/` from proven capture and popup foundations. Lightweight Pine indicator supplies calibration anchors only; extension detects current grid interval from chart pixels, fetches one Upstox chain, freezes thirteen contracts per timeframe, and repositions exact-price rows during zoom or pan.
+**Architecture:** Preserve v0.14.0 and existing backup unchanged. Main-world observer records TradingView's native numeric canvas tick draws. Background validates direct normal or inverted linear axis. Content script combines that map with full Upstox chain, selects exact thirteen-contract membership, refreshes quotes every two seconds, and redraws exact positions. No Chrome debugger, accessibility-tree read, screenshot analysis, OCR, Pine calibrator, or nearest-contract substitution.
 
-**Tech Stack:** Chrome Manifest V3, JavaScript, Node.js test runner, Pine Script v6, local Upstox bridge, TradingView screenshot capture.
+**Tech Stack:** Chrome Manifest V3, JavaScript, Node.js test runner, local Upstox bridge, TradingView canvas text observation.
 
-## Global Constraints
+## Global constraints
 
-- Preserve v0.14.0 and current Pine source as restorable backup.
-- Build new extension separately from `extension/`.
-- Show six strikes below ATM, ATM, and six above: thirteen total.
-- Render `C 266.60 | P 388.70 | 26,000`, with strike nearest price scale.
-- Exact price anchoring wins; no collision displacement.
-- Timeframe change replaces contracts; zoom and pan preserve contracts.
-- Support 15m, 1h, 4h, Daily, Weekly, Monthly, 3M, and 6M.
-- No twenty-six-field Pine synchronization.
+- Do not modify, recreate, or delete v0.14.0 backup archive/checksum or old extension.
+- Build only under independent `extension-axis-ladder/`.
+- Show six strikes below ATM, ATM, six above: thirteen total.
+- Render `C 266.60 | P 388.70 | 26,000`, strike nearest price scale.
+- Exact contract at every requested strike. No nearest substitution.
+- Interval is 50-point multiple and never exceeds native TradingView tick interval.
+- Choose widest candidate with complete thirteen-strike exact range.
+- Recenter at exact midpoint through same two-second chain response.
+- Timeframe, expiry, and midpoint crossing may change membership.
+- Zoom, pan, resize, and scale animation change positions only.
+- Support normal and inverted linear scales.
+- Fail closed on nonlinear scale, unsupported timeframe, or unavailable exact range.
+- No `debugger` permission or DevTools Protocol.
+- No accessibility tree, screenshot capture, OCR, or Pine calibration.
 - Healthy-path target: thirteen labels within two seconds after scale settles.
 
 ---
 
-### Task 1: Preserve v0.14.0 and scaffold independent extension
+### Task 1: Guard independent extension and untouched backup
 
 **Files:**
-- Create: `backups/nifty-chain-ltp-overlay-v0.14.0.tar.gz`
-- Create: `backups/nifty-chain-ltp-overlay-v0.14.0.sha256`
-- Create: `extension-axis-ladder/` from `extension/`
+- Verify only: `backups/nifty-chain-ltp-overlay-v0.14.0.tar.gz`
+- Verify only: `backups/nifty-chain-ltp-overlay-v0.14.0.sha256`
 - Modify: `extension-axis-ladder/manifest.json`
 - Test: `extension-axis-ladder/scaffold.test.cjs`
 
 **Interfaces:**
-- Consumes: current extension and Pine source.
-- Produces: independent extension `NIFTY Axis LTP Ladder`, version `0.1.0`.
+- Preserves: existing v0.14.0 backup bytes.
+- Produces: independent `NIFTY Axis LTP Ladder`.
 
-- [ ] **Step 1: Create backup and checksum**
+- [ ] **Step 1: Record backup checksum without writing backup**
 
-```bash
-mkdir -p backups
-tar -czf backups/nifty-chain-ltp-overlay-v0.14.0.tar.gz extension pine/nifty_monthly_strike_ladder.pine
-shasum -a 256 backups/nifty-chain-ltp-overlay-v0.14.0.tar.gz > backups/nifty-chain-ltp-overlay-v0.14.0.sha256
-```
-
-- [ ] **Step 2: Copy extension foundation**
-
-Run: `cp -R extension extension-axis-ladder`
-
-- [ ] **Step 3: Write failing identity test**
-
-```js
-const test = require("node:test");
-const assert = require("node:assert/strict");
-const manifest = require("./manifest.json");
-test("new extension has independent identity", () => {
-  assert.equal(manifest.name, "NIFTY Axis LTP Ladder");
-  assert.equal(manifest.version, "0.1.0");
-});
-```
-
-- [ ] **Step 4: Run failing test**
-
-Run: `node --test extension-axis-ladder/scaffold.test.cjs`  
-Expected: FAIL against copied v0.14.0 manifest.
-
-- [ ] **Step 5: Change manifest name, version, and description**
-
-Keep permissions and script wiring. Set name `NIFTY Axis LTP Ladder`, version `0.1.0`, and description `Thirteen timeframe-aware NIFTY option LTP rows locked to TradingView price coordinates.`
-
-- [ ] **Step 6: Verify and commit**
+Run:
 
 ```bash
 shasum -a 256 -c backups/nifty-chain-ltp-overlay-v0.14.0.sha256
+git diff --exit-code -- backups/
+```
+
+Expected: checksum passes and no backup diff.
+
+- [ ] **Step 2: Write identity and permission contract**
+
+Assert independent name/version and absence of `debugger` permission.
+
+```js
+assert.equal(manifest.name, "NIFTY Axis LTP Ladder");
+assert.equal(manifest.permissions.includes("debugger"), false);
+```
+
+- [ ] **Step 3: Register direct main-world observer**
+
+Load `axis-observer.js` at `document_start` with `"world": "MAIN"`. Load normal content bundle separately in isolated world. Keep only storage, active-tab, local bridge, and TradingView access needed by extension.
+
+- [ ] **Step 4: Verify**
+
+```bash
 node --test extension-axis-ladder/scaffold.test.cjs
-git add backups extension-axis-ladder
-git commit -m "chore: preserve v0.14 and scaffold axis ladder"
+git diff --exit-code -- backups/
 ```
 
 ---
 
-### Task 2: Build pure timeframe ladder selector
+### Task 2: Observe native TradingView ticks directly from canvas
 
 **Files:**
-- Create: `extension-axis-ladder/timeframe-ladder.js`
-- Create: `extension-axis-ladder/timeframe-ladder.test.cjs`
-- Modify: `extension-axis-ladder/manifest.json`
+- Create: `extension-axis-ladder/axis-observer.js`
+- Create: `extension-axis-ladder/axis-observer.test.cjs`
 
 **Interfaces:**
-- Consumes: chart accessibility label, spot, detected interval, chain rows.
-- Produces: `timeframeKey(label)`, `snapStrikeInterval(raw)`, `thirteenStrikes(spot, interval)`, `selectAvailable(rows, strikes)`.
+- Consumes: TradingView canvas `fillText(text, x, y)` calls plus current transform.
+- Produces: fresh `{price, y}` candidates in viewport coordinates.
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write parser tests**
 
-```js
-const test = require("node:test");
-const assert = require("node:assert/strict");
-const api = require("./timeframe-ladder.js");
+Accept plain numeric labels such as `24,000.00`, `23800`, and negative values. Reject OHLC strings, percentages, option row text, empty input, and nonfinite values.
 
-test("normalizes supported TradingView labels", () => {
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 15 minutes"), "15m");
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 1 hour"), "1h");
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 4 hours"), "4h");
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 1 day"), "1D");
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 1 week"), "1W");
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 1 month"), "1M");
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 3 months"), "3M");
-  assert.equal(api.timeframeKey("Chart for NSE_DLY:NIFTY, 6 months"), "6M");
-});
+- [ ] **Step 2: Write coordinate tests**
 
-test("snaps scale intervals to 50-point grid", () => {
-  assert.equal(api.snapStrikeInterval(93), 100);
-  assert.equal(api.snapStrikeInterval(238), 250);
-  assert.equal(api.snapStrikeInterval(487), 500);
-});
+Given canvas backing size, CSS rectangle, current transform, text metrics, and viewport width:
 
-test("builds six below, ATM, and six above", () => {
-  assert.deepEqual(api.thirteenStrikes(23767.45, 100), [23200,23300,23400,23500,23600,23700,23800,23900,24000,24100,24200,24300,24400]);
-});
-```
+- convert text baseline to visual tick center
+- convert device coordinates to viewport coordinates
+- retain candidates only near right edge
+- preserve exact numeric price
 
-- [ ] **Step 2: Verify failure**
+- [ ] **Step 3: Implement main-world observer**
 
-Run: `node --test extension-axis-ladder/timeframe-ladder.test.cjs`  
-Expected: FAIL because module is missing.
+Wrap `CanvasRenderingContext2D.prototype.fillText` once. Always call original draw. Batch candidate publication briefly, deduplicate by price and y, and publish timestamped candidate list through document attribute. Observer failure must never interrupt TradingView rendering.
 
-- [ ] **Step 3: Implement pure selector**
-
-`thirteenStrikes()` rounds spot to nearest selected interval and maps offsets `-6..6`. `snapStrikeInterval()` rounds positive input to nearest 50 with minimum 50. `selectAvailable()` maps exact numeric strikes only and never invents LTP.
-
-- [ ] **Step 4: Load script before content.js**
-
-```json
-"js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "content.js"]
-```
-
-- [ ] **Step 5: Verify and commit**
+- [ ] **Step 4: Verify**
 
 ```bash
-node --test extension-axis-ladder/timeframe-ladder.test.cjs
-git add extension-axis-ladder/timeframe-ladder.js extension-axis-ladder/timeframe-ladder.test.cjs extension-axis-ladder/manifest.json
-git commit -m "feat: add timeframe ladder selector"
+node --check extension-axis-ladder/axis-observer.js
+node --test extension-axis-ladder/axis-observer.test.cjs
 ```
 
 ---
 
-### Task 3: Detect chart grid interval from screenshot pixels
-
-**Files:**
-- Modify: `extension-axis-ladder/overlay-utils.js`
-- Modify: `extension-axis-ladder/overlay-utils.test.cjs`
-
-**Interfaces:**
-- Produces: `findHorizontalGridRows(data,width,height,region)`, `dominantGridGap(rows)`, `priceIntervalFromPixels(gap,lower,upper,lowerPrice,upperPrice)`, `pairAxisPricesWithRows(prices, rows)`.
-
-- [ ] **Step 1: Add failing synthetic tests**
-
-Create white image with neutral horizontal lines at y `20,70,120,170`. Assert rows match, dominant gap equals 50, and a 50-pixel gap across calibration `23000..24000` spanning 100 pixels equals 500 price points. Assert native axis prices `[24000,23500,23000,22500]` pair with ascending rows and produce an absolute linear price-to-pixel map. Add noise, missing-label, and dotted-crosshair cases.
-
-- [ ] **Step 2: Verify failure**
-
-Run: `node --test extension-axis-ladder/overlay-utils.test.cjs`  
-Expected: FAIL because grid functions are absent.
-
-- [ ] **Step 3: Implement detection**
-
-Use neutral-pixel rule:
-
-```js
-const neutral = alpha > 180
-  && Math.max(red, green, blue) - Math.min(red, green, blue) <= 7
-  && red >= 205 && red <= 245;
-```
-
-Sample each plot row every 4 pixels. Candidate ratio: at least `0.55`. Cluster adjacent y rows. `dominantGridGap()` returns rounded median for gaps `20..220` CSS pixels. Price interval uses absolute anchor pixel span divided by known price span. `pairAxisPricesWithRows()` sorts prices descending and rows ascending, rejects mismatched or nonlinear pairs, and returns known numeric reference points from TradingView itself.
-
-- [ ] **Step 4: Verify and commit**
-
-```bash
-node --test extension-axis-ladder/overlay-utils.test.cjs
-git add extension-axis-ladder/overlay-utils.js extension-axis-ladder/overlay-utils.test.cjs
-git commit -m "feat: detect TradingView grid spacing"
-```
-
----
-
-### Task 4: Return axis calibration from background capture
+### Task 3: Validate direct normal or inverted linear axis
 
 **Files:**
 - Modify: `extension-axis-ladder/background.js`
-- Create: `extension-axis-ladder/capture-contract.test.cjs`
+- Modify: `extension-axis-ladder/overlay-utils.js`
+- Modify: `extension-axis-ladder/overlay-utils.test.cjs`
+- Modify: `extension-axis-ladder/capture-contract.test.cjs`
 
 **Interfaces:**
-- Consumes: `CAPTURE_AXIS_SCALE` with viewport, plot rectangle, and tab id.
-- Produces: `{ok, lower, upper, gridRows, gridGapPx, axisPrices}` in CSS pixels and numeric TradingView prices.
+- Consumes: observed `{price, y}` canvas candidates.
+- Produces: `{ok, axisPairs, axisPrices, gridRows, gridGapPx}`.
 
-- [ ] **Step 1: Write failing source-contract test**
+- [ ] **Step 1: Write source-contract tests**
 
-```js
-const source = require("node:fs").readFileSync(require("node:path").join(__dirname,"background.js"),"utf8");
-assert.match(source,/CAPTURE_AXIS_SCALE/);
-assert.match(source,/gridRows/);
-assert.match(source,/gridGapPx/);
-assert.match(source,/axisPrices/);
-```
+Assert:
 
-- [ ] **Step 2: Verify failure**
+- `CAPTURE_AXIS_SCALE` accepts direct candidates
+- no debugger attachment or DevTools Protocol
+- no screenshot capture
+- no accessibility-tree query
+- no Pine-anchor message
 
-Run: `node --test extension-axis-ladder/capture-contract.test.cjs`.
+- [ ] **Step 2: Write linear-fit tests**
 
-- [ ] **Step 3: Extend capture**
+Cover:
 
-Reuse one screenshot for colored-anchor and horizontal-grid detection. Read numeric right-axis labels from TradingView's accessibility tree through the debugger protocol, normalize comma-formatted prices, and return them in visual order. Convert device-pixel y values and gap to CSS pixels. Keep old capture message as compatibility alias inside new extension.
+- normal scale: larger price maps toward smaller y
+- inverted scale: larger price maps toward larger y
+- unrelated numeric chart text rejected as outlier
+- duplicate price/y rejected
+- stale, missing, nonfinite, and nonlinear sets fail
+- minimum three distinct accepted pairs
 
-- [ ] **Step 4: Verify and commit**
+- [ ] **Step 3: Implement candidate validation**
+
+Search candidate pairs for largest inlier set fitting one linear function. Preserve visual y order. Require distinct prices and rows, sufficient span, and bounded raster tolerance. Slope may be positive or negative but cannot be zero.
+
+- [ ] **Step 4: Return native map only**
+
+Background service worker validates already-observed coordinates. It must not attach debugger, capture screenshot, query accessibility tree, or infer coordinates from Upstox spot.
+
+- [ ] **Step 5: Verify**
 
 ```bash
 node --check extension-axis-ladder/background.js
-node --test extension-axis-ladder/capture-contract.test.cjs
-git add extension-axis-ladder/background.js extension-axis-ladder/capture-contract.test.cjs
-git commit -m "feat: capture TradingView axis scale"
+node --test extension-axis-ladder/overlay-utils.test.cjs extension-axis-ladder/capture-contract.test.cjs
 ```
 
 ---
 
-### Task 5: Add lightweight Pine calibrator
+### Task 4: Select widest complete exact thirteen-contract interval
 
 **Files:**
-- Create: `pine/nifty_axis_calibrator.pine`
-- Create: `pine/nifty_axis_calibrator.test.cjs`
+- Modify: `extension-axis-ladder/timeframe-ladder.js`
+- Modify: `extension-axis-ladder/timeframe-ladder.test.cjs`
 
 **Interfaces:**
-- Consumes: NIFTY close and timeframe.
-- Produces: magenta lower anchor and cyan upper anchor; no option symbols.
+- Produces: `timeframeKey(label)`, `floorStrikeInterval(raw)`, `thirteenStrikes(spot, interval)`, `selectExactThirteen(rows, spot, nativeInterval)`.
 
-- [ ] **Step 1: Write failing source test**
+- [ ] **Step 1: Write timeframe tests**
 
-Assert indicator name `NIFTY Axis Calibrator`, colors `255, 0, 254` and `0, 255, 254`, and absence of `input.symbol` and `request.security`.
+Normalize 15m, 1h, 4h, 1D, 1W, 1M, 3M, and 6M labels. Reject unsupported labels.
 
-- [ ] **Step 2: Verify failure**
+- [ ] **Step 2: Write at-or-below interval tests**
 
-Run: `node --test pine/nifty_axis_calibrator.test.cjs`.
-
-- [ ] **Step 3: Implement Pine v6 calibrator**
-
-Center = current close rounded to nearest 50. Span table:
-
-```pine
-span = timeframe.isminutes and timeframe.multiplier <= 15 ? 300.0 :
-       timeframe.isminutes and timeframe.multiplier <= 240 ? 600.0 :
-       timeframe.isdaily ? 800.0 :
-       timeframe.isweekly ? 2000.0 :
-       timeframe.ismonthly and timeframe.multiplier == 1 ? 4000.0 : 7000.0
+```js
+assert.equal(floorStrikeInterval(1), null);
+assert.equal(floorStrikeInterval(49.99), null);
+assert.equal(floorStrikeInterval(50), 50);
+assert.equal(floorStrikeInterval(93), 50);
+assert.equal(floorStrikeInterval(238), 200);
+assert.equal(floorStrikeInterval(487), 450);
 ```
 
-Draw last-bar lines at `center - span` and `center + span`. Extension masks lines after capture.
+Never round above native interval.
 
-- [ ] **Step 4: Verify and commit**
+- [ ] **Step 3: Write complete exact selection tests**
+
+Build exact chain index by numeric strike. Starting from floored ceiling, test intervals downward by 50. For each candidate:
+
+```text
+center = nearest interval-aligned strike to spot
+targets = center + (-6..6) × interval
+```
+
+Return first candidate only if every target exists exactly.
+
+Tests:
+
+- returns thirteen ordered rows
+- widest complete candidate wins
+- selected interval never exceeds native
+- all selected strikes belong to chain
+- one missing strike rejects candidate and tries next smaller interval
+- no complete candidate returns `null`
+- chain edge never clumps rows or substitutes neighbors
+
+- [ ] **Step 4: Remove production nearest-selection path**
+
+Production membership code must call exact selector only. Delete or leave unreachable any legacy nearest helper; tests must assert no production call. No test should describe nearest substitution as supported behavior.
+
+- [ ] **Step 5: Verify**
 
 ```bash
-node --test pine/nifty_axis_calibrator.test.cjs
-git add pine/nifty_axis_calibrator.pine pine/nifty_axis_calibrator.test.cjs
-git commit -m "feat: add Pine axis calibrator"
+node --check extension-axis-ladder/timeframe-ladder.js
+node --test extension-axis-ladder/timeframe-ladder.test.cjs
 ```
 
 ---
 
-### Task 6: Build thirteen-row exact-price state machine
+### Task 5: Build exact membership and linear placement controller
 
 **Files:**
 - Modify: `extension-axis-ladder/content.js`
 - Modify: `extension-axis-ladder/overlay.css`
-- Create: `extension-axis-ladder/content-contract.test.cjs`
+- Modify: `extension-axis-ladder/content-contract.test.cjs`
 
 **Interfaces:**
-- Consumes: chain response, timeframe label, TradingView native axis values, axis capture, expiry/enabled state.
-- Produces: thirteen `.nifty-axis-ladder__row` elements; frozen membership until timeframe changes.
+- Consumes: exact chain response, timeframe label, direct native axis pairs, expiry/enabled state.
+- Produces: thirteen exact rows plus frozen membership and replaceable placement map.
 
-- [ ] **Step 1: Write failing source-contract tests**
+- [ ] **Step 1: Write source-contract tests**
 
-```js
-assert.match(source,/thirteenStrikes/);
-assert.match(source,/CAPTURE_AXIS_SCALE/);
-assert.match(source,/C \$\{money\(row\.call\)\} \| P \$\{money\(row\.put\)\} \|/);
-assert.doesNotMatch(source,/spreadAroundAnchor/);
-assert.doesNotMatch(source,/SYNC_PINE_INPUTS/);
-```
-
-- [ ] **Step 2: Verify failure**
-
-Run: `node --test extension-axis-ladder/content-contract.test.cjs`.
-
-- [ ] **Step 3: Separate membership from placement**
-
-Use:
+Assert:
 
 ```js
-let ladder = { timeframe:null, interval:null, atm:null, strikes:[], rows:[] };
+assert.match(source, /selectExactThirteen/);
+assert.match(source, /CAPTURE_AXIS_SCALE/);
+assert.match(source, /C \$\{money\(row\.call\)\} \| P \$\{money\(row\.put\)\} \|/);
+assert.doesNotMatch(source, /spreadAroundAnchor|SYNC_PINE_INPUTS/);
 ```
 
-`rebuildLadder()` runs only on initial load, timeframe change, or expiry change. It captures scale, pairs TradingView's native numeric axis values with screenshot grid rows, derives snapped interval, builds thirteen strikes, maps chain rows, and freezes membership. Upstox spot selects ATM/contracts only; it must never define screen coordinates. `placeLabels()` runs during resize/zoom/pan and maps frozen strikes through the absolute TradingView axis map without collision spread. Pine anchors are fallback validation only.
+Also reject debugger, screenshot, accessibility-tree, Pine-sanity, and nearest-selection production paths.
 
-- [ ] **Step 4: Render row text and exact position**
+- [ ] **Step 2: Separate membership from placement**
+
+Membership stores:
+
+```js
+{
+  timeframe,
+  expiry,
+  nativeInterval,
+  interval,
+  atm,
+  strikes,
+  rows
+}
+```
+
+Placement stores current validated `price -> y` linear function separately. Changing placement map must not mutate membership.
+
+- [ ] **Step 3: Stabilize native scale**
+
+On initial enable, timeframe change, or expiry change:
+
+1. fetch chain and first native scale in parallel
+2. derive floored native interval
+3. read native scale again after settle
+4. require matching interval observations
+5. run exact selector
+6. commit membership only after all thirteen rows and y positions validate
+
+Bounded retries: `0, 250, 650, 1200` ms. Failure hides rows rather than guessing.
+
+- [ ] **Step 4: Support normal and inverted linear placement**
+
+Build y function from accepted axis pairs:
+
+```text
+y = firstY + (price - firstPrice) × pixelSpan / priceSpan
+```
+
+Accept either slope sign. Reject nonlinear residuals. Render raw y without collision displacement.
+
+- [ ] **Step 5: Render exact row text**
 
 ```js
 node.textContent = `C ${money(row.call)} | P ${money(row.put)} | ${Number(row.strike).toLocaleString("en-IN")}`;
 node.style.top = `${Math.round(rawY - height / 2)}px`;
 ```
 
-ATM remains orange. Strike remains row's rightmost value.
+ATM remains orange. Strike remains rightmost.
 
-- [ ] **Step 5: Detect timeframe changes**
+- [ ] **Step 6: Detect membership triggers**
 
-Observe chart canvas `aria-label`; debounce rebuild by 250 ms. Placement retries at `0,250,650,1200` ms. Zoom and pan call placement only.
+- initial enable: rebuild
+- timeframe change: rebuild after 250 ms debounce
+- expiry change: abort stale requests, rebuild
+- midpoint crossing: exact recenter through refresh path
 
-- [ ] **Step 6: Refresh LTP without replacing contracts**
+- [ ] **Step 7: Keep zoom and pan placement-only**
 
-Every two seconds fetch current expiry chain, update rows matching existing frozen strikes, update text, and place again. Never recalculate interval during refresh.
-
-- [ ] **Step 7: Remove old automation from new extension**
-
-Delete trusted Pine field-selection functions and `SYNC_PINE_INPUTS` handler from new content script. Keep current `extension/content.js` untouched.
+Resize, wheel, pointer-up, and scale animation reread native ticks and replace only price-to-y map. Tests record membership object before and after each event and require identical timeframe, expiry, interval, ATM, strikes, and rows.
 
 - [ ] **Step 8: Remove collision styles**
 
 Delete leader brackets and spreading classes from new CSS. Keep exact right-edge pointer and compact row typography.
 
-- [ ] **Step 9: Verify and commit**
+- [ ] **Step 9: Verify**
 
 ```bash
 node --check extension-axis-ladder/content.js
-node --test extension-axis-ladder/*.test.cjs
-git add extension-axis-ladder/content.js extension-axis-ladder/overlay.css extension-axis-ladder/content-contract.test.cjs
-git commit -m "feat: render thirteen exact axis rows"
+node --test extension-axis-ladder/content-contract.test.cjs
 ```
 
 ---
 
-### Task 7: Replace Sync UI with automatic ladder status
+### Task 6: Recenter ATM at exact midpoint on two-second refresh
+
+**Files:**
+- Modify: `extension-axis-ladder/content.js`
+- Modify: `extension-axis-ladder/content-contract.test.cjs`
+
+**Interfaces:**
+- Consumes: current membership plus same chain response already fetched for LTP.
+- Produces: refreshed quotes or new complete exact membership.
+
+- [ ] **Step 1: Write midpoint boundary tests**
+
+For ATM `23,800` and interval `100`:
+
+- spot `23,750.01` through `23,849.99`: keep ATM `23,800`
+- spot exactly `23,850`: recenter upward to `23,900`
+- spot exactly `23,750`: recenter downward to `23,700`
+
+Include multi-interval jump after delayed refresh.
+
+- [ ] **Step 2: Prove no extra request**
+
+One timer tick performs one chain request. Same response updates LTP and supplies spot/rows for recenter. Assert chain fetch count increases by one and axis capture count does not increase.
+
+- [ ] **Step 3: Re-run exact selector**
+
+At midpoint boundary, use cached native interval ceiling and refreshed exact chain:
+
+- build candidate centered toward crossed side
+- require all thirteen exact strikes
+- commit only complete set
+- update ATM styling
+- place through cached linear map
+
+If new complete set unavailable, keep last complete exact membership, refresh matching LTP, and surface pending/unavailable status. Never substitute.
+
+- [ ] **Step 4: Run every two seconds**
+
+Existing timer remains single source:
+
+```js
+setInterval(() => controller.refreshLtp(), 2000);
+```
+
+No separate recenter poll.
+
+- [ ] **Step 5: Verify**
+
+```bash
+node --test extension-axis-ladder/content-contract.test.cjs
+```
+
+---
+
+### Task 7: Align popup and user documentation
 
 **Files:**
 - Modify: `extension-axis-ladder/popup.html`
 - Modify: `extension-axis-ladder/popup.js`
 - Modify: `extension-axis-ladder/popup.css`
 - Modify: `extension-axis-ladder/README.md`
-- Create: `extension-axis-ladder/popup-contract.test.cjs`
+- Modify: `extension-axis-ladder/popup-contract.test.cjs`
 
 **Interfaces:**
-- Produces: enabled toggle, expiry selector, automatic status, retry placement; no Pine Sync button.
+- Produces: enable toggle, expiry selector, exact automatic status, manual placement retry.
 
-- [ ] **Step 1: Write failing contract test**
+- [ ] **Step 1: Update automatic copy**
 
-Assert popup lacks `SYNC PINE INPUTS`, contains `13 STRIKES`, and popup JS never sends `SYNC_PINE_INPUTS`.
-
-- [ ] **Step 2: Verify failure**
-
-Run: `node --test extension-axis-ladder/popup-contract.test.cjs`.
-
-- [ ] **Step 3: Implement automatic UI**
-
-Keep enabled toggle and expiry selector. Replace Sync area with:
+Display:
 
 ```text
 AUTO · 13 STRIKES · EXACT AXIS
-Timeframe chooses contracts. Zoom preserves them.
+Widest complete interval. Zoom and pan move positions only.
 ```
 
-Keep `RETRY PLACEMENT` for recoverable capture failure. Remove visible-count selector.
+Enabled summary states ATM recenters at exact interval midpoint.
 
-- [ ] **Step 4: Document and verify**
+- [ ] **Step 2: Keep placement retry narrow**
+
+**RETRY PLACEMENT** rereads native ticks and updates positions only. It must not change contracts or request debugger access.
+
+- [ ] **Step 3: Document behavior and limits**
+
+README covers:
+
+- six below + ATM + six above
+- exact contracts only
+- widest complete 50-point interval at or below native interval
+- same two-second refresh for LTP and midpoint recenter
+- zoom/pan positions only
+- normal/inverted linear support
+- nonlinear fail-closed behavior
+- direct canvas tick observation
+- no debugger, screenshot, accessibility tree, Pine calibrator, or old-backup changes
+
+- [ ] **Step 4: Verify**
 
 ```bash
 node --check extension-axis-ladder/popup.js
-node --test extension-axis-ladder/*.test.cjs
-git add extension-axis-ladder/popup.html extension-axis-ladder/popup.js extension-axis-ladder/popup.css extension-axis-ladder/README.md extension-axis-ladder/popup-contract.test.cjs
-git commit -m "feat: add automatic axis ladder controls"
+node --test extension-axis-ladder/popup-contract.test.cjs
 ```
 
 ---
 
-### Task 8: Install and verify live
+### Task 8: Automated and live verification
 
 **Files:**
-- Modify: `memory/PROGRESS.md`
-- Modify: `memory/DECISIONS.md`
-- Modify: `memory/LATEST_SEED.md`
-
-**Interfaces:**
-- Consumes: new extension, calibrator, TradingView account, bridge.
-- Produces: live evidence for all supported timeframes and backup proof.
+- Do not modify backup files.
+- Record evidence only in separately authorized memory/release files.
 
 - [ ] **Step 1: Run automated gate**
 
 ```bash
+node --check extension-axis-ladder/axis-observer.js
 node --check extension-axis-ladder/background.js
 node --check extension-axis-ladder/content.js
 node --check extension-axis-ladder/popup.js
 node --test extension-axis-ladder/*.test.cjs
 npm test --prefix data-bridge
 git diff --check
+git diff --exit-code -- backups/
+shasum -a 256 -c backups/nifty-chain-ltp-overlay-v0.14.0.sha256
 ```
 
 - [ ] **Step 2: Load new extension separately**
 
-Load `extension-axis-ladder/`. Keep old v0.14.0 installed but disabled during comparison. Request user only if Chrome blocks protected extension-management action.
+Load `extension-axis-ladder/`. Keep old v0.14.0 installed but disabled during comparison. Do not alter old extension or backup.
 
-- [ ] **Step 3: Add Pine calibrator separately**
+- [ ] **Step 3: Verify every timeframe**
 
-Add `pine/nifty_axis_calibrator.pine` through TradingView Pine Editor. Keep original indicator saved.
+For `15m, 1h, 4h, D, W, M, 3M, 6M`:
 
-- [ ] **Step 4: Verify every timeframe**
+- record observed native interval
+- confirm selected interval is 50-point multiple at or below native
+- confirm no wider eligible complete candidate exists
+- confirm exactly thirteen rows when complete range exists
+- confirm every strike exists exactly in selected-expiry chain
+- confirm rightmost strike text and exact pointer y
+- confirm under-two-second display after scale settles
 
-For `15m,1h,4h,D,W,M,3M,6M`, confirm thirteen rows, symmetric ATM set, rightmost strike copy, exact pointer y, selected-expiry LTP match, and under-two-second update after scale settles.
+- [ ] **Step 4: Verify normal and inverted scales**
 
-- [ ] **Step 5: Verify zoom/pan invariants**
+Use same timeframe and chain:
 
-On 1h, Weekly, and Monthly, record strike list before zoom and pan. Confirm same list afterward while y coordinates follow exact price mapping.
+- normal linear scale places all rows correctly
+- inverted linear scale reverses y direction and keeps exact contracts
+- logarithmic/nonlinear scale hides rows
 
-- [ ] **Step 6: Verify backup**
+- [ ] **Step 5: Verify midpoint recenter**
+
+With deterministic mocked or live-observed boundary:
+
+- one tick below midpoint keeps ATM
+- exact midpoint moves ATM toward crossed side
+- recenter uses one normal chain refresh
+- no axis capture occurs solely for recenter
+- incomplete next range never substitutes
+
+- [ ] **Step 6: Verify zoom/pan invariant**
+
+On 1h, Weekly, and Monthly, record membership before zoom and pan. Confirm same interval, ATM, thirteen strikes, and contracts afterward while y positions follow new axis map.
+
+- [ ] **Step 7: Verify backup remains untouched**
 
 ```bash
+git diff --exit-code -- backups/
 shasum -a 256 -c backups/nifty-chain-ltp-overlay-v0.14.0.sha256
-tar -tzf backups/nifty-chain-ltp-overlay-v0.14.0.tar.gz | head
-```
-
-- [ ] **Step 7: Update memory and commit**
-
-Append verification result and new architecture decision. Update seed with active new extension path/version and backup path.
-
-```bash
-git add memory/PROGRESS.md memory/DECISIONS.md memory/LATEST_SEED.md
-git commit -m "docs: record axis ladder verification"
 ```
 
 ---
 
 ## Self-review
 
-- Spec coverage: backup, thirteen rows, exact anchoring, timeframe replacement, zoom preservation, direct data path, supported intervals, failure behavior, and live verification all have tasks.
-- Placeholder scan: no TBD, TODO, or undefined implementation step.
-- Interface consistency: `timeframeKey`, `snapStrikeInterval`, `thirteenStrikes`, `selectAvailable`, `findHorizontalGridRows`, `dominantGridGap`, and `priceIntervalFromPixels` keep identical names across producers and consumers.
+- Spec coverage: thirteen rows, exact membership, widest complete at-or-below interval, midpoint recenter, two-second refresh reuse, zoom/pan placement-only, normal/inverted linear scale, direct canvas observation, no debugger, and untouched backup each have implementation and verification steps.
+- Failure rule: missing exact contract, invalid scale, or unavailable ticks fail closed; no nearest substitution.
+- Membership rule: only initial enable, timeframe, expiry, and midpoint crossing may replace contracts.
+- Placement rule: zoom, pan, resize, animation, and manual retry may change y positions only.
+- Interface consistency: direct canvas candidates become validated axis pairs; exact selector receives native interval ceiling and full chain; controller keeps membership separate from placement map.

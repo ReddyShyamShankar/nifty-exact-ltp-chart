@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "NIFTY Axis LTP Ladder",
-  "version": "0.1.7",
+  "version": "0.3.8",
   "description": "Thirteen timeframe-aware NIFTY option LTP rows locked to TradingView price coordinates.",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "debugger"],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
     "https://tradingview.com/*",

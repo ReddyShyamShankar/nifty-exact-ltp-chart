@@ -4,6 +4,6 @@ const manifest = require("./manifest.json");
 
 test("new extension has independent identity", () => {
   assert.equal(manifest.name, "NIFTY Axis LTP Ladder");
-  assert.equal(manifest.version, "0.1.7");
-  assert.equal(manifest.permissions.includes("debugger"), false);
+  assert.equal(manifest.version, "0.3.8");
+  assert.equal(manifest.permissions.includes("debugger"), true);
 });

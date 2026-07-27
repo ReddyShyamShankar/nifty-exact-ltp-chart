@@ -38,8 +38,8 @@ async function save(next) { state = { ...state, ...next }; await chrome.storage.
 function renderState() {
   $("#enabled").setAttribute("aria-checked", String(state.enabled));
   $("#summary").textContent = state.enabled
-    ? "Automatic ladder active on supported NIFTY chart tabs."
-    : "Enable on a supported NIFTY chart. Contracts rebuild only when timeframe or expiry changes.";
+    ? "Automatic exact ladder active. ATM recenters at the exact midpoint on the 2-second refresh."
+    : "Enable on a supported NIFTY chart. ATM recenters at the exact midpoint on the 2-second refresh.";
   setStatus(state.enabled ? "LIVE" : "OFF", state.enabled ? "live" : "");
   $("#expiry").value = state.expiry;
 }
@@ -96,7 +96,7 @@ async function retryChartPlacement() {
   const status = $("#placement-status");
   const button = $("#retry-placement");
   button.disabled = true;
-  status.textContent = "Capturing exact axis…";
+  status.textContent = "Reading native axis ticks…";
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !tab.url?.startsWith("https://www.tradingview.com/")) throw new Error("Open active TradingView chart first.");
