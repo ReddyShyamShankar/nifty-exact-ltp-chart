@@ -21,4 +21,5 @@ datafeeds/
 
 # Local browser automation captures and isolated worktrees
 .playwright-cli/
+.playwright-mcp/
 .worktrees/

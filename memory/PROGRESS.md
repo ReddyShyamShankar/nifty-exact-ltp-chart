@@ -51,3 +51,11 @@ Product deployment remains blocked by Advanced Charts access and verified Upstox
 - ATM remains at its exact strike coordinate; overlapping outer rows spread to a minimum 26-pixel center gap and show bracket connectors back to their exact strike prices.
 - Added placement bursts after timeframe/scale changes so labels resnap during TradingView animation; live Monthly transition was correct within 150 ms.
 - Live browser verification passed on Daily, Weekly, and Monthly; extension tests, bridge tests, syntax checks, and diff checks pass.
+
+## #8 — 2026-07-27T09:38:15+05:30
+
+- Built independent `NIFTY Axis LTP Ladder` extension v0.3.8 in `.worktrees/timeframe-axis-ladder/extension-axis-ladder`; original Pine-sync extension v0.14.0 remains installed but disabled as untouched backup.
+- New ladder renders thirteen exact Call/Put rows: six strikes below ATM, ATM, and six above, locked to TradingView native right-axis price coordinates with timeframe-aware spacing.
+- Fixed timeframe auto-fit retries, invalid-marker cluster rejection, sparse native-axis capture, equal-price marker precedence, latest canvas-paint selection, and repeated layout-read overhead.
+- Full extension suite passes 124/124; syntax checks and `git diff --check` pass.
+- Live browser verification passed on 4-hour and Monthly timeframes, including Monthly-to-4-hour return; inverse-scale and zoom tests preserved strike membership while correctly changing row direction or coordinates.

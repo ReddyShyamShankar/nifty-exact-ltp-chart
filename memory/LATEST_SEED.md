@@ -1,15 +1,18 @@
+# LATEST SEED — Options Indicator
+
 ## STATE
 
-Working V1 uses existing TradingView Pine indicator plus Chrome extension v0.14.0. Persistent bridge starts through macOS LaunchAgent and reads long-lived Upstox token from macOS Keychain. Each sync calculates nearest 100-point ATM from live spot, writes five strikes spanning 400 points, and fills ten exact contracts. Labels show only `C <LTP> | P <LTP>`; Daily keeps exact spacing, while Weekly and Monthly use collision-safe visual separation with bracket connectors back to true strike coordinates. Live browser verification passed on all three timeframes.
+NIFTY Axis LTP Ladder v0.3.8 is loaded in Chrome from `.worktrees/timeframe-axis-ladder/extension-axis-ladder`; original NIFTY Chain LTP Overlay v0.14.0 remains disabled and untouched as backup. New extension displays thirteen exact Call/Put rows at TradingView native right-axis price coordinates and follows timeframe, zoom, and inverse-scale transforms. Live verification passed on 4-hour and Monthly charts, including return from Monthly to 4-hour.
 
 ## NEXT_LINE
 
-Use extension v0.14.0 on Daily, Weekly, and Monthly charts and report visual feedback; reload extension only after future code updates.
+Use Axis Ladder v0.3.8 across live-market timeframes and report visual or loading feedback; keep original v0.14.0 disabled until final product choice.
 
 ## MEMORY_KEY
 
-Working path is Upstox option chain -> live 100-point ATM -> Keychain-backed bridge -> same-window Chrome extension -> five exact strike rows, ten Pine symbols, compact Call/Put-only label text, and timeframe-safe collision placement.
+Current candidate is independent Axis Ladder v0.3.8: Upstox chain -> thirteen exact strikes -> TradingView native axis capture -> same right-axis coordinates through timeframe, zoom, and inverse-scale changes; original Pine-sync v0.14.0 stays as backup.
 
 ## OPEN_QUESTIONS
-- Should extension auto-run when ATM crosses next 100-point boundary, or keep explicit sync button?
+- Should Axis Ladder become primary product after live-market trial, or should original Pine-sync flow remain primary?
+- Should ATM and thirteen-strike membership update automatically at each 100-point crossing?
 - What is final product name and logo?
