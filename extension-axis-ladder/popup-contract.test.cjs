@@ -12,8 +12,8 @@ test("popup presents approved compact Trading Desk Lite workflow", () => {
 
   assert.ok(html.indexOf('id="refresh-chain"') < html.indexOf('class="market-card"'), "manual refresh stays in popup header");
   assert.match(html, /class="header-refresh mono" id="refresh-chain"/);
-  assert.match(html, /<svg class="refresh-icon"[^>]+viewBox="0 0 24 24"/);
-  assert.doesNotMatch(html, /refresh-glyph/);
+  assert.match(html, /class="refresh-glyph"/);
+  assert.doesNotMatch(html, /class="refresh-icon"/);
   assert.match(html, /id="open-chain"[^>]+aria-expanded="false"/);
   assert.match(html, /id="chain-panel" hidden/);
   assert.match(html, /id="advanced-panel" hidden/);
