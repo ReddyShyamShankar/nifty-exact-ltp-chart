@@ -49,3 +49,21 @@ Use Upstox as option and candle data source, after proving the account's live ma
 **Decision:** Preserve five real 100-point contracts on every timeframe, but separate visually overlapping labels around the exact ATM anchor and connect displaced rows back to their true strike coordinates.
 **Why:** TradingView compresses pixels-per-price on Weekly and Monthly charts; changing real strike spacing by timeframe would show different contracts and break semantic accuracy.
 **Status:** ACTIVE
+
+## D10 — 2026-07-27
+
+**Decision:** Evaluate a second, independent Axis Ladder extension while keeping the original Pine-sync extension v0.14.0 disabled and untouched as backup.
+**Why:** User wants direct right-axis anchoring and thirteen rows without risking the already working five-row Pine workflow before choosing which product to keep.
+**Status:** ACTIVE
+
+## D11 — 2026-07-27
+
+**Decision:** Axis Ladder uses thirteen exact option contracts—six below ATM, ATM, and six above—and locks every row to TradingView's native price-coordinate transform.
+**Why:** Rows must stay beside their exact right-axis prices through timeframe changes, zoom, and inverse scale while preserving the same contract membership.
+**Status:** ACTIVE
+
+## D12 — 2026-07-27
+
+**Decision:** Native-axis capture must fail closed and retry bounded auto-fit rather than guess coordinates from invalid or incomplete TradingView marker clusters.
+**Why:** Wrong price anchoring is worse than a temporary loading state; current capture logic now rejects moving markers, accepts sparse valid axes, and selects the latest complete canvas paint burst.
+**Status:** ACTIVE
