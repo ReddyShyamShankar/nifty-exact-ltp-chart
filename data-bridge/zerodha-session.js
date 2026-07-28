@@ -105,10 +105,8 @@ export function createZerodhaSessionStore({
         },
         body: form.toString()
       });
-    } catch (cause) {
-      const error = sessionError("Cannot reach Zerodha for token exchange.", 502, "network");
-      error.cause = cause;
-      throw error;
+    } catch {
+      throw sessionError("Cannot reach Zerodha for token exchange.", 502, "network");
     }
     const body = await response.json().catch(() => ({}));
     if (!response.ok || typeof body.data?.access_token !== "string" || !body.data.access_token) {

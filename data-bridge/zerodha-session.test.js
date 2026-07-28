@@ -99,6 +99,36 @@ test("token exchange failure preserves status and kind without carrying upstream
   });
 });
 
+test("token exchange network failure discards secret-bearing transport cause", async () => {
+  const secrets = memorySecrets({
+    [services.apiKey]: "public-key",
+    [services.apiSecret]: "private-secret"
+  });
+  const store = createZerodhaSessionStore({
+    ...secrets,
+    services,
+    fetchImpl: async () => {
+      throw new Error("request_token=transport-request-secret access_token=transport-access-secret");
+    }
+  });
+
+  await assert.rejects(store.exchangeRequestToken("one-time-request"), (error) => {
+    const ownProperties = Object.getOwnPropertyNames(error);
+    const exposed = [
+      String(error),
+      ...ownProperties.map((property) => `${property}:${String(error[property])}`)
+    ].join("\n");
+
+    assert.equal(error.message, "Cannot reach Zerodha for token exchange.");
+    assert.equal(error.status, 502);
+    assert.equal(error.kind, "network");
+    assert.equal(Object.hasOwn(error, "cause"), false);
+    assert.deepEqual(ownProperties.sort(), ["kind", "message", "stack", "status"]);
+    assert.doesNotMatch(exposed, /transport-request-secret|transport-access-secret|request_token|access_token/);
+    return true;
+  });
+});
+
 test("expired credentials fail closed and unauthorized callback deletes only access token", async () => {
   const secrets = memorySecrets({
     [services.apiKey]: "public-key",
