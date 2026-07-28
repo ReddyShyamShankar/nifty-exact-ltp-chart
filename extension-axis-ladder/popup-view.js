@@ -173,6 +173,9 @@
   function buildView({ ledger: sourceLedger, selectedStrategyId, brokerStatus, chain, now }) {
     const strategy = sourceLedger?.strategies?.find((candidate) => candidate.id === selectedStrategyId) || null;
     const reviewChanges = reviewRows(sourceLedger || { reviewChanges: [] });
+    const tradeReviews = Array.isArray(sourceLedger?.tradeReviews)
+      ? sourceLedger.tradeReviews.map((review) => ({ ...review }))
+      : [];
     const broker = brokerView(brokerStatus, chain?.updatedAt, now);
     const candidateId = typeof chain?.candidateId === "string" ? chain.candidateId : "";
     const base = {
@@ -180,6 +183,7 @@
       candidateId,
       acceptedAt: now,
       brokerUpdatedAt: chain?.updatedAt || null,
+      brokerSessionExpiresAt: brokerStatus?.expiresAt || null,
       strategyId: strategy?.id || "",
       strategyName: strategy?.name || "NO STRATEGY SELECTED",
       expiry: strategy?.expiry || chain?.expiry || "",
@@ -187,6 +191,7 @@
       spot: number(chain?.spot),
       broker,
       reviewChanges,
+      tradeReviews,
       livePnl: rupees(allocatedPnl(sourceLedger || {}, strategy), { signed: true }),
       legs: legsFor(sourceLedger || { brokerPositions: [] }, strategy),
       timeline: timelineFor(strategy)
@@ -201,6 +206,19 @@
         maxLoss: "—",
         whyMoved: [],
         warning: "POSITION CHANGES MUST BE ALLOCATED AND EXPLICITLY ACCEPTED. RISK MAP WITHHELD.",
+        maps: null
+      };
+    }
+    if (tradeReviews.length) {
+      return {
+        ...base,
+        ...emptyRisk(),
+        canPublish: false,
+        priority: { kind: "review", label: "REVIEW TRADE OWNERSHIP" },
+        maxProfit: "—",
+        maxLoss: "—",
+        whyMoved: [],
+        warning: "CURRENT-DAY TRADES REQUIRE EXPLICIT STRATEGY OWNERSHIP REVIEW. RISK MAP WITHHELD.",
         maps: null
       };
     }

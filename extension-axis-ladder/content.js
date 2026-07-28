@@ -7,7 +7,9 @@
     labelCount: "5",
     panelOpen: false,
     selectedStrategyId: "",
-    sellerSafetyView: null
+    sellerSafetyView: null,
+    sellerSafetyChartView: null,
+    sellerSafetyChain: null
   };
   const RETRY_DELAYS = [0, 250, 650, 1200];
   const API = "http://127.0.0.1:8787";
@@ -15,6 +17,7 @@
   const MAX_LANES = 13;
   const MINIMUM_ROW_GAP = 22;
   const RISK_LABEL_GAP_PX = 12;
+  const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
   const timeframeApi = root.NiftyTimeframeLadder
     || (typeof module !== "undefined" && module.exports ? require("./timeframe-ladder.js") : null);
   const riskOverlayApi = root.NiftyRiskOverlay
@@ -25,6 +28,10 @@
     if (typeof value === "string" && value.trim() === "") return null;
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  function riskBandClassName(band) {
+    return `nifty-seller-risk__band is-${band.layer} is-${band.kind}`;
   }
 
   function money(value) {
@@ -220,6 +227,9 @@
     let expiry = dependencies.expiry || DEFAULTS.expiry;
     const scheduleRetry = dependencies.scheduleRetry || ((run, delay) => setTimeout(run, delay));
     const cancelRetry = dependencies.cancelRetry || clearTimeout;
+    const now = dependencies.now || (() => Date.now());
+    const scheduleRiskDeadline = dependencies.scheduleRiskDeadline || ((run, delay) => setTimeout(run, delay));
+    const cancelRiskDeadline = dependencies.cancelRiskDeadline || clearTimeout;
     let current = null;
     let desiredTimeframe = null;
     let generation = 0;
@@ -229,6 +239,7 @@
     let refreshRevision = 0;
     let rebuilding = false;
     let retryTimer = null;
+    let riskDeadlineTimer = null;
     let retryIndex = 0;
     let cachedAxisToY = null;
     let cachedRiskLayout = null;
@@ -242,9 +253,66 @@
     let cachedChain = null;
     let riskView = dependencies.riskView || null;
 
+    function setChainSnapshot(snapshot) {
+      if (!snapshot
+        || snapshot.version !== 1
+        || snapshot.expiry !== expiry
+        || typeof snapshot.updatedAt !== "string"
+        || !Number.isFinite(Date.parse(snapshot.updatedAt))
+        || !Number.isFinite(Number(snapshot.spot))
+        || !Array.isArray(snapshot.rows)
+        || snapshot.rows.length < 13) return false;
+      cachedChain = {
+        version: 1,
+        updatedAt: snapshot.updatedAt,
+        expiry: snapshot.expiry,
+        spot: Number(snapshot.spot),
+        rows: snapshot.rows.map((row) => ({ ...row }))
+      };
+      return true;
+    }
+
+    if (dependencies.chainSnapshot) setChainSnapshot(dependencies.chainSnapshot);
+
     function clearRebuildRetry() {
       if (retryTimer !== null) cancelRetry(retryTimer);
       retryTimer = null;
+    }
+
+    function clearRiskDeadline() {
+      if (riskDeadlineTimer !== null) cancelRiskDeadline(riskDeadlineTimer);
+      riskDeadlineTimer = null;
+    }
+
+    function riskDeadline(view) {
+      const brokerUpdatedAt = Date.parse(view?.brokerUpdatedAt || "");
+      const sessionExpiresAt = Date.parse(view?.brokerSessionExpiresAt || "");
+      const deadlines = [];
+      if (Number.isFinite(brokerUpdatedAt)) deadlines.push(brokerUpdatedAt + SELLER_SAFETY_STALE_MS);
+      if (Number.isFinite(sessionExpiresAt)) deadlines.push(sessionExpiresAt);
+      return deadlines.length ? Math.min(...deadlines) : null;
+    }
+
+    function riskIsPublishable(view, at = now()) {
+      if (!view || view.canPublish === false) return false;
+      const deadline = riskDeadline(view);
+      return deadline === null || Number(at) < deadline;
+    }
+
+    function armRiskDeadline() {
+      clearRiskDeadline();
+      if (!riskView) return;
+      const view = riskView;
+      const deadline = riskDeadline(view);
+      if (!riskIsPublishable(view)) {
+        hideRisk();
+        return;
+      }
+      if (deadline === null) return;
+      riskDeadlineTimer = scheduleRiskDeadline(() => {
+        riskDeadlineTimer = null;
+        if (riskView === view && !riskIsPublishable(view)) hideRisk();
+      }, Math.max(0, deadline - Number(now())));
     }
 
     function positionedRows(membership, toY) {
@@ -273,7 +341,7 @@
         ? rowPlacement.riskLayout || null
         : null;
       if (cachedRiskLayout) cachedRiskGeneration = generation;
-      if (riskView) {
+      if (riskIsPublishable(riskView)) {
         try {
           placeRisk(riskView, cachedAxisToY, membership, cachedRiskLayout);
         } catch {
@@ -287,11 +355,13 @@
 
     function setRiskView(nextView) {
       riskView = nextView || null;
+      armRiskDeadline();
       if (!riskView) {
         hideRisk();
         return true;
       }
-      if (rebuilding
+      if (!riskIsPublishable(riskView)
+        || rebuilding
         || !current
         || current.expiry !== expiry
         || current.timeframe !== desiredTimeframe
@@ -601,6 +671,7 @@
       rebuildAbort = null;
       rebuilding = false;
       clearRebuildRetry();
+      clearRiskDeadline();
       current = null;
       cachedChain = null;
       cachedAxisToY = null;
@@ -622,6 +693,7 @@
       rebuildAbort = null;
       rebuilding = false;
       clearRebuildRetry();
+      clearRiskDeadline();
       desiredTimeframe = null;
       current = null;
       cachedAxisToY = null;
@@ -632,6 +704,8 @@
       membershipRevision += 1;
     }
 
+    armRiskDeadline();
+
     return {
       chain: () => cachedChain,
       hasCachedChain: () => Boolean(cachedChain),
@@ -640,6 +714,7 @@
       place,
       rebuild,
       refreshLtp,
+      setChainSnapshot,
       setExpiry,
       setRiskView,
       syncTimeframe
@@ -657,11 +732,18 @@
       targetSettings.sellerSafetyView = changes.sellerSafetyView.newValue || null;
       changed = true;
     }
-    if (changed && targetSettings.enabled) activeController?.setRiskView(targetSettings.sellerSafetyView);
+    if (changes.sellerSafetyChartView) {
+      targetSettings.sellerSafetyChartView = changes.sellerSafetyChartView.newValue || null;
+      changed = true;
+    }
+    if (changed && targetSettings.enabled) {
+      activeController?.setRiskView(targetSettings.sellerSafetyChartView ||
+        (changes.sellerSafetyChartView ? null : targetSettings.sellerSafetyView));
+    }
     return changed;
   }
 
-  const api = { applyRiskStorageChanges, axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, riskLabelLayout, rowLaneLayout, rowsFitPlot };
+  const api = { applyRiskStorageChanges, axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, riskBandClassName, riskLabelLayout, rowLaneLayout, rowsFitPlot };
   root.NiftyAxisLadderContent = api;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
@@ -770,7 +852,7 @@
     node.dataset.status = layers.status;
     layers.bands.forEach((band) => {
       const element = document.createElement("div");
-      element.className = `nifty-seller-risk__band is-${band.layer} is-${band.kind}`;
+      element.className = riskBandClassName(band);
       element.dataset.riskLayer = band.layer;
       element.style.left = `${band.left}px`;
       element.style.top = `${band.top}px`;
@@ -1059,7 +1141,8 @@
       placeRows,
       placeRisk,
       renderRows,
-      riskView: settings.sellerSafetyView,
+      riskView: settings.sellerSafetyChartView || settings.sellerSafetyView,
+      chainSnapshot: settings.sellerSafetyChain,
       setStatus: showStatus
     });
     currentLabel = chartCanvas()?.getAttribute("aria-label") || "";
@@ -1070,6 +1153,7 @@
       childList: true,
       subtree: true
     });
+    if (controller.hasCachedChain()) void rebuildCurrent(false);
   }
 
   function stop() {
@@ -1102,6 +1186,13 @@
     if (changes.expiry) {
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
       if (settings.enabled) controller?.setExpiry(settings.expiry).then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
+    }
+    if (changes.sellerSafetyChain) {
+      settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
+      if (settings.enabled && controller?.setChainSnapshot(settings.sellerSafetyChain)) {
+        controller.rebuild(timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || ""))
+          .then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
+      }
     }
     applyRiskStorageChanges(changes, area, settings, controller);
   });

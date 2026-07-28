@@ -38,8 +38,12 @@
   background: rgba(44, 50, 56, 0.045);
 }
 
-.nifty-seller-risk__band.is-whole-trade {
-  background: rgba(113, 113, 122, 0.025);
+.nifty-seller-risk__band.is-whole-trade.is-profit {
+  background: repeating-linear-gradient(135deg, rgba(52, 211, 153, 0.035) 0 4px, transparent 4px 9px);
+}
+
+.nifty-seller-risk__band.is-whole-trade.is-loss {
+  background: repeating-linear-gradient(-135deg, rgba(244, 63, 94, 0.04) 0 4px, transparent 4px 9px);
 }
 
 .nifty-seller-risk__line {

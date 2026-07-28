@@ -16,6 +16,7 @@ Version 0.4.0 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain
 - Uses only contracts at the requested strikes. Missing strikes never receive nearest-contract substitutions.
 - Fetches no positions, current-day trades, or option-chain data until **REFRESH ALL** is pressed.
 - Header **REFRESH ALL** stays immediately accessible when popup opens. One manual press makes at most one Zerodha positions call, one Zerodha current-day trades call, and one Upstox chain call.
+- The validated chain rows from that coordinated response are saved locally and sent to the chart ladder; the chart does not make a second chain request.
 - Popup contains no full option-chain table. Option numbers remain on the chart ladder.
 - Manual refresh updates LTP values and recenters ATM when spot crosses the exact midpoint.
 - Popup open, timeframe changes, zoom, and pan reuse accepted local evidence and request no positions, trades, or chain data.
@@ -27,19 +28,20 @@ Version 0.4.0 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain
 
 - Current-risk breakevens use the currently reviewed open positions and appear as solid mint lines.
 - Whole-trade breakevens include explicitly assigned imported fill history and appear as dashed graphite lines.
-- Profit and loss bands shade the payoff intervals between breakevens. Bands are factual payoff regions, not recommendations.
+- Profit and loss bands shade the payoff intervals between breakevens. Current-risk bands use solid shading; whole-trade profit and loss use visibly different directional hatch treatments. Bands are factual payoff regions, not recommendations.
 - **EXCLUDING CHARGES** means broker charges were unavailable and were not deducted.
 - **HISTORY GAP** or **HISTORY INCOMPLETE** means imported fill evidence does not fully cover the strategy. The affected whole-trade map is withheld instead of estimated.
-- A stale broker timestamp preserves the last accepted evidence in the popup but hides chart risk layers until a successful reviewed refresh replaces it.
-- New or changed positions preserve the last accepted evidence and enter **REVIEW POSITION CHANGES**. They do not alter published risk until manually allocated and explicitly accepted.
+- A stale broker timestamp preserves the last accepted evidence in the popup but hides chart risk layers until a successful reviewed refresh replaces it. The chart checks the 15-minute evidence deadline and Zerodha session expiry locally before every placement, automatically hiding at the earlier deadline without a network call.
+- New or changed positions preserve the last accepted evidence for operator inspection and enter **REVIEW POSITION CHANGES**. A separate withheld chart state hides the old map until the new positions are manually allocated and explicitly accepted.
+- Current-day Zerodha trades are stored as immutable ledger evidence and deduplicated against the one-time CSV history. They remain unassigned under **REVIEW TRADE OWNERSHIP** until the operator explicitly associates them with a strategy; ownership is never inferred from a matching contract.
 
 ## Workflow
 
 1. Keep local NIFTY bridge running at `http://127.0.0.1:8787`.
 2. Open a logged-in TradingView NIFTY chart and select the exact expiry.
 3. Daily, press **CONNECT ZERODHA** and finish the Zerodha login, then press **REFRESH ALL** once.
-4. On first use, perform the one-time Zerodha tradebook CSV import for historical fills.
-5. Manually create or select the same-expiry strategy, allocate signed whole lots, review every changed position, and press **ACCEPT REVIEWED SNAPSHOT**.
+4. On first use, perform the one-time Zerodha tradebook CSV import for historical fills. Re-imported current-day fills deduplicate while preserving their original bridge trade IDs.
+5. Manually create or select the same-expiry strategy, allocate signed whole lots, review every changed position and trade ownership, and press **ACCEPT REVIEWED SNAPSHOT**.
 6. If needed, expand **ADVANCED · PLACEMENT & HEALTH** and enable the chart ladder.
 
 The popup opens with **REFRESH ALL** beside the extension title. Expiry changes wait for the next manual refresh. Timeframe changes rebuild placement from cached data. Zoom and pan only remap the same strikes and accepted risk evidence to new screen positions.

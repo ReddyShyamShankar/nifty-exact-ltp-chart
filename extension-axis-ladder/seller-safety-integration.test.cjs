@@ -17,7 +17,6 @@ const manifest = require("./manifest.json");
 const EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
 const EXPIRY = "2026-08-25";
 const ACCEPTED_AT = "2026-08-01T03:50:00.000Z";
-const CANDIDATE_ID = "seller-fixture-accepted";
 const PLOT = { left: 100, top: 20, right: 900, bottom: 700 };
 const RISK_LAYOUT = { labelRight: 643 };
 
@@ -127,69 +126,37 @@ function csvFixture() {
   return [
     "trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry",
     "fill-call,order-call,NFO,NIFTY26AUG24100CE,SELL,130,358.8,2026-08-01T09:15:00+05:30,2026-08-25",
-    "fill-put,order-put,NFO,NIFTY26AUG24100PE,SELL,65,315.45,2026-08-01T09:16:00+05:30,2026-08-25",
-    "fill-low-put,order-low-put,NFO,NIFTY26AUG22500PE,SELL,65,77.8,2026-08-01T09:17:00+05:30,2026-08-25"
+    "fill-put,order-put,NFO,NIFTY26AUG24100PE,SELL,65,315.45,2026-08-01T09:15:00+05:30,2026-08-25",
+    "fill-low-put,order-low-put,NFO,NIFTY26AUG22500PE,SELL,65,77.8,2026-08-01T09:15:00+05:30,2026-08-25"
   ].join("\n");
 }
 
-function acceptedArtifacts(refreshPayload) {
-  let ledger = ledgerApi.emptyLedger();
-  ledger = ledgerApi.createStrategy(ledger, {
-    id: "aug-seller",
-    name: "August seller",
-    underlying: "NIFTY",
-    expiry: EXPIRY
-  });
-  ledger = ledgerApi.reconcilePositions(ledger, refreshPayload.positions);
-  for (const position of refreshPayload.positions) {
-    ledger = ledgerApi.allocateLots(ledger, {
-      strategyId: "aug-seller",
-      contractId: position.contractId,
-      signedLots: position.signedQuantity / position.lotSize
-    });
-  }
-
-  const currentInput = ledgerApi.strategyRiskInput(ledger, "aug-seller");
-  const currentRisk = risk.currentRiskMap({ legs: currentInput.openLegs });
-  const imported = tradebook.parseTradebookCsv(csvFixture());
-  assert.deepEqual(imported.errors, []);
-  ledger = ledgerApi.assignFills(ledger, {
-    strategyId: "aug-seller",
-    trades: imported.trades,
-    fillIds: imported.trades.map((fill) => fill.id),
-    importBatch: {
-      sourceKind: imported.sourceKind,
-      fingerprint: imported.batchFingerprint,
-      coverage: { from: "2026-08-01", to: "2026-08-01" },
-      acceptedAt: ACCEPTED_AT,
-      confirmedAt: ACCEPTED_AT
-    }
-  });
-  ledger = ledgerApi.acceptSnapshot(ledger, {
-    strategyId: "aug-seller",
-    snapshot: { at: ACCEPTED_AT, candidateId: CANDIDATE_ID }
-  });
-  const wholeInput = ledgerApi.strategyRiskInput(ledger, "aug-seller");
-  const wholeTradeRisk = risk.wholeTradeRiskMap({
-    openLegs: wholeInput.openLegs,
-    fills: wholeInput.fills,
-    history: wholeInput.history
-  });
-  const chain = {
-    candidateId: CANDIDATE_ID,
-    expiry: EXPIRY,
-    daysToExpiry: 24,
-    spot: refreshPayload.chain.spot,
-    updatedAt: refreshPayload.updatedAt
+function fixedDate(iso) {
+  const timestamp = Date.parse(iso);
+  return class FixedDate extends Date {
+    constructor(value) { super(typeof value === "undefined" ? timestamp : value); }
+    static now() { return timestamp; }
   };
-  const view = popupView.buildView({
-    ledger,
-    selectedStrategyId: "aug-seller",
-    brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
-    chain,
-    now: ACCEPTED_AT
+}
+
+async function acceptThroughPopup(refreshPayload) {
+  const runtime = popupRuntime({
+    refreshResponse: { status: 200, payload: refreshPayload },
+    dateImpl: fixedDate(ACCEPTED_AT)
   });
-  return { ledger, currentInput, currentRisk, wholeInput, wholeTradeRisk, chain, view };
+  await settle();
+  await runtime.listeners.get("refresh-all:click")();
+  runtime.nodeFor("strategy-name").value = "August seller";
+  await runtime.listeners.get("create-strategy:click")();
+  for (const input of runtime.nodes.get("allocation-list").querySelectorAll("[data-allocation-contract]")) {
+    const position = refreshPayload.positions.find((candidate) => candidate.contractId === input.dataset.allocationContract);
+    input.value = String(position.signedQuantity / position.lotSize);
+  }
+  await runtime.listeners.get("allocate-lots:click")();
+  runtime.nodes.get("tradebook-csv").files = [{ name: "tradebook.csv", text: async () => csvFixture() }];
+  await runtime.listeners.get("tradebook-csv:change")({ target: runtime.nodes.get("tradebook-csv") });
+  await runtime.listeners.get("accept-snapshot:click")();
+  return runtime;
 }
 
 test("bridge payload flows through reviewed ledger, both risk maps, storage, and exact-axis layers", async (t) => {
@@ -215,23 +182,53 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
   assert.deepEqual(forbiddenCredentialKeys(payload), []);
   assert.doesNotMatch(JSON.stringify(payload), /bridge-only-daily-token|api.?secret/i);
 
-  const artifacts = acceptedArtifacts(payload);
-  assert.equal(artifacts.ledger.reviewChanges.length, 0);
-  assert.deepEqual(artifacts.ledger.strategies[0].allocations.map((allocation) => allocation.signedLots), [-2, -1, -1]);
-  assert.deepEqual(artifacts.currentRisk.breakevens, [22989.15, 24655.425]);
-  assert.deepEqual(artifacts.wholeTradeRisk.breakevens, [22989.15, 24655.425]);
-  assert.equal(artifacts.wholeInput.status, "OK");
-  assert.equal(artifacts.view.canPublish, true);
+  const runtime = await acceptThroughPopup(payload);
+  assert.equal(runtime.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  assert.equal(runtime.requests.filter((url) => url.includes("/api/nifty-chain")).length, 0);
+  assert.equal(runtime.storage.sellerSafetyChain.rows.length, 13);
+  assert.deepEqual(runtime.storage.sellerSafetyLedger.importedTrades.map((trade) => trade.id), [
+    "today-call", "today-put", "today-low-put"
+  ]);
+  assert.deepEqual(runtime.storage.sellerSafetyLedger.strategies[0].fillIds, [
+    "today-call", "today-put", "today-low-put"
+  ]);
+  assert.deepEqual(runtime.storage.sellerSafetyLedger.tradeReviews, []);
+  assert.equal(runtime.storage.sellerSafetyLedger.reviewChanges.length, 0);
+  assert.deepEqual(runtime.storage.sellerSafetyLedger.strategies[0].allocations.map((allocation) => allocation.signedLots), [-2, -1, -1]);
+  assert.equal(runtime.storage.sellerSafetyView.canPublish, true);
+  assert.deepEqual(runtime.storage.sellerSafetyChartView, runtime.storage.sellerSafetyView);
 
-  const storedView = JSON.parse(JSON.stringify(artifacts.view));
+  const storedView = JSON.parse(JSON.stringify(runtime.storage.sellerSafetyView));
   assert.deepEqual(storedView.maps.current.breakevens, [22989.15, 24655.425]);
   assert.deepEqual(storedView.maps.wholeTrade.breakevens, [22989.15, 24655.425]);
   assert.deepEqual(forbiddenCredentialKeys(storedView), []);
-  const layers = riskOverlay.buildRiskLayers({
-    ...storedView,
-    activeStrategyId: "aug-seller",
-    activeExpiry: EXPIRY
-  }, (price) => 600 - (price - 22000) / 5, PLOT, RISK_LAYOUT);
+  let renderedRows = [];
+  let layers;
+  let extraChainRequests = 0;
+  const controller = content.createLadderController({
+    expiry: EXPIRY,
+    chainSnapshot: runtime.storage.sellerSafetyChain,
+    riskView: runtime.storage.sellerSafetyChartView,
+    fetchChain: async () => { extraChainRequests += 1; throw new Error("unexpected chain request"); },
+    captureAxisScale: async () => ({
+      ok: true,
+      gridGapPx: 20,
+      axisPairs: [{ price: 25000, y: 0 }, { price: 22000, y: 600 }]
+    }),
+    renderRows: (rows) => { renderedRows = rows; },
+    placeRows: () => ({ riskLayout: RISK_LAYOUT }),
+    placeRisk: (view, toY) => {
+      layers = riskOverlay.buildRiskLayers({
+        ...view,
+        activeStrategyId: view.strategyId,
+        activeExpiry: EXPIRY
+      }, toY, PLOT, RISK_LAYOUT);
+      return true;
+    }
+  });
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(renderedRows.length, 13);
+  assert.equal(extraChainRequests, 0);
 
   assert.equal(layers.status, "OK");
   assert.equal(layers.lines.length, 4);
@@ -250,7 +247,7 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
   }
 });
 
-test("stale, changed-position, and missing-history states fail closed without erasing accepted evidence", () => {
+test("stale, changed-position, and missing-history states fail closed without erasing accepted evidence", async () => {
   const fixture = upstreamFixture();
   const refreshPayload = {
     updatedAt: ACCEPTED_AT,
@@ -271,14 +268,27 @@ test("stale, changed-position, and missing-history states fail closed without er
         signedQuantity: -65, lotSize: 65, averagePrice: 77.8, lastPrice: 70, pnl: 507
       }
     ],
+    trades: tradebook.parseTradebookCsv(csvFixture()).trades,
     chain: fixture.chain
   };
-  const accepted = acceptedArtifacts(refreshPayload);
+  const acceptedRuntime = await acceptThroughPopup(refreshPayload);
+  const accepted = {
+    ledger: acceptedRuntime.storage.sellerSafetyLedger,
+    view: acceptedRuntime.storage.sellerSafetyView,
+    chain: {
+      candidateId: acceptedRuntime.storage.sellerSafetyView.candidateId,
+      expiry: EXPIRY,
+      daysToExpiry: 24,
+      spot: refreshPayload.chain.spot,
+      updatedAt: refreshPayload.updatedAt
+    }
+  };
   const evidence = JSON.parse(JSON.stringify(accepted.view));
+  const strategyId = accepted.view.strategyId;
 
   const stale = popupView.buildView({
     ledger: accepted.ledger,
-    selectedStrategyId: "aug-seller",
+    selectedStrategyId: strategyId,
     brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
     chain: { ...accepted.chain, updatedAt: "2026-08-01T03:20:00.000Z" },
     now: ACCEPTED_AT
@@ -295,7 +305,7 @@ test("stale, changed-position, and missing-history states fail closed without er
   const changedLedger = ledgerApi.reconcilePositions(accepted.ledger, changedPositions);
   const changed = popupView.buildView({
     ledger: changedLedger,
-    selectedStrategyId: "aug-seller",
+    selectedStrategyId: strategyId,
     brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
     chain: accepted.chain,
     now: ACCEPTED_AT
@@ -313,7 +323,7 @@ test("stale, changed-position, and missing-history states fail closed without er
   missingLedger.importBatches = [];
   const missing = popupView.buildView({
     ledger: missingLedger,
-    selectedStrategyId: "aug-seller",
+    selectedStrategyId: strategyId,
     brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
     chain: accepted.chain,
     now: ACCEPTED_AT
@@ -326,7 +336,7 @@ test("stale, changed-position, and missing-history states fail closed without er
   assert.deepEqual([...new Set(partial.lines.map((line) => line.layer))], ["current"]);
 });
 
-function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl } = {}) {
+function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl, dateImpl = Date } = {}) {
   const listeners = new Map();
   const requests = [];
   const openedTabs = [];
@@ -371,6 +381,7 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl } = {}) {
     sellerSafetyLedger: null,
     selectedStrategyId: "",
     sellerSafetyView: null,
+    sellerSafetyChartView: null,
     sellerSafetyPending: null,
     ...structuredClone(initialStorage)
   };
@@ -420,7 +431,7 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl } = {}) {
     },
     Intl,
     console,
-    Date,
+    Date: dateImpl,
     URL,
     setTimeout,
     clearTimeout,
@@ -428,7 +439,7 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl } = {}) {
   };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "popup.js"), "utf8"), sandbox);
-  return { listeners, nodes, openedTabs, requests, storage };
+  return { listeners, nodeFor, nodes, openedTabs, requests, storage };
 }
 
 async function settle() {

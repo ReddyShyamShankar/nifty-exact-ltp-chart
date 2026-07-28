@@ -7,7 +7,9 @@ const DEFAULTS = {
   sellerSafetyLedger: null,
   selectedStrategyId: "",
   sellerSafetyView: null,
-  sellerSafetyPending: null
+  sellerSafetyChartView: null,
+  sellerSafetyPending: null,
+  sellerSafetyChain: null
 };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
@@ -119,18 +121,24 @@ function renderAllocations(view) {
   }));
 }
 
-function renderView(view, { pending = false } = {}) {
+function renderView(view, { pending = false, preserveEvidence = false } = {}) {
   const shown = pending && view.canPublish
     ? {
       ...view,
       canPublish: false,
-      priority: { kind: "review", label: "REVIEW REFRESH SNAPSHOT" },
-      currentRisk: { lower: "—", upper: "—" },
-      wholeTrade: { lower: "—", upper: "—", status: "WITHHELD" },
-      maxProfit: "—",
-      maxLoss: "—",
-      whyMoved: [],
-      warning: "EXPLICIT SNAPSHOT ACCEPTANCE REQUIRED. RISK MAP WITHHELD."
+      priority: { kind: "review", label: view.reviewChanges?.length
+        ? "REVIEW POSITION CHANGES"
+        : view.tradeReviews?.length ? "REVIEW TRADE OWNERSHIP" : "REVIEW REFRESH SNAPSHOT" },
+      ...(preserveEvidence ? {} : {
+        currentRisk: { lower: "—", upper: "—" },
+        wholeTrade: { lower: "—", upper: "—", status: "WITHHELD" },
+        maxProfit: "—",
+        maxLoss: "—",
+        whyMoved: []
+      }),
+      warning: preserveEvidence
+        ? "LAST ACCEPTED EVIDENCE ONLY. NEW SNAPSHOT REQUIRES REVIEW; CHART RISK IS WITHHELD."
+        : "EXPLICIT SNAPSHOT ACCEPTANCE REQUIRED. RISK MAP WITHHELD."
     }
     : view;
   $("#priority-label").textContent = shown.priority.label;
@@ -157,7 +165,7 @@ function renderView(view, { pending = false } = {}) {
   if (shown.broker.action) $("#connect-zerodha").textContent = shown.broker.action.label;
   renderStrategies();
   renderAllocations(shown);
-  $("#review-panel").hidden = !(pending || shown.reviewChanges.length);
+  $("#review-panel").hidden = !(pending || shown.reviewChanges.length || shown.tradeReviews?.length);
 }
 
 function currentView(chain = pendingReview?.chain) {
@@ -182,7 +190,7 @@ function renderCurrent({ pending = Boolean(pendingReview) } = {}) {
     Array.isArray(stored.legs) && Array.isArray(stored.timeline) &&
     typeof stored.candidateId === "string" && stored.candidateId &&
     latestAcceptedCandidateId() === stored.candidateId;
-  if (!pending && validStoredView) {
+  if (validStoredView) {
     const liveStatus = NiftySellerPopupView.buildView({
       ledger,
       selectedStrategyId: state.selectedStrategyId,
@@ -195,7 +203,17 @@ function renderCurrent({ pending = Boolean(pendingReview) } = {}) {
       },
       now: new Date().toISOString()
     });
-    renderView({ ...stored, broker: liveStatus.broker });
+    if (pending) {
+      const candidate = currentView();
+      renderView({
+        ...stored,
+        broker: liveStatus.broker,
+        reviewChanges: candidate.reviewChanges,
+        tradeReviews: candidate.tradeReviews || []
+      }, { pending: true, preserveEvidence: true });
+    } else {
+      renderView({ ...stored, broker: liveStatus.broker });
+    }
     return;
   }
   renderView(currentView(), { pending });
@@ -270,11 +288,22 @@ function validateRefreshPayload(data) {
     !Array.isArray(data.chain.rows) || !data.trades.every((trade) => validRefreshTrade(trade, state.expiry))) {
     throw new Error("Bridge returned an invalid seller refresh snapshot.");
   }
-  const nextLedger = NiftySellerLedger.reconcilePositions(ledger, data.positions);
+  const positionLedger = NiftySellerLedger.reconcilePositions(ledger, data.positions);
+  const nextLedger = NiftySellerLedger.ingestBrokerTrades(positionLedger, {
+    trades: data.trades,
+    observedAt: data.updatedAt
+  });
   const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
   const candidateId = nextCandidateId();
   return {
     nextLedger,
+    chainSnapshot: {
+      version: 1,
+      updatedAt: data.updatedAt,
+      expiry: data.chain.expiry,
+      spot: data.chain.spot,
+      rows: data.chain.rows
+    },
     pending: {
       version: 1,
       candidateId,
@@ -292,6 +321,21 @@ function validateRefreshPayload(data) {
   };
 }
 
+function withheldChartView(candidate) {
+  const priority = candidate.nextLedger.reviewChanges.length
+    ? "REVIEW POSITION CHANGES"
+    : candidate.nextLedger.tradeReviews?.length ? "REVIEW TRADE OWNERSHIP" : "REVIEW REFRESH SNAPSHOT";
+  return {
+    version: 1,
+    candidateId: candidate.pending.candidateId,
+    canPublish: false,
+    priority: { kind: "review", label: priority },
+    expiry: candidate.pending.chain.expiry,
+    brokerUpdatedAt: candidate.pending.updatedAt,
+    brokerSessionExpiresAt: brokerStatus.expiresAt || null
+  };
+}
+
 async function refreshAll() {
   const button = $("#refresh-all");
   const label = $("#refresh-label");
@@ -305,11 +349,14 @@ async function refreshAll() {
     const candidate = validateRefreshPayload(data);
     await persist({
       sellerSafetyLedger: candidate.nextLedger,
-      sellerSafetyView: null,
-      sellerSafetyPending: candidate.pending
+      sellerSafetyChartView: withheldChartView(candidate),
+      sellerSafetyPending: candidate.pending,
+      sellerSafetyChain: candidate.chainSnapshot
     });
     renderCurrent({ pending: true });
-    $("#placement-status").textContent = ledger.reviewChanges.length
+    $("#placement-status").textContent = ledger.tradeReviews?.length
+      ? `${ledger.tradeReviews.length} TRADE OWNERSHIP REVIEW${ledger.tradeReviews.length === 1 ? "" : "S"} REQUIRED`
+      : ledger.reviewChanges.length
       ? `${ledger.reviewChanges.length} POSITION CHANGE${ledger.reviewChanges.length === 1 ? "" : "S"} NEED REVIEW`
       : "SNAPSHOT READY FOR EXPLICIT ACCEPTANCE";
   } catch (error) {
@@ -334,7 +381,6 @@ async function createStrategy() {
     await persist({
       sellerSafetyLedger: ledger,
       selectedStrategyId: id,
-      sellerSafetyView: null,
       sellerSafetyPending: pendingReview
     });
     $("#strategy-name").value = "";
@@ -362,7 +408,7 @@ async function allocateLots() {
         signedLots
       });
     }
-    await persist({ sellerSafetyLedger: ledger, sellerSafetyView: null, sellerSafetyPending: pendingReview });
+    await persist({ sellerSafetyLedger: ledger, sellerSafetyPending: pendingReview });
     renderCurrent({ pending: true });
     $("#placement-status").textContent = ledger.reviewChanges.length
       ? `${ledger.reviewChanges.length} POSITION CHANGE${ledger.reviewChanges.length === 1 ? "" : "S"} STILL UNALLOCATED`
@@ -402,7 +448,7 @@ async function importTradebook(event) {
         confirmedAt: acceptedAt
       }
     });
-    await persist({ sellerSafetyLedger: ledger, sellerSafetyView: null, sellerSafetyPending: pendingReview });
+    await persist({ sellerSafetyLedger: ledger, sellerSafetyPending: pendingReview });
     $("#import-summary").textContent = `${parsed.trades.length} FILL${parsed.trades.length === 1 ? "" : "S"} IMPORTED · ${file.name}`;
     renderCurrent({ pending: true });
   } catch (error) {
@@ -417,6 +463,10 @@ async function acceptSnapshot() {
   }
   if (ledger.reviewChanges.length) {
     $("#placement-status").textContent = "ALLOCATE EVERY POSITION CHANGE BEFORE ACCEPTING";
+    return;
+  }
+  if (ledger.tradeReviews?.length) {
+    $("#placement-status").textContent = "REVIEW TRADE OWNERSHIP WITH A TRADEBOOK CSV BEFORE ACCEPTING";
     return;
   }
   try {
@@ -447,6 +497,7 @@ async function acceptSnapshot() {
       sellerSafetyLedger: ledger,
       selectedStrategyId: state.selectedStrategyId,
       sellerSafetyView: view,
+      sellerSafetyChartView: view,
       sellerSafetyPending: null
     });
     renderView(view);

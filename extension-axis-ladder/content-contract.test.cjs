@@ -150,6 +150,31 @@ test("timeframe changes rebuild from cached chain without another data request",
   assert.equal(fetches, 1);
 });
 
+test("coordinated refresh chain snapshot builds thirteen chart rows without fetching chain again", async () => {
+  let fetches = 0;
+  const rendered = [];
+  const controller = api.createLadderController({
+    expiry: "2026-08-25",
+    fetchChain: async () => { fetches += 1; throw new Error("second chain request forbidden"); },
+    captureAxisScale: async () => scale(),
+    renderRows: (rows) => rendered.push(rows),
+    placeRows: () => true
+  });
+  const refreshChain = {
+    version: 1,
+    updatedAt: "2026-08-01T03:50:00.000Z",
+    expiry: "2026-08-25",
+    ...chain(23767.45)
+  };
+
+  assert.equal(typeof controller.setChainSnapshot, "function");
+  assert.equal(controller.setChainSnapshot(refreshChain), true);
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(fetches, 0);
+  assert.equal(rendered.at(-1).length, 13);
+  assert.equal(controller.chain().updatedAt, "2026-08-01T03:50:00.000Z");
+});
+
 test("risk view changes redraw from cached axis while zoom pan and timeframe reuse normal capture without fetching", async () => {
   let fetches = 0;
   let captures = 0;
@@ -194,6 +219,102 @@ test("risk view changes redraw from cached axis while zoom pan and timeframe reu
   assert.equal(fetches, 1, "zoom, pan, and timeframe remaps use cached chain");
   assert.equal(captures, 6, "two placements capture once each; timeframe rebuild keeps two-capture stability check");
   assert.deepEqual(riskPlacements.slice(-3).map((placement) => placement.timeframe), ["1h", "1h", "1D"]);
+});
+
+test("accepted risk auto-hides at fifteen-minute broker deadline without a network request", async () => {
+  let now = Date.parse("2026-08-01T03:50:00.000Z");
+  let fetches = 0;
+  let riskPlacements = 0;
+  let riskHides = 0;
+  let deadline;
+  const accepted = {
+    canPublish: true,
+    strategyId: "s1",
+    expiry: "current_month",
+    brokerUpdatedAt: "2026-08-01T03:50:00.000Z",
+    brokerSessionExpiresAt: "2026-08-02T00:30:00.000Z"
+  };
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    riskView: accepted,
+    now: () => now,
+    scheduleRiskDeadline: (run, delay) => { deadline = { run, delay }; return 91; },
+    cancelRiskDeadline: () => {},
+    fetchChain: async () => { fetches += 1; return chain(23767.45); },
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => ({ riskLayout: { labelRight: 643 } }),
+    placeRisk: () => { riskPlacements += 1; return true; },
+    hideRisk: () => { riskHides += 1; }
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(riskPlacements, 1);
+  assert.equal(deadline.delay, 15 * 60 * 1000);
+  assert.equal(fetches, 1);
+
+  now = Date.parse("2026-08-01T04:05:00.000Z");
+  deadline.run();
+  assert.ok(riskHides >= 1);
+  assert.equal(await controller.place(), true);
+  assert.equal(riskPlacements, 1);
+  assert.equal(fetches, 1);
+});
+
+test("withheld chart state hides risk without erasing separately stored operator evidence", () => {
+  const accepted = { canPublish: true, candidateId: "accepted-1" };
+  const withheld = {
+    canPublish: false,
+    candidateId: "pending-2",
+    priority: { kind: "review", label: "REVIEW POSITION CHANGES" }
+  };
+  const received = [];
+  const settings = {
+    enabled: true,
+    sellerSafetyView: accepted,
+    sellerSafetyChartView: accepted,
+    selectedStrategyId: "s1"
+  };
+
+  assert.equal(api.applyRiskStorageChanges({
+    sellerSafetyChartView: { oldValue: accepted, newValue: withheld }
+  }, "local", settings, { setRiskView: (view) => received.push(view) }), true);
+
+  assert.equal(settings.sellerSafetyView, accepted);
+  assert.equal(settings.sellerSafetyChartView, withheld);
+  assert.deepEqual(received, [withheld]);
+});
+
+test("accepted risk uses earlier Zerodha session expiry as local placement deadline", async () => {
+  let now = Date.parse("2026-08-01T03:50:00.000Z");
+  let riskPlacements = 0;
+  let deadline;
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    riskView: {
+      canPublish: true,
+      strategyId: "s1",
+      expiry: "current_month",
+      brokerUpdatedAt: "2026-08-01T03:50:00.000Z",
+      brokerSessionExpiresAt: "2026-08-01T03:55:00.000Z"
+    },
+    now: () => now,
+    scheduleRiskDeadline: (run, delay) => { deadline = { run, delay }; return 92; },
+    cancelRiskDeadline: () => {},
+    fetchChain: async () => chain(23767.45),
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => ({ riskLayout: { labelRight: 643 } }),
+    placeRisk: () => { riskPlacements += 1; return true; }
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  assert.equal(deadline.delay, 5 * 60 * 1000);
+  assert.equal(riskPlacements, 1);
+
+  now = Date.parse("2026-08-01T03:55:00.000Z");
+  assert.equal(await controller.place(), true);
+  assert.equal(riskPlacements, 1);
 });
 
 test("failed row placement clears the cached risk label boundary", async () => {
@@ -1619,6 +1740,20 @@ test("risk labels wire the cleared right edge and translate their full width lef
   assert.match(source, /label\.style\.left = `\$\{line\.labelRight - line\.left\}px`/);
   assert.doesNotMatch(source, /line\.labelX/);
   assert.match(css, /\.nifty-seller-risk__label\s*\{[\s\S]*?transform:\s*translateX\(-100%\)/);
+});
+
+test("whole-trade profit and loss bands receive distinct production DOM classes and CSS treatments", () => {
+  assert.equal(api.riskBandClassName({ layer: "whole-trade", kind: "profit" }),
+    "nifty-seller-risk__band is-whole-trade is-profit");
+  assert.equal(api.riskBandClassName({ layer: "whole-trade", kind: "loss" }),
+    "nifty-seller-risk__band is-whole-trade is-loss");
+
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const profit = css.match(/\.nifty-seller-risk__band\.is-whole-trade\.is-profit\s*\{([^}]+)\}/)?.[1];
+  const loss = css.match(/\.nifty-seller-risk__band\.is-whole-trade\.is-loss\s*\{([^}]+)\}/)?.[1];
+  assert.ok(profit, "whole-trade profit CSS exists");
+  assert.ok(loss, "whole-trade loss CSS exists");
+  assert.notEqual(profit.trim(), loss.trim(), "profit and loss cannot remain visually identical");
 });
 
 test("every non-axis lane draws a full connector back to the exact right-axis anchor", () => {

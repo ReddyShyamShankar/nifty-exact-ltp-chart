@@ -45,7 +45,9 @@ GET http://127.0.0.1:8787/api/seller-refresh?expiry=YYYY-MM-DD
 
 In the extension, press **CONNECT ZERODHA** and complete the official Zerodha login. Then press **REFRESH ALL** once. Zerodha daily access expires at 06:00 Asia/Kolkata; an expired session fails closed and requires reconnecting. Popup open, timeframe, zoom, and pan never call the positions, trades, or chain endpoints.
 
-Historical fills do not come from the current-day trades endpoint. Use the extension's one-time Zerodha tradebook CSV import, then manually allocate fills and whole signed lots to one NIFTY strategy with the same expiry. Review and explicitly accept the snapshot before chart publication. **HISTORY GAP** evidence withholds the affected whole-trade map.
+Historical fills do not come from the current-day trades endpoint. The extension stores current-day trades as immutable evidence, deduplicates them against the one-time Zerodha tradebook CSV import, and requires explicit strategy ownership review. Manually allocate fills and whole signed lots to one NIFTY strategy with the same expiry, then explicitly accept the snapshot before chart publication. **HISTORY GAP** evidence withholds the affected whole-trade map.
+
+The coordinated refresh response contains the only chain snapshot used for that refresh. The extension persists those validated rows for the chart ladder, so content placement does not issue another option-chain request. Accepted risk expires locally at the earlier of 15 minutes after the broker timestamp or the Zerodha session deadline; that automatic hide makes no bridge request.
 
 ## Read-only guarantee
 

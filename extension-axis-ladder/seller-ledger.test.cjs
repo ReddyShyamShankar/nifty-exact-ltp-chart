@@ -80,6 +80,8 @@ test("creates versioned JSON-safe ledger without mutating previous value", () =>
     strategies: [],
     brokerPositions: [],
     importedTrades: [],
+    tradeEvidence: [],
+    tradeReviews: [],
     fillAssignments: [],
     importBatches: [],
     historyGaps: [],
@@ -90,6 +92,67 @@ test("creates versioned JSON-safe ledger without mutating previous value", () =>
   assert.equal(created.strategies[0].expiry, "2026-08-25");
   assert.equal(created.strategies[0].underlying, "NIFTY");
   assert.equal(created.audit.at(-1).type, "STRATEGY_CREATED");
+});
+
+test("current-day bridge trades persist as immutable unassigned evidence and deduplicate", () => {
+  const source = fill({ id: "bridge-trade-1" });
+  const first = ledger.ingestBrokerTrades(oneStrategyLedger(), {
+    trades: [source], observedAt: "2026-08-01T03:50:00.000Z"
+  });
+  source.price = 1;
+  const repeated = ledger.ingestBrokerTrades(first, {
+    trades: [fill({ id: "bridge-trade-1" })], observedAt: "2026-08-01T03:51:00.000Z"
+  });
+
+  assert.equal(first.importedTrades[0].price, 358.8);
+  assert.deepEqual(first.tradeEvidence, [{
+    fillId: "bridge-trade-1",
+    sourceKind: "ZERODHA_CURRENT_DAY",
+    observedAt: "2026-08-01T03:50:00.000Z"
+  }]);
+  assert.deepEqual(first.tradeReviews, [{
+    fillId: "bridge-trade-1",
+    contractId: "NFO:NIFTY26AUG24100CE",
+    expiry: "2026-08-25",
+    reason: "OWNERSHIP_REVIEW_REQUIRED"
+  }]);
+  assert.equal(first.strategies[0].fillIds.length, 0, "refresh must never infer strategy ownership");
+  assert.equal(repeated.importedTrades.length, 1);
+  assert.equal(repeated.tradeEvidence.length, 1);
+  assert.equal(repeated.tradeReviews.length, 1);
+  assert.throws(() => ledger.ingestBrokerTrades(first, {
+    trades: [fill({ id: "bridge-trade-1", price: 1 })], observedAt: "2026-08-01T03:52:00.000Z"
+  }), /immutable|conflict/i);
+});
+
+test("explicit CSV review assigns deduplicated bridge IDs into whole-trade history", () => {
+  let current = oneStrategyLedger();
+  current = ledger.reconcilePositions(current, [position()]);
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  current = ledger.ingestBrokerTrades(current, {
+    trades: [fill({ id: "bridge-trade-1" })], observedAt: "2026-08-01T03:50:00.000Z"
+  });
+  current = ledger.assignFills(current, {
+    strategyId: "s1",
+    trades: [fill({ id: "csv-fill-1" })],
+    fillIds: ["csv-fill-1"],
+    importBatch: confirmedBatch()
+  });
+  current = acceptBrokerSnapshot(current);
+
+  assert.equal(current.importedTrades.length, 1, "same fill from bridge and CSV stays canonical");
+  assert.deepEqual(current.strategies[0].fillIds, ["bridge-trade-1"]);
+  assert.deepEqual(current.fillAssignments, [{ fillId: "bridge-trade-1", strategyId: "s1" }]);
+  assert.deepEqual(current.tradeReviews, []);
+  assert.deepEqual(current.tradeEvidence.map(({ fillId, sourceKind }) => ({ fillId, sourceKind })), [
+    { fillId: "bridge-trade-1", sourceKind: "ZERODHA_CURRENT_DAY" },
+    { fillId: "bridge-trade-1", sourceKind: "ZERODHA_TRADEBOOK_CSV" }
+  ]);
+  const risk = ledger.strategyRiskInput(current, "s1");
+  assert.equal(risk.status, "OK");
+  assert.deepEqual(risk.fills.map((trade) => trade.id), ["bridge-trade-1"]);
 });
 
 test("rejects strategy with a non-NIFTY underlying or missing expiry", () => {

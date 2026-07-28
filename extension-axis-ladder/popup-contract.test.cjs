@@ -212,19 +212,102 @@ test("initialization reads health, expiries, and Zerodha status without seller r
 });
 
 test("one primary press requests one coordinated refresh and withholds changed map", async () => {
-  const harness = popupHarness({ sellerSafetyView: { canPublish: true, currentRisk: { lower: "old" } } });
+  const evidence = { canPublish: true, currentRisk: { lower: "old" } };
+  const harness = popupHarness({ sellerSafetyView: evidence, sellerSafetyChartView: evidence });
   await settle();
 
   await harness.listeners.get("refresh-all:click")();
 
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh?expiry=2026-08-25")).length, 1);
   assert.equal(harness.requests.filter((url) => /upstox|zerodha\/positions|zerodha\/trades/.test(url)).length, 0);
-  assert.equal(harness.storage.sellerSafetyView, null);
+  assert.deepEqual(structuredClone(harness.storage.sellerSafetyView), evidence);
+  assert.equal(harness.storage.sellerSafetyChartView.canPublish, false);
+  assert.equal(harness.storage.sellerSafetyChartView.priority.label, "REVIEW POSITION CHANGES");
   assert.ok(harness.storage.sellerSafetyPending, "validated refresh persists pending candidate");
   assert.equal(typeof harness.storage.sellerSafetyPending.candidateId, "string");
   assert.equal(harness.storage.sellerSafetyPending.chain.expiry, "2026-08-25");
   assert.equal(harness.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
   assert.equal(harness.nodes.get("review-panel").hidden, false);
+});
+
+test("changed-position refresh preserves accepted evidence across popup reopen while chart publication is withheld", async () => {
+  const first = popupHarness(acceptedStorage());
+  await settle();
+
+  await first.listeners.get("refresh-all:click")();
+
+  assert.equal(first.storage.sellerSafetyView.currentRisk.lower, "23,900.00");
+  assert.equal(first.storage.sellerSafetyChartView.canPublish, false);
+  assert.equal(first.nodes.get("current-lower").textContent, "23,900.00");
+  assert.equal(first.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
+  assert.equal(first.nodes.get("review-panel").hidden, false);
+
+  const reopened = popupHarness(structuredClone(first.storage));
+  await settle();
+
+  assert.equal(reopened.storage.sellerSafetyView.currentRisk.lower, "23,900.00");
+  assert.equal(reopened.storage.sellerSafetyChartView.canPublish, false);
+  assert.equal(reopened.nodes.get("current-lower").textContent, "23,900.00");
+  assert.equal(reopened.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
+});
+
+test("REFRESH ALL persists validated chain rows for chart consumption without a second chain request", async () => {
+  const rows = Array.from({ length: 13 }, (_, index) => ({
+    strike: 23800 + index * 50,
+    call: 200 - index,
+    put: 100 + index
+  }));
+  const harness = popupHarness({}, {
+    refreshPayload: {
+      updatedAt: "2026-08-01T03:50:00.000Z",
+      positions: [],
+      trades: [],
+      chain: { expiry: "2026-08-25", spot: 24120, rows }
+    }
+  });
+  await settle();
+
+  await harness.listeners.get("refresh-all:click")();
+
+  assert.deepEqual(structuredClone(harness.storage.sellerSafetyChain), {
+    version: 1,
+    updatedAt: "2026-08-01T03:50:00.000Z",
+    expiry: "2026-08-25",
+    spot: 24120,
+    rows
+  });
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  assert.equal(harness.requests.filter((url) => url.includes("/api/nifty-chain")).length, 0);
+});
+
+test("REFRESH ALL persists and deduplicates current-day trade IDs without silently assigning ownership", async () => {
+  const bridgeTrade = {
+    id: "bridge-trade-1", contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
+    underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+    transactionType: "SELL", quantity: 65, price: 110, timestamp: "2026-08-01T09:15:00+05:30"
+  };
+  const payload = {
+    updatedAt: "2026-08-01T03:50:00.000Z",
+    positions: [{
+      contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+      underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+      signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
+    }],
+    trades: [bridgeTrade],
+    chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
+  };
+  const harness = popupHarness({}, { refreshPayloads: [payload, payload] });
+  await settle();
+
+  await harness.listeners.get("refresh-all:click")();
+  await harness.listeners.get("refresh-all:click")();
+
+  assert.deepEqual(harness.storage.sellerSafetyLedger.importedTrades.map((trade) => trade.id), ["bridge-trade-1"]);
+  assert.deepEqual(harness.storage.sellerSafetyLedger.tradeReviews.map((review) => review.fillId), ["bridge-trade-1"]);
+  assert.equal(harness.storage.sellerSafetyLedger.fillAssignments.length, 0);
+  assert.equal(harness.storage.sellerSafetyLedger.strategies.length, 0);
+  assert.match(harness.nodes.get("placement-status").textContent, /TRADE OWNERSHIP.*REVIEW/i);
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 2);
 });
 
 test("malformed refresh clears old candidate and cannot be accepted", async () => {

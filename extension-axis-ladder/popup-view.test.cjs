@@ -89,6 +89,7 @@ test("builds display-ready accepted current and whole-trade risk summary", () =>
   const view = build();
 
   assert.equal(view.canPublish, true);
+  assert.equal(view.brokerSessionExpiresAt, "2026-08-02T00:30:00.000Z");
   assert.equal(view.priority.label, "CURRENT RISK");
   assert.deepEqual(view.currentRisk, { lower: "23,880.00", upper: "24,320.00" });
   assert.deepEqual(view.wholeTrade, { lower: "23,860.00", upper: "24,340.00", status: "EXCLUDING CHARGES" });
@@ -145,6 +146,23 @@ test("fails closed while any broker position still needs reviewed allocation", (
   assert.deepEqual(view.currentRisk, { lower: "—", upper: "—" });
   assert.deepEqual(view.wholeTrade, { lower: "—", upper: "—", status: "WITHHELD" });
   assert.equal(view.reviewChanges[0].availableLots, -1);
+});
+
+test("fails closed while a current-day trade still needs explicit strategy ownership", () => {
+  const ledger = acceptedLedger();
+  ledger.tradeReviews = [{
+    fillId: "bridge-trade-1",
+    contractId: "NFO:NIFTY26AUG24100CE",
+    expiry: "2026-08-25",
+    reason: "OWNERSHIP_REVIEW_REQUIRED"
+  }];
+
+  const view = build(ledger);
+
+  assert.equal(view.canPublish, false);
+  assert.equal(view.priority.label, "REVIEW TRADE OWNERSHIP");
+  assert.deepEqual(view.tradeReviews, ledger.tradeReviews);
+  assert.deepEqual(view.currentRisk, { lower: "—", upper: "—" });
 });
 
 test("shows incomplete history without inventing whole-trade risk", () => {
