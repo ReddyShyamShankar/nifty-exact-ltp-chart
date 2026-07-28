@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NIFTY Axis LTP Ladder",
-  "version": "0.3.16",
+  "version": "0.4.0",
   "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
   "permissions": ["storage", "activeTab", "debugger"],
   "host_permissions": [

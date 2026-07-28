@@ -1,0 +1,686 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const vm = require("node:vm");
+
+const content = require("./content.js");
+const ledgerApi = require("./seller-ledger.js");
+const popupView = require("./popup-view.js");
+const risk = require("./seller-risk.js");
+const riskOverlay = require("./risk-overlay.js");
+const tradebook = require("./tradebook-csv.js");
+const manifest = require("./manifest.json");
+
+const EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
+const EXPIRY = "2026-08-25";
+const ACCEPTED_AT = "2026-08-01T03:50:00.000Z";
+const CANDIDATE_ID = "seller-fixture-accepted";
+const PLOT = { left: 100, top: 20, right: 900, bottom: 700 };
+const RISK_LAYOUT = { labelRight: 643 };
+
+function rawPosition(tradingsymbol, quantity, averagePrice, lastPrice, pnl, exchange = "NFO") {
+  return {
+    exchange,
+    tradingsymbol,
+    quantity,
+    average_price: averagePrice,
+    last_price: lastPrice,
+    pnl
+  };
+}
+
+function rawTrade(id, tradingsymbol, quantity, price, transactionType = "SELL") {
+  return {
+    trade_id: id,
+    order_id: `order-${id}`,
+    exchange: "NFO",
+    tradingsymbol,
+    transaction_type: transactionType,
+    quantity,
+    average_price: price,
+    fill_timestamp: "2026-08-01 09:15:00"
+  };
+}
+
+function upstreamFixture() {
+  return {
+    positions: {
+      status: "success",
+      data: {
+        net: [
+          rawPosition("NIFTY26AUG24100CE", -130, 358.8, 320, 5044),
+          rawPosition("NIFTY26AUG24100PE", -65, 315.45, 300, 1004.25),
+          rawPosition("NIFTY26AUG22500PE", -65, 77.8, 70, 507),
+          rawPosition("BANKNIFTY26AUG55000CE", -65, 100, 90, 650),
+          rawPosition("NIFTY26AUG24200CE", 0, 100, 90, 0)
+        ]
+      }
+    },
+    trades: {
+      status: "success",
+      data: [
+        rawTrade("today-call", "NIFTY26AUG24100CE", 130, 358.8),
+        rawTrade("today-put", "NIFTY26AUG24100PE", 65, 315.45),
+        rawTrade("today-low-put", "NIFTY26AUG22500PE", 65, 77.8),
+        { ...rawTrade("ignored-bank", "BANKNIFTY26AUG55000CE", 65, 100) }
+      ]
+    },
+    chain: {
+      source: "Upstox",
+      expiry: EXPIRY,
+      spot: 24120,
+      rows: Array.from({ length: 13 }, (_, index) => ({
+        strike: 23800 + index * 50,
+        call: 200 - index,
+        put: 100 + index
+      }))
+    }
+  };
+}
+
+async function close(server) {
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+async function startBridge(overrides = {}) {
+  const { startServer } = await import("../data-bridge/server.js");
+  const sessionStore = overrides.sessionStore || {
+    status: async () => ({ configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" }),
+    loginUrl: async () => "https://kite.zerodha.com/connect/login?v=3&api_key=public-key",
+    exchangeRequestToken: async () => ({ configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" }),
+    credentials: async () => ({ apiKey: "public-key", accessToken: "bridge-only-daily-token", onUnauthorized: async () => {} })
+  };
+  return startServer({
+    host: "127.0.0.1",
+    port: 0,
+    sessionStore,
+    zerodhaClientFactory: overrides.zerodhaClientFactory,
+    chainLoader: overrides.chainLoader,
+    expiryMetadata: () => ({ expiry: EXPIRY, weekly: false }),
+    extensionOrigin: EXTENSION_ORIGIN,
+    now: () => new Date(ACCEPTED_AT)
+  });
+}
+
+function bridgeUrl(server, route) {
+  return `http://127.0.0.1:${server.address().port}${route}`;
+}
+
+function extensionFetch(server, route) {
+  return fetch(bridgeUrl(server, route), { headers: { Origin: EXTENSION_ORIGIN } });
+}
+
+function forbiddenCredentialKeys(value, trail = [], found = []) {
+  if (!value || typeof value !== "object") return found;
+  for (const [key, child] of Object.entries(value)) {
+    const nextTrail = trail.concat(key);
+    if (/token|secret|authorization|checksum/i.test(key)) found.push(nextTrail.join("."));
+    forbiddenCredentialKeys(child, nextTrail, found);
+  }
+  return found;
+}
+
+function csvFixture() {
+  return [
+    "trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry",
+    "fill-call,order-call,NFO,NIFTY26AUG24100CE,SELL,130,358.8,2026-08-01T09:15:00+05:30,2026-08-25",
+    "fill-put,order-put,NFO,NIFTY26AUG24100PE,SELL,65,315.45,2026-08-01T09:16:00+05:30,2026-08-25",
+    "fill-low-put,order-low-put,NFO,NIFTY26AUG22500PE,SELL,65,77.8,2026-08-01T09:17:00+05:30,2026-08-25"
+  ].join("\n");
+}
+
+function acceptedArtifacts(refreshPayload) {
+  let ledger = ledgerApi.emptyLedger();
+  ledger = ledgerApi.createStrategy(ledger, {
+    id: "aug-seller",
+    name: "August seller",
+    underlying: "NIFTY",
+    expiry: EXPIRY
+  });
+  ledger = ledgerApi.reconcilePositions(ledger, refreshPayload.positions);
+  for (const position of refreshPayload.positions) {
+    ledger = ledgerApi.allocateLots(ledger, {
+      strategyId: "aug-seller",
+      contractId: position.contractId,
+      signedLots: position.signedQuantity / position.lotSize
+    });
+  }
+
+  const currentInput = ledgerApi.strategyRiskInput(ledger, "aug-seller");
+  const currentRisk = risk.currentRiskMap({ legs: currentInput.openLegs });
+  const imported = tradebook.parseTradebookCsv(csvFixture());
+  assert.deepEqual(imported.errors, []);
+  ledger = ledgerApi.assignFills(ledger, {
+    strategyId: "aug-seller",
+    trades: imported.trades,
+    fillIds: imported.trades.map((fill) => fill.id),
+    importBatch: {
+      sourceKind: imported.sourceKind,
+      fingerprint: imported.batchFingerprint,
+      coverage: { from: "2026-08-01", to: "2026-08-01" },
+      acceptedAt: ACCEPTED_AT,
+      confirmedAt: ACCEPTED_AT
+    }
+  });
+  ledger = ledgerApi.acceptSnapshot(ledger, {
+    strategyId: "aug-seller",
+    snapshot: { at: ACCEPTED_AT, candidateId: CANDIDATE_ID }
+  });
+  const wholeInput = ledgerApi.strategyRiskInput(ledger, "aug-seller");
+  const wholeTradeRisk = risk.wholeTradeRiskMap({
+    openLegs: wholeInput.openLegs,
+    fills: wholeInput.fills,
+    history: wholeInput.history
+  });
+  const chain = {
+    candidateId: CANDIDATE_ID,
+    expiry: EXPIRY,
+    daysToExpiry: 24,
+    spot: refreshPayload.chain.spot,
+    updatedAt: refreshPayload.updatedAt
+  };
+  const view = popupView.buildView({
+    ledger,
+    selectedStrategyId: "aug-seller",
+    brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
+    chain,
+    now: ACCEPTED_AT
+  });
+  return { ledger, currentInput, currentRisk, wholeInput, wholeTradeRisk, chain, view };
+}
+
+test("bridge payload flows through reviewed ledger, both risk maps, storage, and exact-axis layers", async (t) => {
+  const fixture = upstreamFixture();
+  const calls = { positions: 0, trades: 0, chain: 0 };
+  const server = await startBridge({
+    zerodhaClientFactory: () => ({
+      getPositions: async () => { calls.positions += 1; return fixture.positions; },
+      getTrades: async () => { calls.trades += 1; return fixture.trades; }
+    }),
+    chainLoader: async () => { calls.chain += 1; return fixture.chain; }
+  });
+  t.after(() => close(server));
+
+  const response = await extensionFetch(server, `/api/seller-refresh?expiry=${EXPIRY}`);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, { positions: 1, trades: 1, chain: 1 });
+  assert.equal(payload.positions.length, 3);
+  assert.equal(payload.trades.length, 3);
+  assert.ok(payload.positions.every((position) => position.underlying === "NIFTY" && position.expiry === EXPIRY));
+  assert.ok(payload.trades.every((fill) => fill.underlying === "NIFTY" && fill.expiry === EXPIRY));
+  assert.deepEqual(forbiddenCredentialKeys(payload), []);
+  assert.doesNotMatch(JSON.stringify(payload), /bridge-only-daily-token|api.?secret/i);
+
+  const artifacts = acceptedArtifacts(payload);
+  assert.equal(artifacts.ledger.reviewChanges.length, 0);
+  assert.deepEqual(artifacts.ledger.strategies[0].allocations.map((allocation) => allocation.signedLots), [-2, -1, -1]);
+  assert.deepEqual(artifacts.currentRisk.breakevens, [22989.15, 24655.425]);
+  assert.deepEqual(artifacts.wholeTradeRisk.breakevens, [22989.15, 24655.425]);
+  assert.equal(artifacts.wholeInput.status, "OK");
+  assert.equal(artifacts.view.canPublish, true);
+
+  const storedView = JSON.parse(JSON.stringify(artifacts.view));
+  assert.deepEqual(storedView.maps.current.breakevens, [22989.15, 24655.425]);
+  assert.deepEqual(storedView.maps.wholeTrade.breakevens, [22989.15, 24655.425]);
+  assert.deepEqual(forbiddenCredentialKeys(storedView), []);
+  const layers = riskOverlay.buildRiskLayers({
+    ...storedView,
+    activeStrategyId: "aug-seller",
+    activeExpiry: EXPIRY
+  }, (price) => 600 - (price - 22000) / 5, PLOT, RISK_LAYOUT);
+
+  assert.equal(layers.status, "OK");
+  assert.equal(layers.lines.length, 4);
+  assert.deepEqual(layers.lines.filter((line) => line.layer === "current").map(({ stroke, dash }) => ({ stroke, dash })), [
+    { stroke: "mint", dash: "solid" },
+    { stroke: "mint", dash: "solid" }
+  ]);
+  assert.deepEqual(layers.lines.filter((line) => line.layer === "whole-trade").map(({ stroke, dash }) => ({ stroke, dash })), [
+    { stroke: "graphite", dash: "dashed" },
+    { stroke: "graphite", dash: "dashed" }
+  ]);
+  for (const layer of ["current", "whole-trade"]) {
+    const kinds = new Set(layers.bands.filter((band) => band.layer === layer).map((band) => band.kind));
+    assert.equal(kinds.has("profit"), true);
+    assert.equal(kinds.has("loss"), true);
+  }
+});
+
+test("stale, changed-position, and missing-history states fail closed without erasing accepted evidence", () => {
+  const fixture = upstreamFixture();
+  const refreshPayload = {
+    updatedAt: ACCEPTED_AT,
+    positions: [
+      {
+        contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", expiry: EXPIRY,
+        exchange: "NFO", underlying: "NIFTY", strike: 24100, optionType: "CE",
+        signedQuantity: -130, lotSize: 65, averagePrice: 358.8, lastPrice: 320, pnl: 5044
+      },
+      {
+        contractId: "NFO:NIFTY26AUG24100PE", tradingsymbol: "NIFTY26AUG24100PE", expiry: EXPIRY,
+        exchange: "NFO", underlying: "NIFTY", strike: 24100, optionType: "PE",
+        signedQuantity: -65, lotSize: 65, averagePrice: 315.45, lastPrice: 300, pnl: 1004.25
+      },
+      {
+        contractId: "NFO:NIFTY26AUG22500PE", tradingsymbol: "NIFTY26AUG22500PE", expiry: EXPIRY,
+        exchange: "NFO", underlying: "NIFTY", strike: 22500, optionType: "PE",
+        signedQuantity: -65, lotSize: 65, averagePrice: 77.8, lastPrice: 70, pnl: 507
+      }
+    ],
+    chain: fixture.chain
+  };
+  const accepted = acceptedArtifacts(refreshPayload);
+  const evidence = JSON.parse(JSON.stringify(accepted.view));
+
+  const stale = popupView.buildView({
+    ledger: accepted.ledger,
+    selectedStrategyId: "aug-seller",
+    brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
+    chain: { ...accepted.chain, updatedAt: "2026-08-01T03:20:00.000Z" },
+    now: ACCEPTED_AT
+  });
+  assert.equal(stale.broker.kind, "stale");
+  assert.deepEqual(stale.currentRisk, evidence.currentRisk);
+  assert.deepEqual(riskOverlay.buildRiskLayers(stale, (price) => price, PLOT, RISK_LAYOUT), {
+    status: "STALE", lines: [], bands: []
+  });
+
+  const changedPositions = accepted.ledger.brokerPositions.map((position, index) => (
+    index === 0 ? { ...position, signedQuantity: -195 } : position
+  ));
+  const changedLedger = ledgerApi.reconcilePositions(accepted.ledger, changedPositions);
+  const changed = popupView.buildView({
+    ledger: changedLedger,
+    selectedStrategyId: "aug-seller",
+    brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
+    chain: accepted.chain,
+    now: ACCEPTED_AT
+  });
+  assert.equal(changedLedger.strategies[0].allocations[0].signedLots, -2);
+  assert.equal(changed.priority.label, "REVIEW POSITION CHANGES");
+  assert.equal(changed.canPublish, false);
+  assert.equal(changed.maps, null);
+  assert.deepEqual(evidence.maps.current.breakevens, [22989.15, 24655.425]);
+
+  const missingLedger = structuredClone(accepted.ledger);
+  missingLedger.strategies[0].fillIds = [];
+  missingLedger.importedTrades = [];
+  missingLedger.fillAssignments = [];
+  missingLedger.importBatches = [];
+  const missing = popupView.buildView({
+    ledger: missingLedger,
+    selectedStrategyId: "aug-seller",
+    brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
+    chain: accepted.chain,
+    now: ACCEPTED_AT
+  });
+  assert.deepEqual(missing.currentRisk, evidence.currentRisk);
+  assert.equal(missing.wholeTrade.status, "HISTORY INCOMPLETE");
+  assert.equal(missing.wholeTrade.lower, "—");
+  const partial = riskOverlay.buildRiskLayers(missing, (price) => 600 - (price - 22000) / 5, PLOT, RISK_LAYOUT);
+  assert.equal(partial.status, "PARTIAL");
+  assert.deepEqual([...new Set(partial.lines.map((line) => line.layer))], ["current"]);
+});
+
+function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl } = {}) {
+  const listeners = new Map();
+  const requests = [];
+  const openedTabs = [];
+  const nodes = new Map();
+
+  function nodeFor(id = "", tagName = "div") {
+    if (id && nodes.has(id)) return nodes.get(id);
+    const node = {
+      id,
+      tagName: tagName.toUpperCase(),
+      value: id === "expiry" ? EXPIRY : "",
+      textContent: "",
+      hidden: false,
+      disabled: false,
+      files: [],
+      children: [],
+      dataset: {},
+      attributes: new Map([["aria-expanded", "false"]]),
+      setAttribute(name, value) { this.attributes.set(name, String(value)); },
+      getAttribute(name) { return this.attributes.get(name) || null; },
+      removeAttribute(name) { this.attributes.delete(name); },
+      addEventListener(type, listener) { listeners.set(`${id}:${type}`, listener); },
+      replaceChildren(...children) { this.children = children; },
+      append(...children) { this.children.push(...children); },
+      querySelectorAll(selector) {
+        const found = [];
+        const visit = (candidate) => {
+          if (selector === "[data-allocation-contract]" && candidate.dataset?.allocationContract) found.push(candidate);
+          (candidate.children || []).forEach(visit);
+        };
+        this.children.forEach(visit);
+        return found;
+      }
+    };
+    if (id) nodes.set(id, node);
+    return node;
+  }
+
+  const storage = {
+    enabled: false,
+    expiry: EXPIRY,
+    sellerSafetyLedger: null,
+    selectedStrategyId: "",
+    sellerSafetyView: null,
+    sellerSafetyPending: null,
+    ...structuredClone(initialStorage)
+  };
+  const response = (status, payload) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    async json() { return payload; }
+  });
+  const sandbox = {
+    AbortController,
+    NiftySellerRisk: risk,
+    NiftySellerLedger: ledgerApi,
+    NiftyTradebookCsv: tradebook,
+    NiftySellerPopupView: popupView,
+    chrome: {
+      storage: { local: {
+        async get(defaults) { return { ...defaults, ...storage }; },
+        async set(next) { Object.assign(storage, structuredClone(next)); }
+      } },
+      tabs: {
+        async query() { return [{ id: 7, url: "https://www.tradingview.com/chart/test/" }]; },
+        async sendMessage() { return { ok: true }; },
+        async create(input) { openedTabs.push(input); }
+      }
+    },
+    document: {
+      querySelector(selector) { return nodeFor(selector.replace(/^#/, "")); },
+      querySelectorAll(selector) { return nodeFor("allocation-list").querySelectorAll(selector); },
+      createElement(tagName) { return nodeFor("", tagName); }
+    },
+    fetch: async (url) => {
+      const request = String(url);
+      requests.push(request);
+      if (request.includes("/api/health")) return response(200, { status: "ok" });
+      if (request.includes("/api/nifty-expiries")) return response(200, { expiries: [{ expiry: EXPIRY, daysToExpiry: 24 }] });
+      if (request.includes("/api/zerodha/status")) return response(200, {
+        configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z"
+      });
+      if (request.includes("/api/seller-refresh")) return response(
+        refreshResponse?.status || 429,
+        refreshResponse?.payload || { error: "Zerodha rate limit reached.", kind: "rate_limit" }
+      );
+      if (request.includes("/api/zerodha/login-url")) return response(200, {
+        loginUrl: loginUrl || "https://kite.zerodha.com/connect/login?v=3&api_key=public-key"
+      });
+      return response(404, { error: "Unexpected request." });
+    },
+    Intl,
+    console,
+    Date,
+    URL,
+    setTimeout,
+    clearTimeout,
+    structuredClone
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "popup.js"), "utf8"), sandbox);
+  return { listeners, nodes, openedTabs, requests, storage };
+}
+
+async function settle() {
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+}
+
+test("popup-open and negative UI actions make no seller refresh, chain, position, or trade request", async () => {
+  const runtime = popupRuntime();
+  await settle();
+  const upstreamRequests = () => runtime.requests.filter((url) => (
+    /seller-refresh|nifty-chain|portfolio\/positions|\/trades/.test(url)
+  ));
+  assert.deepEqual(upstreamRequests(), []);
+
+  for (const id of ["legs-toggle", "timeline-toggle", "advanced-toggle", "enabled"]) {
+    await runtime.listeners.get(`${id}:click`)();
+  }
+  runtime.nodes.get("expiry").value = EXPIRY;
+  await runtime.listeners.get("expiry:change")({ target: runtime.nodes.get("expiry") });
+  assert.deepEqual(upstreamRequests(), []);
+});
+
+test("one explicit refresh preserves prior evidence on rate-limit failure and never retries", async () => {
+  const lastEvidence = { version: 1, candidateId: "last-good", canPublish: true, acceptedAt: ACCEPTED_AT };
+  const runtime = popupRuntime({ initialStorage: { sellerSafetyView: lastEvidence } });
+  await settle();
+
+  await runtime.listeners.get("refresh-all:click")();
+  await settle();
+
+  assert.equal(runtime.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  assert.deepEqual(runtime.storage.sellerSafetyView, lastEvidence);
+  assert.equal(runtime.storage.sellerSafetyPending, null);
+  assert.match(runtime.nodes.get("placement-status").textContent, /rate limit/i);
+});
+
+test("hostile bridge login URL is rejected without opening a tab", async () => {
+  const runtime = popupRuntime({
+    loginUrl: "https://kite.zerodha.com.attacker.example/connect/login?v=3&api_key=stolen"
+  });
+  await settle();
+
+  await runtime.listeners.get("connect-zerodha:click")();
+
+  assert.equal(runtime.requests.filter((url) => url.includes("/api/zerodha/login-url")).length, 1);
+  assert.deepEqual(runtime.openedTabs, []);
+  assert.match(runtime.nodes.get("placement-status").textContent, /invalid Zerodha login URL/i);
+});
+
+test("rate-limit and expired-Zerodha bridge failures are single-shot and expose no partial snapshot", async (t) => {
+  const fixture = upstreamFixture();
+  const calls = { positions: 0, trades: 0, chain: 0 };
+  const limited = await startBridge({
+    zerodhaClientFactory: () => ({
+      getPositions: async () => {
+        calls.positions += 1;
+        throw Object.assign(new Error("Zerodha rate limit reached."), { status: 429, kind: "rate_limit" });
+      },
+      getTrades: async () => { calls.trades += 1; return fixture.trades; }
+    }),
+    chainLoader: async () => { calls.chain += 1; return fixture.chain; }
+  });
+  t.after(() => close(limited));
+  const rateResponse = await extensionFetch(limited, `/api/seller-refresh?expiry=${EXPIRY}`);
+  const ratePayload = await rateResponse.json();
+  assert.equal(rateResponse.status, 429);
+  assert.deepEqual(calls, { positions: 1, trades: 1, chain: 1 });
+  assert.deepEqual(ratePayload, { error: "Zerodha rate limit reached.", kind: "rate_limit" });
+  assert.equal(Object.hasOwn(ratePayload, "positions"), false);
+
+  const expiredCalls = { credentials: 0, client: 0, chain: 0 };
+  const expired = await startBridge({
+    sessionStore: {
+      status: async () => ({ configured: true, connected: false, expiresAt: null }),
+      loginUrl: async () => "https://kite.zerodha.com/connect/login?v=3&api_key=public-key",
+      exchangeRequestToken: async () => ({}),
+      credentials: async () => {
+        expiredCalls.credentials += 1;
+        throw Object.assign(new Error("Connect Zerodha for today's session."), { status: 401, kind: "auth" });
+      }
+    },
+    zerodhaClientFactory: () => { expiredCalls.client += 1; return {}; },
+    chainLoader: async () => { expiredCalls.chain += 1; return fixture.chain; }
+  });
+  t.after(() => close(expired));
+  const expiredResponse = await extensionFetch(expired, `/api/seller-refresh?expiry=${EXPIRY}`);
+  const expiredPayload = await expiredResponse.json();
+  assert.equal(expiredResponse.status, 401);
+  assert.deepEqual(expiredCalls, { credentials: 1, client: 0, chain: 0 });
+  assert.deepEqual(expiredPayload, { error: "Connect Zerodha for today's session.", kind: "auth" });
+});
+
+test("timeframe, zoom, pan, and storage redraw reuse one manual chain snapshot", async () => {
+  let chainCalls = 0;
+  let riskPlacements = 0;
+  const chain = {
+    spot: 23767.45,
+    rows: Array.from({ length: 41 }, (_, index) => ({
+      strike: 22900 + index * 50,
+      call: 100 + index,
+      put: 200 + index
+    }))
+  };
+  const scale = {
+    ok: true,
+    gridGapPx: 20,
+    axisPairs: [
+      { price: 24000, y: 100 },
+      { price: 23900, y: 120 },
+      { price: 23800, y: 140 },
+      { price: 23700, y: 160 }
+    ]
+  };
+  const controller = content.createLadderController({
+    expiry: EXPIRY,
+    fetchChain: async () => { chainCalls += 1; return chain; },
+    captureAxisScale: async () => scale,
+    renderRows: () => {},
+    placeRows: () => ({ riskLayout: RISK_LAYOUT }),
+    placeRisk: () => { riskPlacements += 1; return true; }
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  const settings = { enabled: true, selectedStrategyId: "aug-seller", sellerSafetyView: null };
+  content.applyRiskStorageChanges({
+    sellerSafetyView: { newValue: { strategyId: "aug-seller", expiry: EXPIRY, state: "ACCEPTED" } }
+  }, "local", settings, controller);
+  await controller.place();
+  await controller.place();
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 day");
+
+  assert.equal(chainCalls, 1);
+  assert.ok(riskPlacements >= 4);
+});
+
+test("Zerodha client surface is NIFTY-read-only and has no order operation", async () => {
+  const { createZerodhaClient } = await import("../data-bridge/zerodha-client.js");
+  const requests = [];
+  const client = createZerodhaClient({
+    apiKey: "public-key",
+    accessToken: "daily-token",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        async json() { return { status: "success", data: url.endsWith("/trades") ? [] : { net: [] } }; }
+      };
+    }
+  });
+  assert.deepEqual(Object.keys(client).sort(), ["getPositions", "getTrades"]);
+  await client.getPositions();
+  await client.getTrades();
+  assert.deepEqual(requests.map((request) => request.url), [
+    "https://api.kite.trade/portfolio/positions",
+    "https://api.kite.trade/trades"
+  ]);
+  assert.ok(requests.every((request) => request.options.method === "GET" && request.options.body === undefined));
+  assert.doesNotMatch(requests.map((request) => request.url).join(" "), /order|convert|cancel|modify|exit/i);
+});
+
+test("daily token is connected immediately before 06:00 IST and fails closed at the boundary", async () => {
+  const { createZerodhaSessionStore } = await import("../data-bridge/zerodha-session.js");
+  const services = { apiKey: "key", apiSecret: "secret", accessToken: "token" };
+  const tokenRecord = JSON.stringify({
+    accessToken: "daily-token",
+    expiresAt: "2026-07-29T00:30:00.000Z"
+  });
+  function secrets() {
+    const values = new Map([["key", "public-key"], ["secret", "private-secret"], ["token", tokenRecord]]);
+    const deleted = [];
+    return {
+      deleted,
+      readSecret: async (service) => values.get(service) || null,
+      writeSecret: async (service, value) => values.set(service, value),
+      deleteSecret: async (service) => { deleted.push(service); values.delete(service); }
+    };
+  }
+  const beforeSecrets = secrets();
+  const before = createZerodhaSessionStore({
+    ...beforeSecrets,
+    services,
+    now: () => new Date("2026-07-29T00:29:59.999Z")
+  });
+  assert.deepEqual(await before.status(), {
+    configured: true,
+    connected: true,
+    expiresAt: "2026-07-29T00:30:00.000Z"
+  });
+  assert.deepEqual(beforeSecrets.deleted, []);
+
+  const atSecrets = secrets();
+  const atBoundary = createZerodhaSessionStore({
+    ...atSecrets,
+    services,
+    now: () => new Date("2026-07-29T00:30:00.000Z")
+  });
+  assert.deepEqual(await atBoundary.status(), { configured: true, connected: false, expiresAt: null });
+  assert.deepEqual(atSecrets.deleted, ["token"]);
+});
+
+test("standalone whole-trade bands render without blessing blocked current-risk evidence", () => {
+  const layers = riskOverlay.buildRiskLayers({
+    strategyId: "aug-seller",
+    activeStrategyId: "aug-seller",
+    expiry: EXPIRY,
+    activeExpiry: EXPIRY,
+    state: "ACCEPTED",
+    currentRisk: { status: "ENTRY HISTORY INCOMPLETE", breakevens: [], bands: [] },
+    wholeTradeRisk: {
+      status: "OK",
+      breakevens: [23100, 23200],
+      bands: [
+        { kind: "loss", from: 0, to: 23100 },
+        { kind: "profit", from: 23100, to: 23200 },
+        { kind: "loss", from: 23200, to: { unbounded: "right" } }
+      ]
+    }
+  }, (price) => 500 - (price - 23000) * 2, PLOT, RISK_LAYOUT);
+
+  assert.equal(layers.status, "PARTIAL");
+  assert.deepEqual([...new Set(layers.lines.map((line) => line.layer))], ["whole-trade"]);
+  assert.deepEqual(layers.bands.map(({ layer, kind }) => ({ layer, kind })), [
+    { layer: "whole-trade", kind: "loss" },
+    { layer: "whole-trade", kind: "profit" },
+    { layer: "whole-trade", kind: "loss" }
+  ]);
+});
+
+test("release artifacts expose one refresh control, no popup chain table, and version 0.4.0", () => {
+  const html = fs.readFileSync(path.join(__dirname, "popup.html"), "utf8");
+  assert.equal((html.match(/id="refresh-all"/g) || []).length, 1);
+  assert.doesNotMatch(html, /OPEN FULL CHAIN|id="chain-panel"|id="chain"|<table/i);
+  assert.equal(manifest.version, "0.4.0");
+});
+
+test("operator docs define setup, daily review, map semantics, stale behavior, and no-order limits", () => {
+  const extensionReadme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+  const bridgeReadme = fs.readFileSync(path.join(__dirname, "../data-bridge/README.md"), "utf8");
+
+  assert.match(bridgeReadme, /http:\/\/127\.0\.0\.1:8787\/api\/zerodha\/callback/);
+  assert.match(bridgeReadme, /bin\/nifty-bridge zerodha-setup/);
+  assert.match(extensionReadme, /daily[\s\S]*CONNECT ZERODHA[\s\S]*REFRESH ALL/i);
+  assert.match(extensionReadme, /one-time[\s\S]*tradebook CSV import/i);
+  assert.match(extensionReadme, /manual[\s\S]*strategy[\s\S]*allocation[\s\S]*review/i);
+  assert.match(extensionReadme, /current[\s\S]*solid/i);
+  assert.match(extensionReadme, /whole-trade[\s\S]*dashed/i);
+  assert.match(extensionReadme, /profit[\s\S]*loss[\s\S]*bands/i);
+  assert.match(extensionReadme, /EXCLUDING CHARGES/);
+  assert.match(extensionReadme, /HISTORY GAP/);
+  assert.match(extensionReadme, /stale[\s\S]*(last|previous|accepted)[\s\S]*evidence/i);
+  assert.match(`${extensionReadme}\n${bridgeReadme}`, /read-only[\s\S]*no[- ]order/i);
+});
