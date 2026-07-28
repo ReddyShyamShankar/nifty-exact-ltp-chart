@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "NIFTY Axis LTP Ladder",
   "version": "0.3.16",
-  "description": "Thirteen timeframe-aware NIFTY option LTP rows locked to TradingView price coordinates.",
+  "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
   "permissions": ["storage", "activeTab", "debugger"],
   "host_permissions": [
     "http://127.0.0.1:8787/*",

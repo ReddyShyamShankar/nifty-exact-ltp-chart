@@ -10,43 +10,73 @@
     <main class="shell">
       <header class="topbar">
         <div class="brand"><span class="mark" aria-hidden="true"></span><span>NIFTY OPTIONS</span></div>
-        <button class="header-refresh mono" id="refresh-chain" type="button">
-          <span class="refresh-glyph" aria-hidden="true"></span><span id="refresh-label">REFRESH</span>
+        <button class="header-refresh mono" id="refresh-all" type="button">
+          <span class="refresh-glyph" aria-hidden="true"></span><span id="refresh-label">REFRESH ALL</span>
         </button>
       </header>
 
-      <section class="market-card" aria-label="NIFTY contract">
-        <div class="market-row">
-          <div>
-            <span class="kicker">NIFTY 50</span>
-            <div class="spot mono" id="spot">—</div>
-          </div>
-          <span class="status-pill" id="status">OFF</span>
+      <section class="contract-bar" aria-label="Broker and contract">
+        <div class="broker-state">
+          <strong class="mono" id="broker-line">ZERODHA CHECKING…</strong>
+          <button class="connect-link mono" id="connect-zerodha" type="button" hidden>CONNECT ZERODHA</button>
         </div>
-        <label class="expiry-row">
-          <span class="kicker">EXPIRY</span>
+        <label class="expiry-control">
           <select id="expiry" aria-label="Contract expiry"><option value="current_month">Current monthly</option></select>
-          <span class="hint" id="expiry-hint">Loading…</span>
+          <span class="mono" id="expiry-hint">LOADING…</span>
         </label>
       </section>
 
-      <div class="placement-status mono" id="placement-status" role="status">Ready · manual refresh only</div>
-
-      <section class="ladder-state">
-        <div>
-          <strong id="ladder-title">Option ladder is off</strong>
-          <p id="summary">Enable it under Advanced. Numbers change only when you press refresh.</p>
+      <section class="risk-summary" id="risk-summary" aria-live="polite">
+        <div class="priority-line mono" id="priority-label">CURRENT RISK</div>
+        <div class="risk-grid breakeven-grid">
+          <div><span class="metric-label">CURRENT RISK · LOWER BE</span><strong class="mono" id="current-lower">—</strong></div>
+          <div><span class="metric-label">CURRENT RISK · UPPER BE</span><strong class="mono" id="current-upper">—</strong></div>
+          <div><span class="metric-label">WHOLE TRADE · LOWER BE</span><strong class="mono" id="whole-lower">—</strong></div>
+          <div><span class="metric-label">WHOLE TRADE · UPPER BE</span><strong class="mono" id="whole-upper">—</strong></div>
         </div>
-        <span class="state-word mono">NIFTY</span>
+        <div class="whole-status mono" id="whole-status">WITHHELD</div>
+        <div class="risk-grid money-grid">
+          <div><span class="metric-label">LIVE P&amp;L</span><strong class="mono" id="live-pnl">—</strong></div>
+          <div><span class="metric-label">MAX PROFIT</span><strong class="mono" id="max-profit">—</strong></div>
+          <div><span class="metric-label">MAX LOSS</span><strong class="mono" id="max-loss">—</strong></div>
+        </div>
+        <div class="fact-block">
+          <span class="metric-label">WHY IT MOVED</span>
+          <div class="fact-list" id="why-moved"><span>Accept a reviewed snapshot to establish movement facts.</span></div>
+        </div>
+        <div class="warning mono" id="warning">NO ACCEPTED STRATEGY ALLOCATION.</div>
       </section>
 
-      <button class="disclosure mono" id="open-chain" type="button" aria-expanded="false" aria-controls="chain-panel">
-        <span>OPEN FULL CHAIN</span><span aria-hidden="true">⌄</span>
-      </button>
-      <section class="chain-panel" id="chain-panel" hidden>
-        <div class="chain-head mono"><span>CALL</span><span>STRIKE</span><span>PUT</span></div>
-        <div class="chain" id="chain"><div class="empty">Press refresh to load current option numbers.</div></div>
+      <section class="review-panel" id="review-panel" hidden>
+        <div class="section-heading mono">REVIEW POSITION CHANGES</div>
+        <label class="field-label" for="strategy-name">Create one-expiry strategy</label>
+        <div class="inline-form">
+          <input id="strategy-name" type="text" maxlength="48" autocomplete="off" placeholder="Strategy name" />
+          <button class="secondary-button mono" id="create-strategy" type="button">CREATE</button>
+        </div>
+        <label class="field-label" for="selected-strategy">Selected strategy</label>
+        <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
+        <div class="allocation-list" id="allocation-list"></div>
+        <button class="secondary-button wide mono" id="allocate-lots" type="button">ALLOCATE LOTS</button>
+        <label class="file-field" for="tradebook-csv">
+          <span>ZERODHA TRADEBOOK CSV</span>
+          <input id="tradebook-csv" type="file" accept=".csv,text/csv" />
+        </label>
+        <div class="import-summary mono" id="import-summary">NO CSV IMPORTED</div>
+        <button class="accept-button mono" id="accept-snapshot" type="button">ACCEPT REVIEWED SNAPSHOT</button>
       </section>
+
+      <button class="detail-toggle mono" id="legs-toggle" type="button" aria-expanded="false" aria-controls="legs-panel">
+        <span>POSITION LEGS</span><span aria-hidden="true">›</span>
+      </button>
+      <section class="detail-panel" id="legs-panel" hidden><div id="legs-list"></div></section>
+
+      <button class="detail-toggle mono" id="timeline-toggle" type="button" aria-expanded="false" aria-controls="timeline-panel">
+        <span>WHOLE-TRADE TIMELINE</span><span aria-hidden="true">›</span>
+      </button>
+      <section class="detail-panel" id="timeline-panel" hidden><div id="timeline-list"></div></section>
+
+      <div class="placement-status mono" id="placement-status" role="status">READY · MANUAL REFRESH ONLY</div>
 
       <button class="advanced-toggle mono" id="advanced-toggle" type="button" aria-expanded="false" aria-controls="advanced-panel">
         <span>ADVANCED · PLACEMENT &amp; HEALTH</span><span aria-hidden="true">›</span>
@@ -56,11 +86,15 @@
           <div><strong>Show ladder on chart</strong><span>13 strikes · exact axis</span></div>
           <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show on chart"><i></i></button>
         </div>
-        <button class="retry-button mono" id="retry-placement" type="button">RETRY PLACEMENT</button>
+        <button class="secondary-button wide mono" id="retry-placement" type="button">RETRY PLACEMENT</button>
       </section>
 
-      <footer class="foot mono">UPSTOX LTP · MANUAL REFRESH · INFORMATION ONLY</footer>
+      <footer class="foot mono">READ-ONLY BROKER DATA · INFORMATION ONLY</footer>
     </main>
+    <script src="seller-risk.js"></script>
+    <script src="seller-ledger.js"></script>
+    <script src="tradebook-csv.js"></script>
+    <script src="popup-view.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
