@@ -148,7 +148,9 @@
   }
 
   function tradebookBatchFingerprint(trades) {
-    return "ZERODHA_TRADEBOOK_CSV|" + trades.map(tradeFingerprint).slice().sort().join("\n");
+    return "ZERODHA_TRADEBOOK_CSV|" + trades.map((trade) => (
+      `${String(trade.id || "").trim()}|${tradeFingerprint(trade)}`
+    )).slice().sort().join("\n");
   }
 
   function ignored(summary, kind) {
@@ -192,6 +194,14 @@
       const tradingsymbol = valueFor(row, headers, ["tradingsymbol"]).toUpperCase();
       const exchange = valueFor(row, headers, ["exchange"]).toUpperCase();
       const expiry = valueFor(row, headers, ["expiry"]);
+      if (accountHeader && !accountId) {
+        errors.push({ row: rowNumber, reason: "blank account scope is ambiguous" });
+        continue;
+      }
+      if (!exchange) {
+        errors.push({ row: rowNumber, reason: "blank exchange scope is ambiguous" });
+        continue;
+      }
       if (scope.accountId && accountId !== scope.accountId) {
         ignored(summary, "ignoredAccount");
         continue;
@@ -257,23 +267,35 @@
       };
       const fingerprint = tradeFingerprint(trade);
       trade.id = trade.id || fingerprint;
-      candidates.push({ trade, fingerprint, suppliedId: Boolean(suppliedId) });
+      candidates.push({ trade, fingerprint, suppliedId: Boolean(suppliedId), row: rowNumber });
     }
     if (errors.length) return { trades: [], errors, summary: emptySummary() };
 
-    const tradeIds = new Set();
-    const fingerprints = new Set();
+    const tradeIds = new Map();
+    const fallbackFingerprints = new Set();
     const trades = [];
     for (const candidate of candidates) {
-      if (candidate.suppliedId && tradeIds.has(candidate.trade.id)) summary.duplicateIds += 1;
-      else if (fingerprints.has(candidate.fingerprint)) summary.duplicateFingerprints += 1;
-      else {
-        if (candidate.suppliedId) tradeIds.add(candidate.trade.id);
-        fingerprints.add(candidate.fingerprint);
-        trades.push(candidate.trade);
-        summary.accepted += 1;
+      if (candidate.suppliedId) {
+        const existing = tradeIds.get(candidate.trade.id);
+        if (existing) {
+          if (existing !== candidate.fingerprint) {
+            errors.push({ row: candidate.row, reason: "stable trade ID has conflicting content" });
+          } else {
+            summary.duplicateIds += 1;
+          }
+          continue;
+        }
+        tradeIds.set(candidate.trade.id, candidate.fingerprint);
+      } else if (fallbackFingerprints.has(candidate.fingerprint)) {
+        summary.duplicateFingerprints += 1;
+        continue;
+      } else {
+        fallbackFingerprints.add(candidate.fingerprint);
       }
+      trades.push(candidate.trade);
+      summary.accepted += 1;
     }
+    if (errors.length) return { trades: [], errors, summary: emptySummary() };
     return {
       trades,
       errors: [],

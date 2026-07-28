@@ -223,6 +223,23 @@
   }
 
   function inputLegs(inputs) {
+    if (Array.isArray(inputs?.effectiveLegs)) {
+      const legs = new Map();
+      for (const leg of inputs.effectiveLegs) {
+        if (!leg || typeof leg.contractId !== "string" || !leg.contractId ||
+          !finiteNumber(leg.signedLots) || !finiteNumber(leg.lotSize) ||
+          !finiteNumber(leg.entryPrice) || !finiteNumber(leg.strike) ||
+          !["CE", "PE"].includes(leg.optionType)) return null;
+        legs.set(leg.contractId, {
+          contractId: leg.contractId,
+          strike: leg.strike,
+          optionType: leg.optionType,
+          signedLots: leg.signedLots,
+          contribution: normalized(-leg.signedLots * leg.lotSize * leg.entryPrice)
+        });
+      }
+      return legs;
+    }
     if (!inputs || !Array.isArray(inputs.positions) || !Array.isArray(inputs.allocations)) return null;
     const positions = new Map(inputs.positions.map((position) => [position.contractId, position]));
     const legs = new Map();

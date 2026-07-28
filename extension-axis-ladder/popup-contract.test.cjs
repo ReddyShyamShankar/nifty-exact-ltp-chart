@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const content = require("./content.js");
 
 const read = (name) => fs.readFileSync(path.join(__dirname, name), "utf8");
 
@@ -32,7 +33,7 @@ test("popup loads pure seller scripts before browser orchestration", () => {
   const html = read("popup.html");
   const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map((match) => match[1]);
 
-  assert.deepEqual(scripts, ["seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js", "popup.js"]);
+  assert.deepEqual(scripts, ["seller-view-identity.js", "seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js", "popup.js"]);
 });
 
 test("content still accepts exact-axis placement retry", () => {
@@ -51,7 +52,7 @@ function fixedDate(iso) {
 
 function acceptedStorage({ acceptedAt = "2026-08-01T09:00:00+05:30", candidateId = "candidate-stored" } = {}) {
   const view = {
-    version: 1, candidateId, acceptedAt, canPublish: true,
+    version: 2, candidateId, acceptedAt, canPublish: true,
     priority: { kind: "risk", label: "CURRENT RISK" },
     currentRisk: { lower: "23,900.00", upper: "24,300.00" },
     wholeTrade: { lower: "23,875.00", upper: "24,325.00", status: "EXCLUDING CHARGES" },
@@ -60,8 +61,16 @@ function acceptedStorage({ acceptedAt = "2026-08-01T09:00:00+05:30", candidateId
     broker: { kind: "connected", label: "ZERODHA CONNECTED · TODAY", action: null },
     strategyId: "stored-strategy", strategyName: "Stored seller",
     expiry: "2026-08-25", daysToExpiry: 24, spot: "24,120.00",
-    brokerUpdatedAt: acceptedAt, brokerSessionExpiresAt: "2026-08-02T00:30:00.000Z"
+    brokerUpdatedAt: acceptedAt, brokerSessionExpiresAt: "2026-08-02T00:30:00.000Z",
+    provenance: {
+      version: 1,
+      contractIdentity: "NIFTY_EXACT_EXPIRY_V1",
+      strategyId: "stored-strategy",
+      expiry: "2026-08-25",
+      candidateId
+    }
   };
+  const chain = storedChain("2026-08-25", 24120);
   return {
     expiry: "2026-08-25",
     selectedStrategyId: "stored-strategy",
@@ -80,7 +89,9 @@ function acceptedStorage({ acceptedAt = "2026-08-01T09:00:00+05:30", candidateId
     sellerSafetyView: view,
     sellerSafetyChartView: view,
     sellerSafetyViewsByStrategy: { "stored-strategy": view },
-    sellerSafetyChartViewsByStrategy: { "stored-strategy": view }
+    sellerSafetyChartViewsByStrategy: { "stored-strategy": view },
+    sellerSafetyChain: chain,
+    sellerSafetyChainsByExpiry: { "2026-08-25": chain }
   };
 }
 
@@ -92,7 +103,12 @@ function multiStrategyStorage() {
     candidateId: "candidate-same-expiry",
     strategyId: "same-expiry",
     strategyName: "Same expiry",
-    currentRisk: { lower: "23,800.00", upper: "24,400.00" }
+    currentRisk: { lower: "23,800.00", upper: "24,400.00" },
+    provenance: {
+      ...baseView.provenance,
+      strategyId: "same-expiry",
+      candidateId: "candidate-same-expiry"
+    }
   };
   const septemberView = {
     ...structuredClone(baseView),
@@ -100,7 +116,13 @@ function multiStrategyStorage() {
     strategyId: "september",
     strategyName: "September",
     expiry: "2026-09-01",
-    currentRisk: { lower: "23,700.00", upper: "24,500.00" }
+    currentRisk: { lower: "23,700.00", upper: "24,500.00" },
+    provenance: {
+      ...baseView.provenance,
+      strategyId: "september",
+      expiry: "2026-09-01",
+      candidateId: "candidate-september"
+    }
   };
   storage.sellerSafetyLedger.strategies.push(
     {
@@ -118,7 +140,24 @@ function multiStrategyStorage() {
     september: septemberView
   };
   storage.sellerSafetyChartViewsByStrategy = structuredClone(storage.sellerSafetyViewsByStrategy);
+  const septemberChain = storedChain("2026-09-01", 24220);
+  storage.sellerSafetyChainsByExpiry["2026-09-01"] = septemberChain;
   return storage;
+}
+
+function storedChain(expiry, spot) {
+  const atm = Math.round(spot / 50) * 50;
+  return {
+    version: 1,
+    updatedAt: "2026-08-01T09:00:00+05:30",
+    expiry,
+    spot,
+    rows: Array.from({ length: 13 }, (_, index) => ({
+      strike: atm - 300 + index * 50,
+      call: 200 - index,
+      put: 100 + index
+    }))
+  };
 }
 
 function dailyReviewStorage() {
@@ -253,6 +292,7 @@ function popupHarness(initialStorage = {}, options = {}) {
     NiftySellerLedger: require("./seller-ledger.js"),
     NiftyTradebookCsv: require("./tradebook-csv.js"),
     NiftySellerPopupView: require("./popup-view.js"),
+    NiftySellerViewIdentity: require("./seller-view-identity.js"),
     chrome: {
       storage: { local: {
         async get(defaults) { return { ...defaults, ...storage }; },
@@ -358,6 +398,72 @@ test("changed-position refresh preserves accepted evidence across popup reopen w
   assert.equal(reopened.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
 });
 
+test("legacy accepted view preserves operator evidence but migrates chart publication on init and reopen", async () => {
+  const initial = acceptedStorage();
+  const legacy = structuredClone(initial.sellerSafetyView);
+  legacy.version = 1;
+  delete legacy.provenance;
+  initial.sellerSafetyView = legacy;
+  initial.sellerSafetyChartView = legacy;
+  initial.sellerSafetyViewsByStrategy = { "stored-strategy": legacy };
+  initial.sellerSafetyChartViewsByStrategy = { "stored-strategy": legacy };
+
+  const first = popupHarness(initial);
+  await settle();
+
+  assert.deepEqual(structuredClone(first.storage.sellerSafetyView), legacy,
+    "operator evidence survives identity migration");
+  assert.deepEqual(structuredClone(first.storage.sellerSafetyViewsByStrategy["stored-strategy"]), legacy);
+  assert.equal(first.storage.sellerSafetyChartView.canPublish, false);
+  assert.equal(first.storage.sellerSafetyChartView.state, "LEGACY_IDENTITY_REVIEW_REQUIRED");
+  assert.equal(first.storage.sellerSafetyChartViewsByStrategy["stored-strategy"].state,
+    "LEGACY_IDENTITY_REVIEW_REQUIRED");
+  assert.equal(first.nodes.get("current-lower").textContent, "23,900.00");
+  assert.equal(first.nodes.get("priority-label").textContent, "LEGACY IDENTITY REVIEW REQUIRED");
+
+  const reopened = popupHarness(structuredClone(first.storage));
+  await settle();
+  assert.deepEqual(structuredClone(reopened.storage.sellerSafetyView), legacy);
+  assert.equal(reopened.storage.sellerSafetyChartView.state, "LEGACY_IDENTITY_REVIEW_REQUIRED");
+  assert.equal(reopened.nodes.get("priority-label").textContent, "LEGACY IDENTITY REVIEW REQUIRED");
+});
+
+test("content load independently gates an unversioned accepted chart and places zero risk layers", async () => {
+  const legacy = structuredClone(acceptedStorage().sellerSafetyView);
+  legacy.version = 1;
+  delete legacy.provenance;
+  assert.equal(typeof content.normalizeStoredRiskViews, "function");
+  const normalized = content.normalizeStoredRiskViews({
+    sellerSafetyView: legacy,
+    sellerSafetyChartView: legacy
+  });
+  assert.deepEqual(normalized.sellerSafetyView, legacy);
+  assert.equal(normalized.sellerSafetyChartView.state, "LEGACY_IDENTITY_REVIEW_REQUIRED");
+  assert.equal(normalized.sellerSafetyChartView.canPublish, false);
+
+  let placements = 0;
+  let requests = 0;
+  const controller = content.createLadderController({
+    expiry: "2026-08-25",
+    chainSnapshot: storedChain("2026-08-25", 24120),
+    riskView: legacy,
+    fetchChain: async () => { requests += 1; throw new Error("network forbidden"); },
+    captureAxisScale: async () => ({
+      ok: true,
+      gridGapPx: 20,
+      observationSignature: "stable",
+      axisPairs: [{ price: 24400, y: 100 }, { price: 23800, y: 220 }]
+    }),
+    renderRows: () => {},
+    placeRows: () => ({ riskLayout: { labelRight: 640 } }),
+    placeRisk: () => { placements += 1; return true; }
+  });
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(requests, 0);
+  assert.equal(placements, 0);
+  controller.invalidate();
+});
+
 test("failed REFRESH ALL immediately withholds chart while accepted evidence survives reopen", async () => {
   const initial = acceptedStorage();
   const harness = popupHarness(initial, {
@@ -409,6 +515,90 @@ test("strategy switch restores same-expiry and September accepted views without 
   await settle();
   assert.equal(reopened.nodes.get("current-lower").textContent, "23,700.00");
   assert.equal(reopened.storage.sellerSafetyViewsByStrategy["stored-strategy"].candidateId, "candidate-stored");
+});
+
+test("popup storage and content controller restore August to September cached view without requests", async () => {
+  const initial = multiStrategyStorage();
+  const august = storedChain("2026-08-25", 24120);
+  const september = storedChain("2026-09-01", 24220);
+  initial.sellerSafetyChain = august;
+  initial.sellerSafetyChainsByExpiry = {
+    "2026-08-25": august,
+    "2026-09-01": september
+  };
+  const harness = popupHarness(initial, {
+    expiries: [
+      { expiry: "2026-08-25", daysToExpiry: 24 },
+      { expiry: "2026-09-01", daysToExpiry: 31 }
+    ]
+  });
+  await settle();
+
+  await harness.listeners.get("selected-strategy:change")({ target: { value: "september" } });
+  assert.equal(harness.storage.sellerSafetyChain.expiry, "2026-09-01");
+  assert.equal(harness.storage.sellerSafetyChartView.candidateId, "candidate-september");
+  assert.equal(harness.requests.filter((url) => /seller-refresh|nifty-chain/.test(url)).length, 0);
+
+  let requests = 0;
+  const placements = [];
+  const controller = content.createLadderController({
+    expiry: "2026-08-25",
+    chainSnapshot: august,
+    chainSnapshotsByExpiry: harness.storage.sellerSafetyChainsByExpiry,
+    riskView: initial.sellerSafetyChartView,
+    now: () => Date.parse("2026-08-01T09:05:00+05:30"),
+    fetchChain: async () => { requests += 1; throw new Error("network forbidden"); },
+    captureAxisScale: async () => ({
+      ok: true,
+      gridGapPx: 20,
+      observationSignature: "stable",
+      axisPairs: [{ price: 24500, y: 100 }, { price: 23800, y: 240 }]
+    }),
+    renderRows: () => {},
+    placeRows: () => ({ riskLayout: { labelRight: 640 } }),
+    placeRisk: (view) => { placements.push(view.candidateId); return true; }
+  });
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(await controller.setExpiry("2026-09-01"), true,
+    "validated exact-expiry cache is available after expiry switch");
+  controller.setRiskView(harness.storage.sellerSafetyChartView);
+  assert.equal(await controller.rebuild("1h"), true);
+  assert.equal(controller.chain().expiry, "2026-09-01");
+  assert.equal(placements.at(-1), "candidate-september");
+  assert.equal(requests, 0);
+  controller.invalidate();
+});
+
+test("content controller rejects a valid snapshot for the wrong active expiry without a request", () => {
+  let requests = 0;
+  const controller = content.createLadderController({
+    expiry: "2026-08-25",
+    now: () => Date.parse("2026-08-01T09:05:00+05:30"),
+    fetchChain: async () => { requests += 1; return storedChain("2026-08-25", 24120); }
+  });
+
+  assert.equal(controller.setChainSnapshot(storedChain("2026-09-01", 24220)), false);
+  assert.equal(controller.hasCachedChain(), false);
+  assert.equal(requests, 0);
+  controller.invalidate();
+});
+
+test("popup withholds a stale different-expiry cache without a request", async () => {
+  const initial = multiStrategyStorage();
+  initial.sellerSafetyChainsByExpiry["2026-09-01"].updatedAt = "2026-08-01T08:00:00+05:30";
+  const harness = popupHarness(initial, {
+    Date: fixedDate("2026-08-01T09:05:00+05:30"),
+    expiries: [
+      { expiry: "2026-08-25", daysToExpiry: 24 },
+      { expiry: "2026-09-01", daysToExpiry: 31 }
+    ]
+  });
+  await settle();
+
+  await harness.listeners.get("selected-strategy:change")({ target: { value: "september" } });
+  assert.equal(harness.storage.sellerSafetyChain, null);
+  assert.equal(harness.storage.sellerSafetyChartView, null);
+  assert.equal(harness.requests.filter((url) => /seller-refresh|nifty-chain/.test(url)).length, 0);
 });
 
 test("CSV import stays staged until explicit quantity dispositions and coverage confirmation", async () => {

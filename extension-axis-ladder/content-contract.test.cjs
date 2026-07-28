@@ -6,6 +6,23 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const api = require("./content.js");
+const viewIdentity = require("./seller-view-identity.js");
+
+const RISK_EXPIRY = "2026-08-25";
+
+function acceptedRiskView(overrides = {}) {
+  const view = {
+    version: viewIdentity.ACCEPTED_VIEW_VERSION,
+    canPublish: true,
+    strategyId: "s1",
+    expiry: RISK_EXPIRY,
+    candidateId: "accepted-1",
+    state: "ACCEPTED",
+    ...overrides
+  };
+  view.provenance = viewIdentity.acceptedProvenance(view);
+  return view;
+}
 
 function chain(spot, delta = 0) {
   return {
@@ -181,7 +198,7 @@ test("risk view changes redraw from cached axis while zoom pan and timeframe reu
   let riskHides = 0;
   const riskPlacements = [];
   const controller = api.createLadderController({
-    expiry: "current_month",
+    expiry: RISK_EXPIRY,
     fetchChain: async () => { fetches += 1; return chain(23767.45); },
     captureAxisScale: async () => { captures += 1; return scale(); },
     renderRows: () => {},
@@ -199,7 +216,7 @@ test("risk view changes redraw from cached axis while zoom pan and timeframe reu
   assert.deepEqual(riskPlacements, []);
   assert.equal(riskHides, 1);
 
-  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED" };
+  const accepted = acceptedRiskView();
   const settings = { enabled: true, selectedStrategyId: "s1", sellerSafetyView: null };
   assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: accepted } }, "local", settings, controller), true);
   assert.equal(settings.sellerSafetyView, accepted);
@@ -227,15 +244,12 @@ test("accepted risk auto-hides at fifteen-minute broker deadline without a netwo
   let riskPlacements = 0;
   let riskHides = 0;
   let deadline;
-  const accepted = {
-    canPublish: true,
-    strategyId: "s1",
-    expiry: "current_month",
+  const accepted = acceptedRiskView({
     brokerUpdatedAt: "2026-08-01T03:50:00.000Z",
     brokerSessionExpiresAt: "2026-08-02T00:30:00.000Z"
-  };
+  });
   const controller = api.createLadderController({
-    expiry: "current_month",
+    expiry: RISK_EXPIRY,
     riskView: accepted,
     now: () => now,
     scheduleRiskDeadline: (run, delay) => { deadline = { run, delay }; return 91; },
@@ -262,7 +276,7 @@ test("accepted risk auto-hides at fifteen-minute broker deadline without a netwo
 });
 
 test("withheld chart state hides risk without erasing separately stored operator evidence", () => {
-  const accepted = { canPublish: true, candidateId: "accepted-1" };
+  const accepted = acceptedRiskView();
   const withheld = {
     canPublish: false,
     candidateId: "pending-2",
@@ -290,14 +304,11 @@ test("accepted risk uses earlier Zerodha session expiry as local placement deadl
   let riskPlacements = 0;
   let deadline;
   const controller = api.createLadderController({
-    expiry: "current_month",
-    riskView: {
-      canPublish: true,
-      strategyId: "s1",
-      expiry: "current_month",
+    expiry: RISK_EXPIRY,
+    riskView: acceptedRiskView({
       brokerUpdatedAt: "2026-08-01T03:50:00.000Z",
       brokerSessionExpiresAt: "2026-08-01T03:55:00.000Z"
-    },
+    }),
     now: () => now,
     scheduleRiskDeadline: (run, delay) => { deadline = { run, delay }; return 92; },
     cancelRiskDeadline: () => {},
@@ -321,9 +332,9 @@ test("failed row placement clears the cached risk label boundary", async () => {
   let rowPlacements = 0;
   let riskHides = 0;
   const labelRights = [];
-  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED" };
+  const accepted = acceptedRiskView();
   const controller = api.createLadderController({
-    expiry: "current_month",
+    expiry: RISK_EXPIRY,
     riskView: accepted,
     fetchChain: async () => chain(23767.45),
     captureAxisScale: async () => scale(),
@@ -352,9 +363,9 @@ test("storage risk update during rebuild cannot revive prior layout", async () =
   let resolveRebuildCapture;
   const pendingRebuildCapture = new Promise((resolve) => { resolveRebuildCapture = resolve; });
   const riskPlacements = [];
-  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED", acceptedAt: "old" };
+  const accepted = acceptedRiskView({ acceptedAt: "old" });
   const controller = api.createLadderController({
-    expiry: "current_month",
+    expiry: RISK_EXPIRY,
     riskView: accepted,
     fetchChain: async () => { fetches += 1; return chain(23767.45); },
     captureAxisScale: async () => {
@@ -396,9 +407,9 @@ test("storage risk update after capture failure cannot revive prior layout", asy
   let rowPlacements = 0;
   let riskVisible = false;
   const riskPlacements = [];
-  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED", acceptedAt: "old" };
+  const accepted = acceptedRiskView({ acceptedAt: "old" });
   const controller = api.createLadderController({
-    expiry: "current_month",
+    expiry: RISK_EXPIRY,
     riskView: accepted,
     fetchChain: async () => { fetches += 1; return chain(23767.45); },
     captureAxisScale: async () => {
@@ -440,9 +451,9 @@ test("storage risk update while capture is pending cannot redraw prior layout", 
   let resolvePlacementCapture;
   const pendingPlacementCapture = new Promise((resolve) => { resolvePlacementCapture = resolve; });
   const riskPlacements = [];
-  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED", acceptedAt: "old" };
+  const accepted = acceptedRiskView({ acceptedAt: "old" });
   const controller = api.createLadderController({
-    expiry: "current_month",
+    expiry: RISK_EXPIRY,
     riskView: accepted,
     fetchChain: async () => { fetches += 1; return chain(23767.45); },
     captureAxisScale: async () => {
@@ -1617,6 +1628,7 @@ test("browser lifecycle disconnects observers and relies only on fresh axis obse
   const root = makeNode();
   const sandbox = {
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
+    NiftySellerViewIdentity: viewIdentity,
     AbortController,
     MutationObserver: class {
       constructor() { this.disconnects = 0; observers.push(this); }
@@ -1676,6 +1688,7 @@ test("enabled NIFTY tab waits for manual refresh before first chain request", as
   };
   const sandbox = {
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
+    NiftySellerViewIdentity: viewIdentity,
     AbortController,
     MutationObserver: class { observe() {} disconnect() {} },
     chrome: {

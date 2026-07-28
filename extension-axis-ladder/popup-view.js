@@ -2,12 +2,16 @@
   "use strict";
 
   const dependencies = typeof module !== "undefined" && module.exports
-    ? { risk: require("./seller-risk.js"), ledger: require("./seller-ledger.js") }
-    : { risk: root.NiftySellerRisk, ledger: root.NiftySellerLedger };
+    ? {
+      risk: require("./seller-risk.js"),
+      ledger: require("./seller-ledger.js"),
+      viewIdentity: require("./seller-view-identity.js")
+    }
+    : { risk: root.NiftySellerRisk, ledger: root.NiftySellerLedger, viewIdentity: root.NiftySellerViewIdentity };
   const api = factory(dependencies);
   root.NiftySellerPopupView = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
-})(typeof globalThis === "undefined" ? this : globalThis, function ({ risk, ledger: ledgerApi }) {
+})(typeof globalThis === "undefined" ? this : globalThis, function ({ risk, ledger: ledgerApi, viewIdentity }) {
   const STALE_AFTER_MS = 15 * 60 * 1000;
 
   function finite(value) {
@@ -184,7 +188,7 @@
     const broker = brokerView(brokerStatus, chain?.updatedAt, now);
     const candidateId = typeof chain?.candidateId === "string" ? chain.candidateId : "";
     const base = {
-      version: 1,
+      version: viewIdentity.ACCEPTED_VIEW_VERSION,
       candidateId,
       acceptedAt: now,
       brokerUpdatedAt: chain?.updatedAt || null,
@@ -201,6 +205,7 @@
       legs: legsFor(sourceLedger || { brokerPositions: [] }, strategy),
       timeline: timelineFor(strategy)
     };
+    base.provenance = viewIdentity.acceptedProvenance(base);
     if (reviewChanges.length) {
       return {
         ...base,

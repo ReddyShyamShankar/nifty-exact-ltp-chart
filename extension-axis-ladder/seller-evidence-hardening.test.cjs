@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const ledger = require("./seller-ledger.js");
 const risk = require("./seller-risk.js");
+const csv = require("./tradebook-csv.js");
 
 const EXPIRY = "2026-08-25";
 
@@ -11,7 +12,8 @@ function contractId(expiry = EXPIRY, strike = 24100, optionType = "CE") {
   return `NFO:NIFTY:${expiry}:${strike}:${optionType}`;
 }
 
-function position({ expiry = EXPIRY, strike = 24100, optionType = "CE", quantity = -65, symbol = "NIFTY26AUG24100CE" } = {}) {
+function position({ expiry = EXPIRY, strike = 24100, optionType = "CE", quantity = -65,
+  symbol = "NIFTY26AUG24100CE", averagePrice = 100 } = {}) {
   return {
     contractId: contractId(expiry, strike, optionType),
     tradingsymbol: symbol,
@@ -22,7 +24,7 @@ function position({ expiry = EXPIRY, strike = 24100, optionType = "CE", quantity
     optionType,
     signedQuantity: quantity,
     lotSize: 65,
-    averagePrice: 100,
+    averagePrice,
     lastPrice: 90,
     pnl: 650
   };
@@ -209,6 +211,93 @@ test("unrelated same-contract round trip cannot create false ₹9,750 cash or 24
   assert.deepEqual(map.breakevens, [24200]);
   assert.notEqual(map.cashBalance, 9750);
   assert.notDeepEqual(map.breakevens, [24250]);
+});
+
+test("parser through ledger and risk preserves stable IDs with identical content and yields ₹13,000 / 24,300", () => {
+  const parsed = csv.parseTradebookCsv(
+    "trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "stable-sell-a,o-1,NFO,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n" +
+    "stable-sell-b,o-1,NFO,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n" +
+    "stable-buy,o-2,NFO,NIFTY26AUG24100CE,BUY,65,0,2026-08-01T10:15:00+05:30,2026-08-25\n",
+    { underlying: "NIFTY", expiry: EXPIRY }
+  );
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.trades.map((trade) => trade.id), ["stable-sell-a", "stable-sell-b", "stable-buy"]);
+
+  let current = strategy(ledger.emptyLedger(), "stable-ids");
+  current = ledger.reconcilePositions(current, [position()], { expiry: EXPIRY });
+  current = ledger.allocateLots(current, { strategyId: "stable-ids", contractId: contractId(), signedLots: -1 });
+  current = ledger.stageTradebookImport(current, {
+    sourceKind: parsed.sourceKind,
+    trades: parsed.trades,
+    batchFingerprint: parsed.batchFingerprint,
+    stagedAt: "2026-08-02T09:00:00+05:30",
+    scope: { underlying: "NIFTY", expiry: EXPIRY }
+  });
+  for (const trade of parsed.trades) current = assign(current, trade.id, trade.quantity, "stable-ids");
+  current = confirmCoverage(current, "stable-ids", parsed.batchFingerprint);
+
+  const input = ledger.strategyRiskInput(current, "stable-ids");
+  const map = risk.wholeTradeRiskMap({ openLegs: input.openLegs, fills: input.fills, history: input.history });
+  assert.equal(input.status, "OK");
+  assert.deepEqual(input.fills.map((fill) => fill.id), ["stable-sell-a", "stable-sell-b", "stable-buy"]);
+  assert.equal(map.cashBalance, 13000);
+  assert.deepEqual(map.breakevens, [24300]);
+});
+
+test("why-moved uses persisted split-strategy effective entry economics", () => {
+  function splitInput(aggregateAverage, ownedEntry) {
+    let current = ledger.emptyLedger();
+    current = strategy(current, "owned");
+    current = strategy(current, "other");
+    current = ledger.reconcilePositions(current, [position({ quantity: -130, averagePrice: aggregateAverage })], { expiry: EXPIRY });
+    current = ledger.allocateLots(current, { strategyId: "owned", contractId: contractId(), signedLots: -1 });
+    current = ledger.allocateLots(current, { strategyId: "other", contractId: contractId(), signedLots: -1 });
+    current = stage(current, [
+      fill("owned-fill", { price: ownedEntry }),
+      fill("other-fill", { price: 250, timestamp: "2026-08-01T09:16:00+05:30" })
+    ]);
+    current = assign(current, "owned-fill", 65, "owned");
+    current = assign(current, "other-fill", 65, "other");
+    current = confirmCoverage(current, "owned");
+    current = confirmCoverage(current, "other");
+    return { current, input: ledger.strategyRiskInput(current, "owned") };
+  }
+
+  const baseline = splitInput(175, 100);
+  const aggregateOnly = splitInput(190, 100);
+  assert.equal(baseline.input.openLegs[0].entryPrice, 100);
+  assert.equal(aggregateOnly.input.openLegs[0].entryPrice, 100);
+  assert.ok(Array.isArray(baseline.input.normalizedInputs.effectiveLegs),
+    "normalized accepted inputs persist strategy-effective economics");
+  assert.ok(Array.isArray(aggregateOnly.input.normalizedInputs.effectiveLegs));
+  assert.equal(baseline.input.normalizedInputs.effectiveLegs[0].entryPrice, 100);
+  assert.equal(aggregateOnly.input.normalizedInputs.effectiveLegs[0].entryPrice, 100);
+
+  const unchanged = risk.explainRiskChange(
+    risk.currentRiskMap({ legs: baseline.input.openLegs }),
+    risk.currentRiskMap({ legs: aggregateOnly.input.openLegs }),
+    { previousInputs: baseline.input.normalizedInputs, nextInputs: aggregateOnly.input.normalizedInputs }
+  );
+  assert.deepEqual(unchanged.facts, []);
+
+  const accepted = accept(baseline.current, "owned");
+  assert.equal(accepted.strategies.find((item) => item.id === "owned")
+    .snapshots.at(-1).normalizedInputs.effectiveLegs[0].entryPrice, 100);
+
+  const ownedChanged = splitInput(190, 110);
+  const changed = risk.explainRiskChange(
+    risk.currentRiskMap({ legs: baseline.input.openLegs }),
+    risk.currentRiskMap({ legs: ownedChanged.input.openLegs }),
+    { previousInputs: baseline.input.normalizedInputs, nextInputs: ownedChanged.input.normalizedInputs }
+  );
+  assert.deepEqual(changed.facts, [
+    "24,100 CE premium/debit contribution changed from +₹6,500.00 to +₹7,150.00 (+₹650.00).",
+    "Net premium/debit changed from +₹6,500.00 to +₹7,150.00 (+₹650.00).",
+    "Breakeven 1 moved 10.00 points higher.",
+    "Profit/loss band boundaries changed.",
+    "Maximum profit increased by 650.00."
+  ]);
 });
 
 test("whole-trade history stays closed until operator declares coverage bounds", () => {

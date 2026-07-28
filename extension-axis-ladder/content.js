@@ -9,7 +9,8 @@
     selectedStrategyId: "",
     sellerSafetyView: null,
     sellerSafetyChartView: null,
-    sellerSafetyChain: null
+    sellerSafetyChain: null,
+    sellerSafetyChainsByExpiry: {}
   };
   const RETRY_DELAYS = [0, 250, 650, 1200];
   const API = "http://127.0.0.1:8787";
@@ -22,6 +23,8 @@
     || (typeof module !== "undefined" && module.exports ? require("./timeframe-ladder.js") : null);
   const riskOverlayApi = root.NiftyRiskOverlay
     || (typeof module !== "undefined" && module.exports ? require("./risk-overlay.js") : null);
+  const sellerViewIdentityApi = root.NiftySellerViewIdentity
+    || (typeof module !== "undefined" && module.exports ? require("./seller-view-identity.js") : null);
 
   function quote(value) {
     if (typeof value === "boolean" || value === null || value === undefined) return null;
@@ -251,28 +254,56 @@
     let lastSpot = null;
     let dataStatus = "STALE";
     let cachedChain = null;
+    const chainSnapshotsByExpiry = new Map();
     let riskView = dependencies.riskView || null;
 
-    function setChainSnapshot(snapshot) {
+    function normalizedChainSnapshot(snapshot) {
       if (!snapshot
         || snapshot.version !== 1
-        || snapshot.expiry !== expiry
+        || !sellerViewIdentityApi.exactIsoDate(snapshot.expiry)
         || typeof snapshot.updatedAt !== "string"
         || !Number.isFinite(Date.parse(snapshot.updatedAt))
+        || Number(now()) - Date.parse(snapshot.updatedAt) > SELLER_SAFETY_STALE_MS
         || !Number.isFinite(Number(snapshot.spot))
         || !Array.isArray(snapshot.rows)
-        || snapshot.rows.length < 13) return false;
-      cachedChain = {
+        || snapshot.rows.length < 13
+        || snapshot.rows.some((row) => !Number.isFinite(Number(row?.strike)))
+        || new Set(snapshot.rows.map((row) => Number(row.strike))).size !== snapshot.rows.length) return null;
+      return {
         version: 1,
         updatedAt: snapshot.updatedAt,
         expiry: snapshot.expiry,
         spot: Number(snapshot.spot),
         rows: snapshot.rows.map((row) => ({ ...row }))
       };
+    }
+
+    function setChainSnapshot(snapshot) {
+      const stored = normalizedChainSnapshot(snapshot);
+      if (!stored) return false;
+      chainSnapshotsByExpiry.set(stored.expiry, stored);
+      if (stored.expiry !== expiry) return false;
+      cachedChain = stored;
       return true;
     }
 
+    function setChainSnapshots(snapshots) {
+      if (!snapshots || typeof snapshots !== "object" || Array.isArray(snapshots)) return 0;
+      chainSnapshotsByExpiry.clear();
+      let accepted = 0;
+      for (const snapshot of Object.values(snapshots)) {
+        const stored = normalizedChainSnapshot(snapshot);
+        if (!stored) continue;
+        chainSnapshotsByExpiry.set(stored.expiry, stored);
+        accepted += 1;
+      }
+      cachedChain = chainSnapshotsByExpiry.get(expiry) || null;
+      return accepted;
+    }
+
+    setChainSnapshots(dependencies.chainSnapshotsByExpiry);
     if (dependencies.chainSnapshot) setChainSnapshot(dependencies.chainSnapshot);
+    cachedChain = chainSnapshotsByExpiry.get(expiry) || null;
 
     function clearRebuildRetry() {
       if (retryTimer !== null) cancelRetry(retryTimer);
@@ -294,7 +325,7 @@
     }
 
     function riskIsPublishable(view, at = now()) {
-      if (!view || view.canPublish === false) return false;
+      if (!sellerViewIdentityApi.isCanonicalAcceptedView(view)) return false;
       const deadline = riskDeadline(view);
       return deadline === null || Number(at) < deadline;
     }
@@ -673,14 +704,14 @@
       clearRebuildRetry();
       clearRiskDeadline();
       current = null;
-      cachedChain = null;
+      cachedChain = chainSnapshotsByExpiry.get(expiry) || null;
       cachedAxisToY = null;
       clearCachedRiskPlacement();
       hideRisk();
       dataStatus = "STALE";
       hideRows("PRESS REFRESH OPTION NUMBERS");
       setStatus("MANUAL REFRESH REQUIRED");
-      return false;
+      return Boolean(cachedChain);
     }
 
     function invalidate() {
@@ -715,6 +746,7 @@
       rebuild,
       refreshLtp,
       setChainSnapshot,
+      setChainSnapshots,
       setExpiry,
       setRiskView,
       syncTimeframe
@@ -737,13 +769,35 @@
       changed = true;
     }
     if (changed && targetSettings.enabled) {
-      activeController?.setRiskView(targetSettings.sellerSafetyChartView ||
-        (changes.sellerSafetyChartView ? null : targetSettings.sellerSafetyView));
+      const candidate = targetSettings.sellerSafetyChartView ||
+        (changes.sellerSafetyChartView ? null : targetSettings.sellerSafetyView);
+      const normalized = sellerViewIdentityApi.normalizeStoredRiskViews({
+        sellerSafetyView: targetSettings.sellerSafetyView,
+        sellerSafetyChartView: candidate
+      });
+      if (normalized.sellerSafetyChartView !== candidate) {
+        targetSettings.sellerSafetyChartView = normalized.sellerSafetyChartView;
+      }
+      activeController?.setRiskView(normalized.sellerSafetyChartView);
     }
     return changed;
   }
 
-  const api = { applyRiskStorageChanges, axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, riskBandClassName, riskLabelLayout, rowLaneLayout, rowsFitPlot };
+  const api = {
+    applyRiskStorageChanges,
+    axisPriceToY,
+    createLadderController,
+    formatRow,
+    freezeMembership,
+    intervalFromAxisScale,
+    isNiftyChartLabel,
+    normalizeStoredRiskViews: sellerViewIdentityApi.normalizeStoredRiskViews,
+    refreshMembership,
+    riskBandClassName,
+    riskLabelLayout,
+    rowLaneLayout,
+    rowsFitPlot
+  };
   root.NiftyAxisLadderContent = api;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
@@ -1143,6 +1197,7 @@
       renderRows,
       riskView: settings.sellerSafetyChartView || settings.sellerSafetyView,
       chainSnapshot: settings.sellerSafetyChain,
+      chainSnapshotsByExpiry: settings.sellerSafetyChainsByExpiry,
       setStatus: showStatus
     });
     currentLabel = chartCanvas()?.getAttribute("aria-label") || "";
@@ -1173,7 +1228,11 @@
   }
 
   chrome.storage.local.get(DEFAULTS, (stored) => {
-    settings = { ...DEFAULTS, ...stored };
+    const loaded = { ...DEFAULTS, ...stored };
+    settings = sellerViewIdentityApi.normalizeStoredRiskViews(loaded);
+    if (settings.sellerSafetyChartView !== loaded.sellerSafetyChartView) {
+      chrome.storage.local.set?.({ sellerSafetyChartView: settings.sellerSafetyChartView });
+    }
     if (settings.enabled) start();
   });
 
@@ -1183,16 +1242,27 @@
       settings.enabled = Boolean(changes.enabled.newValue);
       if (settings.enabled) start(); else stop();
     }
+    if (changes.sellerSafetyChainsByExpiry) {
+      settings.sellerSafetyChainsByExpiry = changes.sellerSafetyChainsByExpiry.newValue || {};
+      if (settings.enabled) controller?.setChainSnapshots(settings.sellerSafetyChainsByExpiry);
+    }
+    if (changes.sellerSafetyChain) settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
     if (changes.expiry) {
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
-      if (settings.enabled) controller?.setExpiry(settings.expiry).then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
-    }
-    if (changes.sellerSafetyChain) {
-      settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
-      if (settings.enabled && controller?.setChainSnapshot(settings.sellerSafetyChain)) {
-        controller.rebuild(timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || ""))
-          .then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
+      if (settings.enabled) {
+        controller?.setExpiry(settings.expiry).then((hasCached) => {
+          const activeSnapshotAccepted = settings.sellerSafetyChain
+            ? controller?.setChainSnapshot(settings.sellerSafetyChain)
+            : false;
+          if (hasCached || activeSnapshotAccepted) {
+            controller.rebuild(timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || ""))
+              .then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
+          }
+        });
       }
+    } else if (changes.sellerSafetyChain && settings.enabled && controller?.setChainSnapshot(settings.sellerSafetyChain)) {
+      controller.rebuild(timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || ""))
+        .then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
     }
     applyRiskStorageChanges(changes, area, settings, controller);
   });

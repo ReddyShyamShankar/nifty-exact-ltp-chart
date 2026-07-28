@@ -1,6 +1,7 @@
 "use strict";
 
 const API = "http://127.0.0.1:8787";
+const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
 const DEFAULTS = {
   enabled: false,
   expiry: "current_month",
@@ -12,7 +13,8 @@ const DEFAULTS = {
   sellerSafetyChartViewsByStrategy: {},
   sellerSafetyRefreshFailuresByExpiry: {},
   sellerSafetyPending: null,
-  sellerSafetyChain: null
+  sellerSafetyChain: null,
+  sellerSafetyChainsByExpiry: {}
 };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
@@ -60,6 +62,26 @@ async function clearPendingCandidate() {
   pendingReview = null;
   state = { ...state, sellerSafetyPending: null };
   await chrome.storage.local.set({ sellerSafetyPending: null });
+}
+
+function validStoredChain(snapshot, expiry = snapshot?.expiry) {
+  const updatedAt = Date.parse(snapshot?.updatedAt || "");
+  return Boolean(snapshot && snapshot.version === 1 &&
+    NiftySellerViewIdentity.exactIsoDate(expiry) && snapshot.expiry === expiry &&
+    typeof snapshot.updatedAt === "string" && Number.isFinite(updatedAt) &&
+    Date.now() - updatedAt <= SELLER_SAFETY_STALE_MS &&
+    Number.isFinite(Number(snapshot.spot)) && Array.isArray(snapshot.rows) && snapshot.rows.length >= 13 &&
+    snapshot.rows.every((row) => Number.isFinite(Number(row?.strike))) &&
+    new Set(snapshot.rows.map((row) => Number(row.strike))).size === snapshot.rows.length);
+}
+
+function storedChainFor(expiry, chains = state.sellerSafetyChainsByExpiry || {}) {
+  const snapshot = chains[expiry];
+  return validStoredChain(snapshot, expiry) ? snapshot : null;
+}
+
+function legacyChartFor(evidence) {
+  return NiftySellerViewIdentity.legacyIdentityReviewView(evidence);
 }
 
 function appendTextRows(container, values, emptyLabel) {
@@ -240,6 +262,18 @@ function chartPointerFor(strategyId, expiry) {
   return state.sellerSafetyRefreshFailuresByExpiry?.[expiry] || acceptedChartFor(strategyId);
 }
 
+function restoredChartPointerFor(strategyId, expiry) {
+  const evidence = acceptedViewFor(strategyId);
+  if (evidence?.canPublish === true && !NiftySellerViewIdentity.isCanonicalAcceptedView(evidence)) {
+    return legacyChartFor(evidence);
+  }
+  const chart = chartPointerFor(strategyId, expiry);
+  if (chart?.canPublish === true && !NiftySellerViewIdentity.isCanonicalAcceptedView(chart)) {
+    return legacyChartFor(chart);
+  }
+  return chart?.canPublish === true && !storedChainFor(expiry) ? null : chart;
+}
+
 function currentView(chain) {
   const selectedChain = chain || (pendingMatchesSelection() ? pendingReview.chain : null) ||
     (state.sellerSafetyChain?.expiry === state.expiry ? state.sellerSafetyChain : { expiry: state.expiry });
@@ -259,6 +293,14 @@ function latestAcceptedCandidateId() {
 
 function renderCurrent({ pending = pendingMatchesSelection() } = {}) {
   const stored = acceptedViewFor();
+  if (stored?.canPublish === true && !NiftySellerViewIdentity.isCanonicalAcceptedView(stored)) {
+    renderView({
+      ...stored,
+      ...legacyChartFor(stored),
+      warning: "LAST ACCEPTED OPERATOR EVIDENCE ONLY. EXACT-EXPIRY IDENTITY REVIEW REQUIRED BEFORE CHART PUBLICATION."
+    });
+    return;
+  }
   const validStoredView = stored?.canPublish === true && stored.priority && stored.currentRisk &&
     stored.wholeTrade && stored.broker && Array.isArray(stored.whyMoved) &&
     Array.isArray(stored.legs) && Array.isArray(stored.timeline) &&
@@ -444,12 +486,17 @@ async function refreshAll() {
     const candidate = validateRefreshPayload(data);
     const failuresByExpiry = { ...(state.sellerSafetyRefreshFailuresByExpiry || {}) };
     delete failuresByExpiry[state.expiry];
+    const chainsByExpiry = { ...(state.sellerSafetyChainsByExpiry || {}) };
+    if (validStoredChain(candidate.chainSnapshot, state.expiry)) {
+      chainsByExpiry[state.expiry] = candidate.chainSnapshot;
+    }
     await persist({
       sellerSafetyLedger: candidate.nextLedger,
       sellerSafetyChartView: withheldChartView(candidate),
       sellerSafetyRefreshFailuresByExpiry: failuresByExpiry,
       sellerSafetyPending: candidate.pending,
-      sellerSafetyChain: candidate.chainSnapshot
+      sellerSafetyChain: candidate.chainSnapshot,
+      sellerSafetyChainsByExpiry: chainsByExpiry
     });
     renderCurrent({ pending: true });
     $("#placement-status").textContent = ledger.tradeReviews?.length
@@ -740,7 +787,8 @@ function bindEvents() {
       selectedStrategyId: event.target.value,
       expiry,
       sellerSafetyView: view,
-      sellerSafetyChartView: strategy ? chartPointerFor(strategy.id, expiry) : null,
+      sellerSafetyChartView: strategy ? restoredChartPointerFor(strategy.id, expiry) : null,
+      sellerSafetyChain: storedChainFor(expiry),
       sellerSafetyPending: pendingReview
     });
     renderSettings();
@@ -755,7 +803,8 @@ function bindEvents() {
       expiry: event.target.value,
       selectedStrategyId: matching?.id || "",
       sellerSafetyView: view,
-      sellerSafetyChartView: matching ? chartPointerFor(matching.id, matching.expiry) : null,
+      sellerSafetyChartView: matching ? restoredChartPointerFor(matching.id, matching.expiry) : null,
+      sellerSafetyChain: storedChainFor(event.target.value),
       sellerSafetyPending: pendingReview
     });
     const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
@@ -786,11 +835,37 @@ async function init() {
     !chartViewsByStrategy[state.sellerSafetyChartView.strategyId]) {
     chartViewsByStrategy[state.sellerSafetyChartView.strategyId] = state.sellerSafetyChartView;
   }
+  for (const [strategyId, evidence] of Object.entries(viewsByStrategy)) {
+    if (evidence?.canPublish === true && !NiftySellerViewIdentity.isCanonicalAcceptedView(evidence)) {
+      chartViewsByStrategy[strategyId] = legacyChartFor(evidence);
+    } else if (chartViewsByStrategy[strategyId]?.canPublish === true &&
+      !NiftySellerViewIdentity.isCanonicalAcceptedView(chartViewsByStrategy[strategyId])) {
+      chartViewsByStrategy[strategyId] = legacyChartFor(chartViewsByStrategy[strategyId]);
+    }
+  }
+  const chainsByExpiry = { ...(state.sellerSafetyChainsByExpiry || {}) };
+  if (validStoredChain(state.sellerSafetyChain)) {
+    chainsByExpiry[state.sellerSafetyChain.expiry] = state.sellerSafetyChain;
+  }
+  for (const [expiry, snapshot] of Object.entries(chainsByExpiry)) {
+    if (!validStoredChain(snapshot, expiry)) delete chainsByExpiry[expiry];
+  }
   const restoredStrategy = ledger.strategies.find((strategy) => strategy.id === state.selectedStrategyId);
+  const restoredExpiry = restoredStrategy?.expiry || state.expiry;
+  const normalizedActive = NiftySellerViewIdentity.normalizeStoredRiskViews({
+    sellerSafetyView: state.sellerSafetyView,
+    sellerSafetyChartView: state.sellerSafetyChartView
+  });
+  const activeChart = normalizedActive.sellerSafetyChartView?.canPublish === true && !chainsByExpiry[restoredExpiry]
+    ? null
+    : normalizedActive.sellerSafetyChartView;
   const migration = {
     sellerSafetyViewsByStrategy: viewsByStrategy,
     sellerSafetyChartViewsByStrategy: chartViewsByStrategy,
     sellerSafetyRefreshFailuresByExpiry: { ...(state.sellerSafetyRefreshFailuresByExpiry || {}) },
+    sellerSafetyChartView: activeChart,
+    sellerSafetyChainsByExpiry: chainsByExpiry,
+    sellerSafetyChain: chainsByExpiry[restoredExpiry] || null,
     ...(restoredStrategy ? { expiry: restoredStrategy.expiry } : {})
   };
   await persist(migration);

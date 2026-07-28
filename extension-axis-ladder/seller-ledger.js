@@ -305,7 +305,6 @@
 
   function addTrades(next, trades, sourceKind, evidence = {}) {
     const byId = importedById(next);
-    const byFingerprint = new Map(next.importedTrades.map((trade) => [fingerprint(trade), trade]));
     const canonicalIds = [];
     for (const sourceTrade of trades) {
       if (!validTrade(sourceTrade) || typeof sourceTrade.id !== "string" || !sourceTrade.id) {
@@ -315,11 +314,10 @@
       const content = fingerprint(trade);
       const sameId = byId.get(trade.id);
       if (sameId && fingerprint(sameId) !== content) throw new Error("immutable trade ID conflict");
-      const canonical = sameId || byFingerprint.get(content) || trade;
-      if (!sameId && !byFingerprint.has(content)) {
+      const canonical = sameId || trade;
+      if (!sameId) {
         next.importedTrades.push(canonical);
         byId.set(canonical.id, canonical);
-        byFingerprint.set(content, canonical);
       }
       canonicalIds.push(canonical.id);
       if (!next.tradeEvidence.some((item) => item.fillId === canonical.id && item.sourceKind === sourceKind &&
@@ -601,7 +599,39 @@
     return { complete, consistent, gap };
   }
 
-  function strategyAcceptedInputs(ledger, strategyId) {
+  function strategyEffectiveLegs(ledger, strategy, fills = ownedFills(strategy, ledger)) {
+    const legs = [];
+    let complete = true;
+    for (const allocation of strategy.allocations) {
+      const position = positionFor(ledger, allocation.contractId);
+      const exactPositionId = position
+        ? canonicalContractId(position.expiry, position.strike, position.optionType)
+        : null;
+      if (!position || position.expiry !== strategy.expiry || exactPositionId !== allocation.contractId ||
+        position.contractId !== allocation.contractId) {
+        complete = false;
+        continue;
+      }
+      const contractFills = fills.filter((fill) => fill.contractId === allocation.contractId);
+      const split = strategyAllocations(ledger, allocation.contractId)
+        .filter((entry) => entry.allocation.signedLots !== 0).length > 1;
+      const expectedQuantity = allocation.signedLots * position.lotSize;
+      const exactPrice = openEntryPrice(contractFills, expectedQuantity);
+      if (split && exactPrice === null) complete = false;
+      const entryPrice = split ? exactPrice : position.averagePrice;
+      legs.push({
+        id: allocation.contractId,
+        strike: position.strike,
+        optionType: position.optionType,
+        signedLots: allocation.signedLots,
+        lotSize: position.lotSize,
+        entryPrice
+      });
+    }
+    return { complete, legs };
+  }
+
+  function strategyAcceptedInputs(ledger, strategyId, suppliedEffectiveLegs) {
     assertLedger(ledger);
     const strategy = strategyFor(ledger, strategyId);
     const positions = strategy.allocations.map((allocation) => positionFor(ledger, allocation.contractId)).filter(Boolean)
@@ -625,13 +655,25 @@
     }));
     const coverageDeclarationIds = ledger.coverageDeclarations.filter((item) => item.strategyId === strategy.id).map((item) => item.id).sort();
     const checkpointIds = ledger.historyCheckpoints.filter((item) => item.expiry === strategy.expiry).map((item) => item.id).sort();
+    const effectiveLegs = (suppliedEffectiveLegs || strategyEffectiveLegs(ledger, strategy).legs).map((leg) => ({
+      contractId: leg.id,
+      strike: leg.strike,
+      optionType: leg.optionType,
+      signedLots: leg.signedLots,
+      lotSize: leg.lotSize,
+      entryPrice: leg.entryPrice,
+      cashContribution: Number.isFinite(leg.entryPrice)
+        ? -leg.signedLots * leg.lotSize * leg.entryPrice
+        : null
+    })).sort((left, right) => left.contractId.localeCompare(right.contractId));
     return {
-      version: 1,
+      version: 2,
       strategyId: strategy.id,
       expiry: strategy.expiry,
       positions,
       allocations,
       ownedFillQuantities,
+      effectiveLegs,
       evidence: {
         allocationRevisionCount: ledger.allocationRevisions.filter((item) => item.strategyId === strategy.id).length,
         fillAssignmentCount: ledger.fillAssignments.filter((item) => item.strategyId === strategy.id).length,
@@ -665,32 +707,9 @@
       };
     }
     const fills = ownedFills(strategy, ledger);
-    const legs = [];
-    let entryComplete = true;
-    for (const allocation of strategy.allocations) {
-      const position = positionFor(ledger, allocation.contractId);
-      const exactPositionId = position
-        ? canonicalContractId(position.expiry, position.strike, position.optionType)
-        : null;
-      if (!position || position.expiry !== strategy.expiry || exactPositionId !== allocation.contractId ||
-        position.contractId !== allocation.contractId) {
-        entryComplete = false;
-        continue;
-      }
-      const contractFills = fills.filter((fill) => fill.contractId === allocation.contractId);
-      const split = strategyAllocations(ledger, allocation.contractId).filter((entry) => entry.allocation.signedLots !== 0).length > 1;
-      const expectedQuantity = allocation.signedLots * position.lotSize;
-      const exactPrice = openEntryPrice(contractFills, expectedQuantity);
-      if (split && exactPrice === null) entryComplete = false;
-      legs.push({
-        id: allocation.contractId,
-        strike: position.strike,
-        optionType: position.optionType,
-        signedLots: allocation.signedLots,
-        lotSize: position.lotSize,
-        entryPrice: split ? exactPrice : position.averagePrice
-      });
-    }
+    const effective = strategyEffectiveLegs(ledger, strategy, fills);
+    const legs = effective.legs;
+    const entryComplete = effective.complete;
     const relevantPositionReview = ledger.reviewChanges.some((change) => change.position?.expiry === strategy.expiry);
     const evidence = evidenceState(strategy, fills, ledger);
     const history = {
@@ -705,7 +724,13 @@
     else if (!entryComplete) status = "ENTRY_HISTORY_INCOMPLETE";
     else if (evidence.gap) status = "HISTORY_GAP";
     else if (!evidence.complete || !evidence.consistent) status = "HISTORY_INCOMPLETE";
-    return { status, openLegs: legs, fills: clone(fills), history, normalizedInputs: strategyAcceptedInputs(ledger, strategy.id) };
+    return {
+      status,
+      openLegs: legs,
+      fills: clone(fills),
+      history,
+      normalizedInputs: strategyAcceptedInputs(ledger, strategy.id, legs)
+    };
   }
 
   const api = {

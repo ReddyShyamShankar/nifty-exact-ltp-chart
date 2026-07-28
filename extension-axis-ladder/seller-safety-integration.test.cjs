@@ -12,6 +12,7 @@ const popupView = require("./popup-view.js");
 const risk = require("./seller-risk.js");
 const riskOverlay = require("./risk-overlay.js");
 const tradebook = require("./tradebook-csv.js");
+const viewIdentity = require("./seller-view-identity.js");
 const manifest = require("./manifest.json");
 
 const EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
@@ -125,9 +126,9 @@ function forbiddenCredentialKeys(value, trail = [], found = []) {
 function csvFixture() {
   return [
     "trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry",
-    "fill-call,order-call,NFO,NIFTY26AUG24100CE,SELL,130,358.8,2026-08-01T09:15:00+05:30,2026-08-25",
-    "fill-put,order-put,NFO,NIFTY26AUG24100PE,SELL,65,315.45,2026-08-01T09:15:00+05:30,2026-08-25",
-    "fill-low-put,order-low-put,NFO,NIFTY26AUG22500PE,SELL,65,77.8,2026-08-01T09:15:00+05:30,2026-08-25"
+    "today-call,order-today-call,NFO,NIFTY26AUG24100CE,SELL,130,358.8,2026-08-01T09:15:00+05:30,2026-08-25",
+    "today-put,order-today-put,NFO,NIFTY26AUG24100PE,SELL,65,315.45,2026-08-01T09:15:00+05:30,2026-08-25",
+    "today-low-put,order-today-low-put,NFO,NIFTY26AUG22500PE,SELL,65,77.8,2026-08-01T09:15:00+05:30,2026-08-25"
   ].join("\n");
 }
 
@@ -408,6 +409,7 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl, dateImpl
     NiftySellerLedger: ledgerApi,
     NiftyTradebookCsv: tradebook,
     NiftySellerPopupView: popupView,
+    NiftySellerViewIdentity: require("./seller-view-identity.js"),
     chrome: {
       storage: { local: {
         async get(defaults) { return { ...defaults, ...storage }; },
@@ -582,8 +584,17 @@ test("timeframe, zoom, pan, and storage redraw reuse one manual chain snapshot",
 
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
   const settings = { enabled: true, selectedStrategyId: "aug-seller", sellerSafetyView: null };
+  const accepted = {
+    version: viewIdentity.ACCEPTED_VIEW_VERSION,
+    canPublish: true,
+    strategyId: "aug-seller",
+    expiry: EXPIRY,
+    candidateId: "accepted-manual-chain",
+    state: "ACCEPTED"
+  };
+  accepted.provenance = viewIdentity.acceptedProvenance(accepted);
   content.applyRiskStorageChanges({
-    sellerSafetyView: { newValue: { strategyId: "aug-seller", expiry: EXPIRY, state: "ACCEPTED" } }
+    sellerSafetyView: { newValue: accepted }
   }, "local", settings, controller);
   await controller.place();
   await controller.place();

@@ -44,6 +44,50 @@ test("ignores duplicate trade IDs and content fingerprints", () => {
   assert.equal(result.trades[1].id, csv.tradeFingerprint(result.trades[1]));
 });
 
+test("preserves distinct stable trade IDs even when normalized content is identical", () => {
+  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "stable-a,o-1,NFO,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n" +
+    "stable-b,o-1,NFO,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n");
+
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.trades.map((trade) => trade.id), ["stable-a", "stable-b"]);
+  assert.equal(result.summary.accepted, 2);
+  assert.equal(result.summary.duplicateFingerprints, 0);
+});
+
+test("rejects a stable trade ID reused with conflicting normalized content", () => {
+  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "stable-a,o-1,NFO,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n" +
+    "stable-a,o-1,NFO,NIFTY26AUG24100CE,SELL,65,101,2026-08-01T09:15:00+05:30,2026-08-25\n");
+
+  assert.deepEqual(result.trades, []);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].row, 3);
+  assert.match(result.errors[0].reason, /stable trade ID.*conflicting content/i);
+});
+
+test("rejects a blank account scope field as ambiguous", () => {
+  const blankAccount = csv.parseTradebookCsv(
+    "trade_id,order_id,client_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "stable-a,o-1,,NFO,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n",
+    { accountId: "ACC1", underlying: "NIFTY", expiry: "2026-08-25" }
+  );
+
+  assert.deepEqual(blankAccount.trades, []);
+  assert.deepEqual(blankAccount.errors, [{ row: 2, reason: "blank account scope is ambiguous" }]);
+});
+
+test("rejects a blank exchange scope field as ambiguous", () => {
+  const blankExchange = csv.parseTradebookCsv(
+    "trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "stable-a,o-1,,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n",
+    { underlying: "NIFTY", expiry: "2026-08-25" }
+  );
+
+  assert.deepEqual(blankExchange.trades, []);
+  assert.deepEqual(blankExchange.errors, [{ row: 2, reason: "blank exchange scope is ambiguous" }]);
+});
+
 test("returns row-level reasons and no trades when any NIFTY row is malformed", () => {
   const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
     "t-1,o-1,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n" +
