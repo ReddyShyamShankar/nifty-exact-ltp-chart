@@ -26,6 +26,11 @@
         </label>
       </section>
 
+      <section class="strategy-bar" aria-label="Accepted strategy view">
+        <label class="field-label" for="selected-strategy">Selected strategy</label>
+        <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
+      </section>
+
       <section class="risk-summary" id="risk-summary" aria-live="polite">
         <div class="priority-line mono" id="priority-label">CURRENT RISK</div>
         <div class="risk-grid breakeven-grid">
@@ -54,8 +59,6 @@
           <input id="strategy-name" type="text" maxlength="48" autocomplete="off" placeholder="Strategy name" />
           <button class="secondary-button mono" id="create-strategy" type="button">CREATE</button>
         </div>
-        <label class="field-label" for="selected-strategy">Selected strategy</label>
-        <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
         <div class="allocation-list" id="allocation-list"></div>
         <button class="secondary-button wide mono" id="allocate-lots" type="button">ALLOCATE LOTS</button>
         <div class="trade-review-list" id="trade-review-list"></div>
@@ -65,6 +68,11 @@
           <input id="tradebook-csv" type="file" accept=".csv,text/csv" />
         </label>
         <div class="import-summary mono" id="import-summary">NO CSV IMPORTED</div>
+        <div class="coverage-grid">
+          <label class="field-label" for="coverage-from">Reviewed coverage from<input id="coverage-from" type="date" /></label>
+          <label class="field-label" for="coverage-to">Reviewed coverage to<input id="coverage-to" type="date" /></label>
+        </div>
+        <button class="secondary-button wide mono" id="confirm-coverage" type="button">CONFIRM COVERAGE BOUNDS</button>
         <button class="accept-button mono" id="accept-snapshot" type="button">ACCEPT REVIEWED SNAPSHOT</button>
       </section>
 

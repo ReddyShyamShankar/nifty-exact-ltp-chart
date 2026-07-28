@@ -144,7 +144,7 @@ test("one seller refresh coordinates positions, trades, and chain exactly once",
   assert.equal(response.headers.get("access-control-allow-origin"), EXTENSION_ORIGIN);
   assert.deepEqual(calls, { positions: 1, trades: 1, chain: 1 });
   assert.equal(payload.updatedAt, "2026-07-28T18:15:00.000Z");
-  assert.equal(payload.positions[0].contractId, "NFO:NIFTY26AUG24100CE");
+  assert.equal(payload.positions[0].contractId, "NFO:NIFTY:2026-08-25:24100:CE");
   assert.equal(payload.trades[0].id, "trade-1");
   assert.equal(payload.chain.expiry, "2026-08-25");
   assert.doesNotMatch(JSON.stringify(payload), /daily-token|access.?token|api.?secret/i);
@@ -224,6 +224,23 @@ test("validates configured extension origin as exact Chrome extension origin", (
     assert.throws(() => createRequestHandler({ sessionStore, extensionOrigin: invalid }), /extension origin/i);
   }
   assert.doesNotThrow(() => createRequestHandler({ sessionStore, extensionOrigin: EXTENSION_ORIGIN }));
+});
+
+test("public bridge responses use the configured exact origin and never wildcard CORS", async () => {
+  const writes = [];
+  const response = {
+    writeHead(status, headers) { writes.push({ status, headers }); },
+    end() {}
+  };
+  const handler = createRequestHandler({
+    sessionStore: { status: async () => ({}) },
+    extensionOrigin: EXTENSION_ORIGIN
+  });
+
+  await handler({ method: "GET", url: "/", headers: { host: "127.0.0.1:8787", origin: EXTENSION_ORIGIN } }, response);
+
+  assert.equal(writes[0].headers["Access-Control-Allow-Origin"], EXTENSION_ORIGIN);
+  assert.notEqual(writes[0].headers["Access-Control-Allow-Origin"], "*");
 });
 
 test("preserves weekly and monthly markers from cached Upstox contract metadata", () => {

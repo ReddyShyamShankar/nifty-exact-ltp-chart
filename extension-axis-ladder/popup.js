@@ -8,6 +8,9 @@ const DEFAULTS = {
   selectedStrategyId: "",
   sellerSafetyView: null,
   sellerSafetyChartView: null,
+  sellerSafetyViewsByStrategy: {},
+  sellerSafetyChartViewsByStrategy: {},
+  sellerSafetyRefreshFailuresByExpiry: {},
   sellerSafetyPending: null,
   sellerSafetyChain: null
 };
@@ -91,8 +94,7 @@ function renderDetailRows(container, rows, emptyLabel) {
 function renderStrategies() {
   const select = $("#selected-strategy");
   const options = [optionNode("", "Select strategy")].concat(ledger.strategies
-    .filter((strategy) => strategy.expiry === state.expiry)
-    .map((strategy) => optionNode(strategy.id, strategy.name)));
+    .map((strategy) => optionNode(strategy.id, `${strategy.name} · ${strategy.expiry}`)));
   select.replaceChildren(...options);
   select.value = state.selectedStrategyId;
 }
@@ -130,18 +132,32 @@ function renderTradeReviews(view) {
     row.className = "trade-review-row";
     const copy = document.createElement("span");
     const title = document.createElement("strong");
-    title.textContent = `${trade?.transactionType || "TRADE"} ${trade?.quantity || "—"} · ${trade?.tradingsymbol || review.contractId}`;
+    title.textContent = `${trade?.transactionType || "TRADE"} ${review.remainingQuantity || trade?.quantity || "—"} REMAINING · ${trade?.tradingsymbol || review.contractId}`;
     const detail = document.createElement("span");
     detail.textContent = `${review.fillId} · EXPLICIT OWNER REQUIRED`;
     copy.append(title, detail);
+    const controls = document.createElement("span");
+    controls.className = "trade-review-controls";
     const select = document.createElement("select");
     select.dataset.tradeReviewId = review.fillId;
     select.setAttribute("aria-label", `Strategy owner for trade ${review.fillId}`);
-    const eligible = ledger.strategies.filter((strategy) => strategy.expiry === review.expiry &&
-      strategy.allocations.some((allocation) => allocation.contractId === review.contractId));
-    select.replaceChildren(optionNode("", "Select owner"), ...eligible.map((strategy) => optionNode(strategy.id, strategy.name)));
+    const eligible = ledger.strategies.filter((strategy) => strategy.expiry === review.expiry);
+    select.replaceChildren(
+      optionNode("", "Select owner"),
+      ...eligible.map((strategy) => optionNode(strategy.id, strategy.name)),
+      optionNode("__UNASSIGNED__", "Leave unassigned")
+    );
     select.value = "";
-    row.append(copy, select);
+    const quantity = document.createElement("input");
+    quantity.type = "number";
+    quantity.step = "1";
+    quantity.min = "1";
+    quantity.max = String(review.remainingQuantity || trade?.quantity || "");
+    quantity.value = String(review.remainingQuantity || trade?.quantity || "");
+    quantity.dataset.tradeReviewQuantity = review.fillId;
+    quantity.setAttribute("aria-label", `Owned quantity for trade ${review.fillId}`);
+    controls.append(select, quantity);
+    row.append(copy, controls);
     return row;
   }));
   $("#assign-trades").hidden = reviews.length === 0;
@@ -195,12 +211,43 @@ function renderView(view, { pending = false, preserveEvidence = false } = {}) {
   $("#review-panel").hidden = !(pending || shown.reviewChanges.length || shown.tradeReviews?.length);
 }
 
-function currentView(chain = pendingReview?.chain) {
+function selectedStrategy() {
+  return ledger.strategies.find((strategy) => strategy.id === state.selectedStrategyId) || null;
+}
+
+function pendingMatchesSelection() {
+  return Boolean(pendingReview?.chain?.expiry && pendingReview.chain.expiry === state.expiry);
+}
+
+function acceptedViewFor(strategyId = state.selectedStrategyId) {
+  const byStrategy = state.sellerSafetyViewsByStrategy || {};
+  const stored = byStrategy[strategyId];
+  if (stored?.strategyId === strategyId) return stored;
+  return state.sellerSafetyView?.strategyId === strategyId ? state.sellerSafetyView : null;
+}
+
+function acceptedChartFor(strategyId = state.selectedStrategyId) {
+  const byStrategy = state.sellerSafetyChartViewsByStrategy || {};
+  const stored = byStrategy[strategyId];
+  if (stored?.strategyId === strategyId) return stored;
+  return acceptedViewFor(strategyId);
+}
+
+function chartPointerFor(strategyId, expiry) {
+  if (pendingReview?.chain?.expiry === expiry && state.sellerSafetyChartView?.candidateId === pendingReview.candidateId) {
+    return state.sellerSafetyChartView;
+  }
+  return state.sellerSafetyRefreshFailuresByExpiry?.[expiry] || acceptedChartFor(strategyId);
+}
+
+function currentView(chain) {
+  const selectedChain = chain || (pendingMatchesSelection() ? pendingReview.chain : null) ||
+    (state.sellerSafetyChain?.expiry === state.expiry ? state.sellerSafetyChain : { expiry: state.expiry });
   return NiftySellerPopupView.buildView({
     ledger,
     selectedStrategyId: state.selectedStrategyId,
     brokerStatus,
-    chain: chain || { expiry: state.expiry },
+    chain: selectedChain,
     now: new Date().toISOString()
   });
 }
@@ -210,8 +257,8 @@ function latestAcceptedCandidateId() {
   return typeof strategy?.snapshots?.at(-1)?.candidateId === "string" ? strategy.snapshots.at(-1).candidateId : "";
 }
 
-function renderCurrent({ pending = Boolean(pendingReview) } = {}) {
-  const stored = state.sellerSafetyView;
+function renderCurrent({ pending = pendingMatchesSelection() } = {}) {
+  const stored = acceptedViewFor();
   const validStoredView = stored?.canPublish === true && stored.priority && stored.currentRisk &&
     stored.wholeTrade && stored.broker && Array.isArray(stored.whyMoved) &&
     Array.isArray(stored.legs) && Array.isArray(stored.timeline) &&
@@ -267,11 +314,16 @@ async function loadExpiries() {
     expiries = data.expiries || [];
     $("#expiry").replaceChildren(...expiries.map(({ expiry, daysToExpiry }) => optionNode(expiry, `${expiry} · ${daysToExpiry} DTE`)));
     if (!expiries.some((entry) => entry.expiry === state.expiry)) {
+      const firstExpiry = expiries[0]?.expiry || "current_month";
+      const matching = ledger.strategies.find((strategy) => strategy.expiry === firstExpiry);
+      const restoredView = matching ? acceptedViewFor(matching.id) : null;
+      const restoredChart = matching ? chartPointerFor(matching.id, firstExpiry) : null;
       await persist({
-        expiry: expiries[0]?.expiry || "current_month",
-        selectedStrategyId: "",
-        sellerSafetyView: null,
-        sellerSafetyPending: null
+        expiry: firstExpiry,
+        selectedStrategyId: matching?.id || "",
+        sellerSafetyView: restoredView,
+        sellerSafetyChartView: restoredChart,
+        sellerSafetyPending: pendingReview
       });
     }
     const selected = expiries.find((entry) => entry.expiry === state.expiry);
@@ -292,7 +344,7 @@ async function loadBrokerStatus() {
 
 function validRefreshTrade(trade, expiry) {
   return trade && typeof trade.id === "string" && trade.id &&
-    typeof trade.contractId === "string" && trade.contractId &&
+    trade.contractId === NiftySellerLedger.canonicalContractId(expiry, trade.strike, trade.optionType) &&
     typeof trade.tradingsymbol === "string" && trade.tradingsymbol &&
     trade.underlying === "NIFTY" && trade.exchange === "NFO" && trade.expiry === expiry &&
     Number.isFinite(trade.strike) && (trade.optionType === "CE" || trade.optionType === "PE") &&
@@ -315,9 +367,10 @@ function validateRefreshPayload(data) {
     !Array.isArray(data.chain.rows) || !data.trades.every((trade) => validRefreshTrade(trade, state.expiry))) {
     throw new Error("Bridge returned an invalid seller refresh snapshot.");
   }
-  const positionLedger = NiftySellerLedger.reconcilePositions(ledger, data.positions);
+  const positionLedger = NiftySellerLedger.reconcilePositions(ledger, data.positions, { expiry: state.expiry });
   const nextLedger = NiftySellerLedger.ingestBrokerTrades(positionLedger, {
     trades: data.trades,
+    expiry: state.expiry,
     observedAt: data.updatedAt
   });
   const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
@@ -349,9 +402,11 @@ function validateRefreshPayload(data) {
 }
 
 function withheldChartView(candidate) {
-  const priority = candidate.nextLedger.reviewChanges.length
+  const scopedPositionReviews = candidate.nextLedger.reviewChanges.filter((change) => change.position?.expiry === candidate.pending.chain.expiry);
+  const scopedTradeReviews = (candidate.nextLedger.tradeReviews || []).filter((review) => review.expiry === candidate.pending.chain.expiry);
+  const priority = scopedPositionReviews.length
     ? "REVIEW POSITION CHANGES"
-    : candidate.nextLedger.tradeReviews?.length ? "REVIEW TRADE OWNERSHIP" : "REVIEW REFRESH SNAPSHOT";
+    : scopedTradeReviews.length ? "REVIEW TRADE OWNERSHIP" : "REVIEW REFRESH SNAPSHOT";
   return {
     version: 1,
     candidateId: candidate.pending.candidateId,
@@ -359,6 +414,19 @@ function withheldChartView(candidate) {
     priority: { kind: "review", label: priority },
     expiry: candidate.pending.chain.expiry,
     brokerUpdatedAt: candidate.pending.updatedAt,
+    brokerSessionExpiresAt: brokerStatus.expiresAt || null
+  };
+}
+
+function failedRefreshChartView() {
+  return {
+    version: 1,
+    state: "REFRESH_FAILED",
+    canPublish: false,
+    priority: { kind: "stale", label: "STALE · REFRESH FAILED" },
+    strategyId: state.selectedStrategyId,
+    expiry: state.expiry,
+    failedAt: new Date().toISOString(),
     brokerSessionExpiresAt: brokerStatus.expiresAt || null
   };
 }
@@ -374,9 +442,12 @@ async function refreshAll() {
     await clearPendingCandidate();
     const data = await responseData(await fetch(`${API}/api/seller-refresh?expiry=${encodeURIComponent(state.expiry)}`, { cache: "no-store" }));
     const candidate = validateRefreshPayload(data);
+    const failuresByExpiry = { ...(state.sellerSafetyRefreshFailuresByExpiry || {}) };
+    delete failuresByExpiry[state.expiry];
     await persist({
       sellerSafetyLedger: candidate.nextLedger,
       sellerSafetyChartView: withheldChartView(candidate),
+      sellerSafetyRefreshFailuresByExpiry: failuresByExpiry,
       sellerSafetyPending: candidate.pending,
       sellerSafetyChain: candidate.chainSnapshot
     });
@@ -388,6 +459,15 @@ async function refreshAll() {
       : "SNAPSHOT READY FOR EXPLICIT ACCEPTANCE";
   } catch (error) {
     try { await clearPendingCandidate(); } catch (_clearError) { /* in-memory candidate already cleared */ }
+    const failure = failedRefreshChartView();
+    await persist({
+      sellerSafetyChartView: failure,
+      sellerSafetyRefreshFailuresByExpiry: {
+        ...(state.sellerSafetyRefreshFailuresByExpiry || {}),
+        [state.expiry]: failure
+      },
+      sellerSafetyPending: null
+    });
     $("#placement-status").textContent = friendlyError(error);
   } finally {
     button.disabled = false;
@@ -426,15 +506,17 @@ async function allocateLots() {
   try {
     const inputs = Array.from(document.querySelectorAll("[data-allocation-contract]"));
     if (!inputs.length) throw new Error("No position changes are available to allocate.");
+    let reviewed = ledger;
     for (const input of inputs) {
       const signedLots = Number(input.value);
       if (!Number.isInteger(signedLots)) throw new Error("Allocations must use signed whole lots.");
-      ledger = NiftySellerLedger.allocateLots(ledger, {
+      reviewed = NiftySellerLedger.allocateLots(reviewed, {
         strategyId: state.selectedStrategyId,
         contractId: input.dataset.allocationContract,
         signedLots
       });
     }
+    ledger = reviewed;
     await persist({ sellerSafetyLedger: ledger, sellerSafetyPending: pendingReview });
     renderCurrent({ pending: true });
     $("#placement-status").textContent = ledger.reviewChanges.length
@@ -452,31 +534,28 @@ function datePart(value) {
 async function importTradebook(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  if (!state.selectedStrategyId) {
-    $("#import-summary").textContent = "SELECT A STRATEGY BEFORE IMPORT";
-    return;
-  }
   try {
-    const parsed = NiftyTradebookCsv.parseTradebookCsv(await file.text());
+    const parsed = NiftyTradebookCsv.parseTradebookCsv(await file.text(), {
+      underlying: "NIFTY",
+      expiry: state.expiry
+    });
     if (parsed.errors.length) throw new Error(parsed.errors.map((error) => `ROW ${error.row}: ${error.reason}`).join(" · "));
     if (!parsed.trades.length) throw new Error("CSV contains no accepted NIFTY fills.");
     const dates = parsed.trades.map((trade) => datePart(trade.timestamp)).filter(Boolean).sort();
-    const today = new Date().toISOString().slice(0, 10);
-    const acceptedAt = new Date().toISOString();
-    ledger = NiftySellerLedger.assignFills(ledger, {
-      strategyId: state.selectedStrategyId,
+    ledger = NiftySellerLedger.stageTradebookImport(ledger, {
+      sourceKind: parsed.sourceKind,
       trades: parsed.trades,
-      fillIds: parsed.trades.map((trade) => trade.id),
-      importBatch: {
-        sourceKind: parsed.sourceKind,
-        fingerprint: parsed.batchFingerprint,
-        coverage: { from: dates[0], to: [dates.at(-1), today].sort().at(-1) },
-        acceptedAt,
-        confirmedAt: acceptedAt
-      }
+      batchFingerprint: parsed.batchFingerprint,
+      stagedAt: new Date().toISOString(),
+      scope: { underlying: "NIFTY", expiry: state.expiry, accountId: parsed.scope?.accountId || null }
     });
     await persist({ sellerSafetyLedger: ledger, sellerSafetyPending: pendingReview });
-    $("#import-summary").textContent = `${parsed.trades.length} FILL${parsed.trades.length === 1 ? "" : "S"} IMPORTED · ${file.name}`;
+    if (dates.length) {
+      $("#coverage-from").value = dates[0];
+      $("#coverage-to").value = dates.at(-1);
+    }
+    const ignored = parsed.summary?.ignoredOutOfScope || 0;
+    $("#import-summary").textContent = `${parsed.trades.length} FILL${parsed.trades.length === 1 ? "" : "S"} STAGED · ${ignored} PROVEN OUT-OF-SCOPE IGNORED · ${file.name}`;
     renderCurrent({ pending: true });
   } catch (error) {
     $("#import-summary").textContent = friendlyError(error);
@@ -486,45 +565,88 @@ async function importTradebook(event) {
 async function assignReviewedTrades() {
   try {
     const choices = Array.from(document.querySelectorAll("[data-trade-review-id]"));
-    if (!choices.length) throw new Error("No current-day trades require ownership review.");
+    const quantities = new Map(Array.from(document.querySelectorAll("[data-trade-review-quantity]"))
+      .map((input) => [input.dataset.tradeReviewQuantity, input]));
+    if (!choices.length) throw new Error("No fills require quantity ownership review.");
     if (choices.some((choice) => !choice.value)) throw new Error("Select an owner for every reviewed trade.");
     const confirmedAt = new Date().toISOString();
     let reviewed = ledger;
     for (const choice of choices) {
-      reviewed = NiftySellerLedger.assignReviewedTrade(reviewed, {
-        strategyId: choice.value,
+      const quantity = Number(quantities.get(choice.dataset.tradeReviewId)?.value);
+      if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("Enter an explicit positive quantity for every reviewed fill.");
+      reviewed = NiftySellerLedger.assignFillQuantity(reviewed, {
         fillId: choice.dataset.tradeReviewId,
+        quantity,
+        disposition: choice.value === "__UNASSIGNED__" ? "UNASSIGNED" : "STRATEGY",
+        ...(choice.value === "__UNASSIGNED__" ? {} : { strategyId: choice.value }),
         confirmedAt
       });
     }
     ledger = reviewed;
     await persist({ sellerSafetyLedger: ledger, sellerSafetyPending: pendingReview });
     renderCurrent({ pending: true });
-    $("#placement-status").textContent = "CURRENT-DAY TRADE OWNERSHIP REVIEWED · ACCEPT SNAPSHOT WHEN READY";
+    $("#placement-status").textContent = ledger.tradeReviews.length
+      ? "QUANTITY RECORDED · REMAINING FILL QUANTITY STILL NEEDS A DISPOSITION"
+      : "ALL FILL QUANTITIES HAVE EXPLICIT DISPOSITIONS";
+  } catch (error) {
+    $("#placement-status").textContent = friendlyError(error);
+  }
+}
+
+async function confirmCoverage() {
+  if (!state.selectedStrategyId) {
+    $("#placement-status").textContent = "SELECT A STRATEGY BEFORE CONFIRMING COVERAGE";
+    return;
+  }
+  try {
+    const strategy = selectedStrategy();
+    const declarations = new Set(ledger.coverageDeclarations
+      .filter((item) => item.strategyId === strategy.id)
+      .map((item) => item.batchFingerprint));
+    const batch = ledger.importBatches.slice().reverse().find((item) =>
+      item.scope?.expiry === strategy.expiry && !declarations.has(item.fingerprint));
+    if (!batch) throw new Error("No staged import batch awaits coverage confirmation for this strategy.");
+    const from = $("#coverage-from").value;
+    const to = $("#coverage-to").value;
+    const checkpointIds = ledger.historyCheckpoints
+      .filter((checkpoint) => checkpoint.expiry === strategy.expiry && checkpoint.date >= from && checkpoint.date <= to)
+      .map((checkpoint) => checkpoint.id);
+    ledger = NiftySellerLedger.confirmHistoryCoverage(ledger, {
+      strategyId: strategy.id,
+      batchFingerprint: batch.fingerprint,
+      from,
+      to,
+      checkpointIds,
+      confirmedAt: new Date().toISOString()
+    });
+    await persist({ sellerSafetyLedger: ledger, sellerSafetyPending: pendingReview });
+    renderCurrent({ pending: true });
+    $("#placement-status").textContent = `COVERAGE CONFIRMED · ${from} TO ${to} · ${checkpointIds.length} CHECKPOINT${checkpointIds.length === 1 ? "" : "S"}`;
   } catch (error) {
     $("#placement-status").textContent = friendlyError(error);
   }
 }
 
 async function acceptSnapshot() {
-  if (!pendingReview) {
+  if (!pendingReview || !pendingMatchesSelection()) {
     $("#placement-status").textContent = "PRESS REFRESH ALL BEFORE ACCEPTING";
     return;
   }
-  if (ledger.reviewChanges.length) {
+  if (ledger.reviewChanges.some((change) => change.position?.expiry === state.expiry)) {
     $("#placement-status").textContent = "ALLOCATE EVERY POSITION CHANGE BEFORE ACCEPTING";
     return;
   }
-  if (ledger.tradeReviews?.length) {
+  if (ledger.tradeReviews?.some((review) => review.expiry === state.expiry)) {
     $("#placement-status").textContent = "SELECT EACH TRADE OWNER AND ASSIGN REVIEWED TRADES BEFORE ACCEPTING";
     return;
   }
   try {
     const acceptedAt = new Date().toISOString();
-    const acceptedLedger = JSON.parse(JSON.stringify(ledger));
-    const acceptedStrategy = acceptedLedger.strategies.find((strategy) => strategy.id === state.selectedStrategyId);
-    if (!acceptedStrategy) throw new Error("Select the reviewed strategy before accepting.");
-    acceptedStrategy.snapshots.push({ at: acceptedAt, candidateId: pendingReview.candidateId });
+    if (!selectedStrategy()) throw new Error("Select the reviewed strategy before accepting.");
+    const acceptedLedger = NiftySellerLedger.acceptSnapshot(ledger, {
+      strategyId: state.selectedStrategyId,
+      snapshot: { at: acceptedAt, candidateId: pendingReview.candidateId }
+    });
     const view = NiftySellerPopupView.buildView({
       ledger: acceptedLedger,
       selectedStrategyId: state.selectedStrategyId,
@@ -543,11 +665,24 @@ async function acceptSnapshot() {
       }
     });
     view.timeline = [{ at: acceptedAt, lower: view.currentRisk.lower, upper: view.currentRisk.upper }].concat(view.timeline.slice(1));
+    const viewsByStrategy = {
+      ...(state.sellerSafetyViewsByStrategy || {}),
+      [state.selectedStrategyId]: view
+    };
+    const chartViewsByStrategy = {
+      ...(state.sellerSafetyChartViewsByStrategy || {}),
+      [state.selectedStrategyId]: view
+    };
+    const failuresByExpiry = { ...(state.sellerSafetyRefreshFailuresByExpiry || {}) };
+    delete failuresByExpiry[state.expiry];
     await persist({
       sellerSafetyLedger: ledger,
       selectedStrategyId: state.selectedStrategyId,
       sellerSafetyView: view,
       sellerSafetyChartView: view,
+      sellerSafetyViewsByStrategy: viewsByStrategy,
+      sellerSafetyChartViewsByStrategy: chartViewsByStrategy,
+      sellerSafetyRefreshFailuresByExpiry: failuresByExpiry,
       sellerSafetyPending: null
     });
     renderView(view);
@@ -595,27 +730,38 @@ function bindEvents() {
   $("#allocate-lots").addEventListener("click", allocateLots);
   $("#tradebook-csv").addEventListener("change", importTradebook);
   $("#assign-trades").addEventListener("click", assignReviewedTrades);
+  $("#confirm-coverage").addEventListener("click", confirmCoverage);
   $("#accept-snapshot").addEventListener("click", acceptSnapshot);
   $("#selected-strategy").addEventListener("change", async (event) => {
+    const strategy = ledger.strategies.find((candidate) => candidate.id === event.target.value);
+    const expiry = strategy?.expiry || state.expiry;
+    const view = strategy ? acceptedViewFor(strategy.id) : null;
     await persist({
       selectedStrategyId: event.target.value,
-      sellerSafetyView: null,
+      expiry,
+      sellerSafetyView: view,
+      sellerSafetyChartView: strategy ? chartPointerFor(strategy.id, expiry) : null,
       sellerSafetyPending: pendingReview
     });
-    renderCurrent({ pending: true });
+    renderSettings();
+    const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
+    $("#expiry-hint").textContent = expiryData ? `${expiryData.daysToExpiry} DTE` : "NO EXPIRY";
+    renderCurrent();
   });
   $("#expiry").addEventListener("change", async (event) => {
     const matching = ledger.strategies.find((strategy) => strategy.expiry === event.target.value);
+    const view = matching ? acceptedViewFor(matching.id) : null;
     await persist({
       expiry: event.target.value,
       selectedStrategyId: matching?.id || "",
-      sellerSafetyView: null,
-      sellerSafetyPending: null
+      sellerSafetyView: view,
+      sellerSafetyChartView: matching ? chartPointerFor(matching.id, matching.expiry) : null,
+      sellerSafetyPending: pendingReview
     });
     const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
     $("#expiry-hint").textContent = expiryData ? `${expiryData.daysToExpiry} DTE` : "NO EXPIRY";
-    renderCurrent({ pending: false });
-    $("#placement-status").textContent = "EXPIRY CHANGED · PRESS REFRESH ALL";
+    renderCurrent();
+    $("#placement-status").textContent = view ? "ACCEPTED STRATEGY VIEW RESTORED" : "EXPIRY CHANGED · PRESS REFRESH ALL";
   });
   $("#enabled").addEventListener("click", async () => {
     await persist({ enabled: !state.enabled });
@@ -631,6 +777,23 @@ async function init() {
   state = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
   ledger = state.sellerSafetyLedger || NiftySellerLedger.emptyLedger();
   pendingReview = state.sellerSafetyPending;
+  const viewsByStrategy = { ...(state.sellerSafetyViewsByStrategy || {}) };
+  const chartViewsByStrategy = { ...(state.sellerSafetyChartViewsByStrategy || {}) };
+  if (state.sellerSafetyView?.strategyId && !viewsByStrategy[state.sellerSafetyView.strategyId]) {
+    viewsByStrategy[state.sellerSafetyView.strategyId] = state.sellerSafetyView;
+  }
+  if (state.sellerSafetyChartView?.canPublish === true && state.sellerSafetyChartView.strategyId &&
+    !chartViewsByStrategy[state.sellerSafetyChartView.strategyId]) {
+    chartViewsByStrategy[state.sellerSafetyChartView.strategyId] = state.sellerSafetyChartView;
+  }
+  const restoredStrategy = ledger.strategies.find((strategy) => strategy.id === state.selectedStrategyId);
+  const migration = {
+    sellerSafetyViewsByStrategy: viewsByStrategy,
+    sellerSafetyChartViewsByStrategy: chartViewsByStrategy,
+    sellerSafetyRefreshFailuresByExpiry: { ...(state.sellerSafetyRefreshFailuresByExpiry || {}) },
+    ...(restoredStrategy ? { expiry: restoredStrategy.expiry } : {})
+  };
+  await persist(migration);
   bindEvents();
   renderSettings();
   renderCurrent();

@@ -82,6 +82,9 @@ select, input { color-scheme: dark; }
 .expiry-control { min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .expiry-control select { min-width: 0; height: 43px; padding: 0 12px; border: 0; border-right: 1px solid var(--line); outline: 0; background: transparent; color: var(--ink); font-size: 10px; }
 .expiry-control span { padding: 0 10px; color: var(--ink-mute); font-size: 8px; letter-spacing: .06em; }
+.strategy-bar { margin: 10px 14px 0; padding: 8px 10px 10px; border: 1px solid var(--line); background: var(--panel); }
+.strategy-bar .field-label { margin-top: 0; }
+.strategy-bar select { width: 100%; }
 
 .risk-summary { margin: 10px 14px 0; border: 1px solid var(--line-2); background: linear-gradient(145deg, var(--panel-2), var(--panel)); }
 .priority-line { min-height: 34px; padding: 0 12px; display: flex; align-items: center; border-bottom: 1px solid var(--line); color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .09em; }
@@ -117,14 +120,18 @@ input:focus, #selected-strategy:focus, .trade-review-row select:focus { border-c
 .allocation-row span { margin-top: 2px; color: var(--ink-mute); font: 8px "Geist Mono", ui-monospace, monospace; }
 .allocation-row input { width: 74px; text-align: right; }
 .trade-review-list { margin-top: 8px; }
-.trade-review-row { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(248, 113, 113, .16); }
+.trade-review-row { display: grid; grid-template-columns: minmax(0, 1fr) 166px; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(248, 113, 113, .16); }
 .trade-review-row strong, .trade-review-row span { display: block; }
 .trade-review-row strong { font-size: 9px; }
 .trade-review-row span { margin-top: 2px; color: var(--ink-mute); font: 8px "Geist Mono", ui-monospace, monospace; }
-.trade-review-row select { width: 132px; }
+.trade-review-controls { display: grid !important; grid-template-columns: minmax(0, 1fr) 58px; gap: 5px; }
+.trade-review-row select { width: 100%; }
+.trade-review-row input { width: 58px; padding: 0 6px; text-align: right; }
 .file-field { min-height: 42px; margin-top: 9px; padding: 0 10px; border: 1px dashed var(--line-2); display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-dim); font: 8px "Geist Mono", ui-monospace, monospace; letter-spacing: .06em; }
 .file-field input { width: 168px; min-height: auto; padding: 0; border: 0; background: transparent; font-size: 8px; }
 .import-summary { margin-top: 7px; color: var(--ink-mute); font-size: 8px; }
+.coverage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.coverage-grid input { width: 100%; margin-top: 5px; padding: 0 5px; font-size: 9px; }
 .accept-button { width: 100%; min-height: 42px; margin-top: 10px; border: 0; background: var(--accent); color: var(--accent-dark); font-size: 9px; font-weight: 800; letter-spacing: .07em; }
 
 .detail-toggle, .advanced-toggle { width: calc(100% - 28px); min-height: 43px; margin: 8px 14px 0; padding: 0 2px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--ink-mute); display: flex; align-items: center; justify-content: space-between; font-size: 8px; font-weight: 700; letter-spacing: .08em; }

@@ -32,6 +32,11 @@ test("ignores duplicate trade IDs and content fingerprints", () => {
   assert.deepEqual(result.summary, {
     accepted: 3,
     ignoredNonNifty: 0,
+    ignoredOutOfScope: 0,
+    ignoredAccount: 0,
+    ignoredUnderlying: 0,
+    ignoredExpiry: 0,
+    ignoredExchange: 0,
     duplicateIds: 1,
     duplicateFingerprints: 1
   });
@@ -48,11 +53,16 @@ test("returns row-level reasons and no trades when any NIFTY row is malformed", 
   assert.deepEqual(result.trades, []);
   assert.deepEqual(result.errors, [
     { row: 3, reason: "transaction type must be BUY or SELL" },
-    { row: 4, reason: "quantity must be a positive number" }
+    { row: 4, reason: "quantity must be a positive integer" }
   ]);
   assert.deepEqual(result.summary, {
     accepted: 0,
     ignoredNonNifty: 0,
+    ignoredOutOfScope: 0,
+    ignoredAccount: 0,
+    ignoredUnderlying: 0,
+    ignoredExpiry: 0,
+    ignoredExchange: 0,
     duplicateIds: 0,
     duplicateFingerprints: 0
   });
@@ -83,7 +93,7 @@ test("rejects generic lookalike CSV without Zerodha tradebook signature", () => 
   assert.deepEqual(result.errors, [{ row: 1, reason: "untrusted Zerodha tradebook header" }]);
 });
 
-test("rejects BSE, NIFTYJUNK, and noncanonical price headers atomically", () => {
+test("filters proven BSE rows but rejects NIFTYJUNK and noncanonical price headers", () => {
   const wrongExchange = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
     "t-1,o-1,BSE,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n");
   const junkSymbol = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
@@ -92,8 +102,65 @@ test("rejects BSE, NIFTYJUNK, and noncanonical price headers atomically", () => 
     "t-1,o-1,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n");
 
   assert.deepEqual(wrongExchange.trades, []);
-  assert.deepEqual(wrongExchange.errors, [{ row: 2, reason: "exchange must be NFO" }]);
+  assert.deepEqual(wrongExchange.errors, []);
+  assert.equal(wrongExchange.summary.ignoredExchange, 1);
   assert.deepEqual(junkSymbol.trades, []);
   assert.deepEqual(junkSymbol.errors, [{ row: 2, reason: "invalid NIFTY option identity" }]);
   assert.deepEqual(priceAlias.errors, [{ row: 1, reason: "untrusted Zerodha tradebook header" }]);
+});
+
+test("parses weekly exact expiry identity without same-strike collisions", () => {
+  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "aug-4,o-1,NFO,NIFTY2680424100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-04\n" +
+    "aug-11,o-2,NFO,NIFTY2681124100CE,SELL,65,110,2026-08-01T09:16:00+05:30,2026-08-11\n");
+
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.trades.map((trade) => trade.contractId), [
+    "NFO:NIFTY:2026-08-04:24100:CE",
+    "NFO:NIFTY:2026-08-11:24100:CE"
+  ]);
+});
+
+test("filters proven account/index/expiry rows and reports each reason", () => {
+  const text = "trade_id,order_id,client_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "target,o-1,ACC1,NFO,NIFTY2680424100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-04\n" +
+    "other-account,o-2,ACC2,NFO,NIFTY2680424100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-04\n" +
+    "other-index,o-3,ACC1,NFO,BANKNIFTY2680450000CE,SELL,15,100,2026-08-01T09:15:00+05:30,2026-08-04\n" +
+    "other-expiry,o-4,ACC1,NFO,NIFTY2681124100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-11\n" +
+    "other-exchange,o-5,ACC1,BFO,SENSEX2680470000CE,SELL,20,100,2026-08-01T09:15:00+05:30,2026-08-04\n";
+  const result = csv.parseTradebookCsv(text, {
+    accountId: "ACC1", underlying: "NIFTY", expiry: "2026-08-04"
+  });
+
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.trades.map((trade) => trade.id), ["target"]);
+  assert.deepEqual({
+    account: result.summary.ignoredAccount,
+    index: result.summary.ignoredUnderlying,
+    expiry: result.summary.ignoredExpiry,
+    exchange: result.summary.ignoredExchange
+  }, { account: 1, index: 1, expiry: 1, exchange: 1 });
+});
+
+test("rejects mixed-account export when account scope is ambiguous", () => {
+  const result = csv.parseTradebookCsv("trade_id,order_id,client_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "a,o-1,ACC1,NFO,NIFTY2680424100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-04\n" +
+    "b,o-2,ACC2,NFO,NIFTY2680424100CE,SELL,65,100,2026-08-01T09:16:00+05:30,2026-08-04\n", {
+    underlying: "NIFTY", expiry: "2026-08-04"
+  });
+
+  assert.deepEqual(result.trades, []);
+  assert.match(result.errors[0].reason, /mixed account.*explicit account/i);
+});
+
+test("reports physical source lines after blanks and strictly validates timestamps", () => {
+  const prefix = "trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "ok,o-1,NFO,NIFTY2680424100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-04\n\n";
+  const impossible = csv.parseTradebookCsv(prefix +
+    "bad,o-2,NFO,NIFTY2680424100CE,SELL,65,100,2026-02-30T09:15:00+05:30,2026-08-04\n");
+  const suffix = csv.parseTradebookCsv(prefix +
+    "bad,o-2,NFO,NIFTY2680424100CE,SELL,65,100,2026-08-01T09:15:00+05:30junk,2026-08-04\n");
+
+  assert.deepEqual(impossible.errors, [{ row: 4, reason: "invalid fill timestamp" }]);
+  assert.deepEqual(suffix.errors, [{ row: 4, reason: "invalid fill timestamp" }]);
 });

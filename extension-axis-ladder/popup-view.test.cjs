@@ -5,70 +5,63 @@ const test = require("node:test");
 
 const popupView = require("./popup-view.js");
 const riskOverlay = require("./risk-overlay.js");
+const sellerLedger = require("./seller-ledger.js");
 
 function acceptedLedger() {
-  return {
-    version: 1,
-    strategies: [{
-      id: "aug-seller",
-      name: "August seller",
-      underlying: "NIFTY",
-      expiry: "2026-08-25",
-      allocations: [
-        { contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1 },
-        { contractId: "NFO:NIFTY26AUG24100PE", signedLots: -1 }
-      ],
-      fillIds: ["fill-call", "fill-put"],
-      snapshots: [{
-        candidateId: "candidate-accepted",
-        at: "2026-08-01T08:45:00+05:30",
-        currentMap: { breakevens: [23850, 24350], maxProfit: 15000, maxLoss: "UNBOUNDED", upsideUnbounded: true },
-        wholeTradeMap: { breakevens: [23825, 24375], maxProfit: 17000, maxLoss: "UNBOUNDED", upsideUnbounded: true }
-      }],
-      historyComplete: true
-    }],
-    brokerPositions: [
-      {
-        contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
-        exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 24100,
-        optionType: "CE", signedQuantity: -65, lotSize: 65, averagePrice: 100,
-        lastPrice: 84.6, pnl: 1000
-      },
-      {
-        contractId: "NFO:NIFTY26AUG24100PE", tradingsymbol: "NIFTY26AUG24100PE",
-        exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 24100,
-        optionType: "PE", signedQuantity: -65, lotSize: 65, averagePrice: 120,
-        lastPrice: 123.85, pnl: -250
-      }
-    ],
-    importedTrades: [
-      {
-        id: "fill-call", contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
-        underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100,
-        optionType: "CE", transactionType: "SELL", quantity: 65, price: 110,
-        timestamp: "2026-08-01T09:15:00+05:30", importBatchFingerprint: "batch-aug"
-      },
-      {
-        id: "fill-put", contractId: "NFO:NIFTY26AUG24100PE", tradingsymbol: "NIFTY26AUG24100PE",
-        underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100,
-        optionType: "PE", transactionType: "SELL", quantity: 65, price: 130,
-        timestamp: "2026-08-01T09:16:00+05:30", importBatchFingerprint: "batch-aug"
-      }
-    ],
-    fillAssignments: [
-      { fillId: "fill-call", strategyId: "aug-seller" },
-      { fillId: "fill-put", strategyId: "aug-seller" }
-    ],
-    importBatches: [{
-      sourceKind: "ZERODHA_TRADEBOOK_CSV", fingerprint: "batch-aug",
-      coverage: { from: "2026-08-01", to: "2026-08-25" },
-      acceptedAt: "2026-08-01T09:20:00+05:30", confirmedAt: "2026-08-01T09:20:00+05:30"
-    }],
-    historyGaps: [],
-    allocationRevisions: [],
-    reviewChanges: [],
-    audit: []
-  };
+  const callId = "NFO:NIFTY:2026-08-25:24100:CE";
+  const putId = "NFO:NIFTY:2026-08-25:24100:PE";
+  const fills = [
+    {
+      id: "fill-call", contractId: callId, tradingsymbol: "NIFTY26AUG24100CE",
+      underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100,
+      optionType: "CE", transactionType: "SELL", quantity: 65, price: 110,
+      timestamp: "2026-08-01T09:15:00+05:30"
+    },
+    {
+      id: "fill-put", contractId: putId, tradingsymbol: "NIFTY26AUG24100PE",
+      underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100,
+      optionType: "PE", transactionType: "SELL", quantity: 65, price: 130,
+      timestamp: "2026-08-01T09:16:00+05:30"
+    }
+  ];
+  let value = sellerLedger.emptyLedger();
+  value = sellerLedger.createStrategy(value, {
+    id: "aug-seller", name: "August seller", underlying: "NIFTY", expiry: "2026-08-25"
+  });
+  value = sellerLedger.reconcilePositions(value, [
+    {
+      contractId: callId, tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO", underlying: "NIFTY",
+      expiry: "2026-08-25", strike: 24100, optionType: "CE", signedQuantity: -65, lotSize: 65,
+      averagePrice: 100, lastPrice: 84.6, pnl: 1000
+    },
+    {
+      contractId: putId, tradingsymbol: "NIFTY26AUG24100PE", exchange: "NFO", underlying: "NIFTY",
+      expiry: "2026-08-25", strike: 24100, optionType: "PE", signedQuantity: -65, lotSize: 65,
+      averagePrice: 120, lastPrice: 123.85, pnl: -250
+    }
+  ], { expiry: "2026-08-25" });
+  value = sellerLedger.allocateLots(value, { strategyId: "aug-seller", contractId: callId, signedLots: -1 });
+  value = sellerLedger.allocateLots(value, { strategyId: "aug-seller", contractId: putId, signedLots: -1 });
+  value = sellerLedger.stageTradebookImport(value, {
+    sourceKind: "ZERODHA_TRADEBOOK_CSV", batchFingerprint: "batch-aug",
+    stagedAt: "2026-08-01T09:18:00+05:30", scope: { underlying: "NIFTY", expiry: "2026-08-25" }, fills, trades: fills
+  });
+  for (const fill of fills) value = sellerLedger.assignFillQuantity(value, {
+    fillId: fill.id, strategyId: "aug-seller", quantity: fill.quantity, disposition: "STRATEGY",
+    confirmedAt: "2026-08-01T09:19:00+05:30"
+  });
+  value = sellerLedger.confirmHistoryCoverage(value, {
+    strategyId: "aug-seller", batchFingerprint: "batch-aug", from: "2026-08-01", to: "2026-08-01",
+    checkpointIds: [], confirmedAt: "2026-08-01T09:20:00+05:30"
+  });
+  return sellerLedger.acceptSnapshot(value, {
+    strategyId: "aug-seller",
+    snapshot: {
+      candidateId: "candidate-accepted", at: "2026-08-01T08:45:00+05:30",
+      currentMap: { breakevens: [23850, 24350], maxProfit: 15000, maxLoss: "UNBOUNDED", upsideUnbounded: true },
+      wholeTradeMap: { breakevens: [23825, 24375], maxProfit: 17000, maxLoss: "UNBOUNDED", upsideUnbounded: true }
+    }
+  });
 }
 
 function build(ledger = acceptedLedger(), overrides = {}) {
@@ -132,7 +125,7 @@ test("accepted popup map survives JSON storage and renders current and whole-tra
 test("fails closed while any broker position still needs reviewed allocation", () => {
   const ledger = acceptedLedger();
   ledger.reviewChanges = [{
-    contractId: "NFO:NIFTY26AUG24100CE",
+    contractId: "NFO:NIFTY:2026-08-25:24100:CE",
     previousSignedQuantity: -65,
     signedQuantity: -130,
     allocatedQuantity: -65,
@@ -152,7 +145,7 @@ test("fails closed while a current-day trade still needs explicit strategy owner
   const ledger = acceptedLedger();
   ledger.tradeReviews = [{
     fillId: "bridge-trade-1",
-    contractId: "NFO:NIFTY26AUG24100CE",
+    contractId: "NFO:NIFTY:2026-08-25:24100:CE",
     expiry: "2026-08-25",
     reason: "OWNERSHIP_REVIEW_REQUIRED"
   }];

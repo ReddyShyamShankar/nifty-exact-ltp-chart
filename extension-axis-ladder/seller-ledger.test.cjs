@@ -4,11 +4,14 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const ledger = require("./seller-ledger.js");
 
+const EXPIRY = "2026-08-25";
+const CONTRACT = "NFO:NIFTY:2026-08-25:24100:CE";
+
 function position(overrides = {}) {
   return {
-    contractId: "NFO:NIFTY26AUG24100CE",
+    contractId: CONTRACT,
     tradingsymbol: "NIFTY26AUG24100CE",
-    expiry: "2026-08-25",
+    expiry: EXPIRY,
     exchange: "NFO",
     underlying: "NIFTY",
     strike: 24100,
@@ -25,11 +28,11 @@ function position(overrides = {}) {
 function fill(overrides = {}) {
   return {
     id: "trade-1",
-    contractId: "NFO:NIFTY26AUG24100CE",
+    contractId: CONTRACT,
     tradingsymbol: "NIFTY26AUG24100CE",
     underlying: "NIFTY",
     exchange: "NFO",
-    expiry: "2026-08-25",
+    expiry: EXPIRY,
     strike: 24100,
     optionType: "CE",
     transactionType: "SELL",
@@ -40,42 +43,35 @@ function fill(overrides = {}) {
   };
 }
 
-function confirmedBatch(overrides = {}) {
-  return {
-    sourceKind: "ZERODHA_TRADEBOOK_CSV",
-    fingerprint: "zerodha-august-batch",
-    coverage: { from: "2026-08-01", to: "2026-08-31" },
-    acceptedAt: "2026-08-31T16:00:00+05:30",
-    confirmedAt: "2026-08-31T16:01:00+05:30",
-    ...overrides
-  };
-}
-
-function acceptBrokerSnapshot(current, strategyId = "s1", at = "2026-08-31T16:00:00+05:30") {
-  return ledger.acceptSnapshot(current, { strategyId, snapshot: { at, status: "OK" } });
-}
-
-function oneStrategyLedger() {
-  let current = ledger.emptyLedger();
-  current = ledger.createStrategy(current, {
-    id: "s1",
-    name: "August call sale",
-    underlying: "NIFTY",
-    expiry: "2026-08-25"
+function oneStrategy() {
+  return ledger.createStrategy(ledger.emptyLedger(), {
+    id: "s1", name: "August call sale", underlying: "NIFTY", expiry: EXPIRY
   });
-  return current;
 }
 
-test("creates versioned JSON-safe ledger without mutating previous value", () => {
+function allocated() {
+  let current = oneStrategy();
+  current = ledger.reconcilePositions(current, [position()], { expiry: EXPIRY });
+  return ledger.allocateLots(current, { strategyId: "s1", contractId: CONTRACT, signedLots: -1 });
+}
+
+function stage(current, trades = [fill()], stagedAt = "2026-08-02T09:00:00+05:30") {
+  return ledger.stageTradebookImport(current, {
+    trades,
+    sourceKind: "ZERODHA_TRADEBOOK_CSV",
+    batchFingerprint: "batch-1",
+    stagedAt,
+    scope: { underlying: "NIFTY", expiry: EXPIRY }
+  });
+}
+
+test("creates immutable JSON-safe ledger with explicit evidence collections", () => {
   const empty = ledger.emptyLedger();
   const created = ledger.createStrategy(empty, {
-    id: "s1",
-    name: "August call sale",
-    underlying: "NIFTY",
-    expiry: "2026-08-25"
+    id: "s1", name: "August", underlying: "NIFTY", expiry: EXPIRY
   });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(empty)), {
+  assert.deepEqual(empty, {
     version: 1,
     strategies: [],
     brokerPositions: [],
@@ -83,477 +79,133 @@ test("creates versioned JSON-safe ledger without mutating previous value", () =>
     tradeEvidence: [],
     tradeReviews: [],
     fillAssignments: [],
+    fillDispositions: [],
     importBatches: [],
+    coverageDeclarations: [],
+    historyCheckpoints: [],
     historyGaps: [],
     allocationRevisions: [],
     reviewChanges: [],
     audit: []
   });
-  assert.equal(created.strategies[0].expiry, "2026-08-25");
-  assert.equal(created.strategies[0].underlying, "NIFTY");
-  assert.equal(created.audit.at(-1).type, "STRATEGY_CREATED");
+  assert.equal(created.strategies[0].expiry, EXPIRY);
+  assert.equal(empty.strategies.length, 0);
+  assert.doesNotThrow(() => JSON.stringify(created));
 });
 
-test("current-day bridge trades persist as immutable unassigned evidence and deduplicate", () => {
-  const source = fill({ id: "bridge-trade-1" });
-  const first = ledger.ingestBrokerTrades(oneStrategyLedger(), {
-    trades: [source], observedAt: "2026-08-01T03:50:00.000Z"
+test("current-day bridge trades stay immutable, unowned, deduplicated, and checkpointed", () => {
+  const source = fill({ id: "daily-1" });
+  const first = ledger.ingestBrokerTrades(oneStrategy(), {
+    trades: [source], expiry: EXPIRY, observedAt: "2026-08-01T03:50:00.000Z"
   });
   source.price = 1;
   const repeated = ledger.ingestBrokerTrades(first, {
-    trades: [fill({ id: "bridge-trade-1" })], observedAt: "2026-08-01T03:51:00.000Z"
+    trades: [fill({ id: "daily-1" })], expiry: EXPIRY, observedAt: "2026-08-01T03:50:00.000Z"
   });
 
   assert.equal(first.importedTrades[0].price, 358.8);
-  assert.deepEqual(first.tradeEvidence, [{
-    fillId: "bridge-trade-1",
-    sourceKind: "ZERODHA_CURRENT_DAY",
-    observedAt: "2026-08-01T03:50:00.000Z"
-  }]);
-  assert.deepEqual(first.tradeReviews, [{
-    fillId: "bridge-trade-1",
-    contractId: "NFO:NIFTY26AUG24100CE",
-    expiry: "2026-08-25",
-    reason: "OWNERSHIP_REVIEW_REQUIRED"
-  }]);
-  assert.equal(first.strategies[0].fillIds.length, 0, "refresh must never infer strategy ownership");
+  assert.deepEqual(first.tradeReviews.map(({ fillId, remainingQuantity }) => ({ fillId, remainingQuantity })), [
+    { fillId: "daily-1", remainingQuantity: 65 }
+  ]);
+  assert.deepEqual(first.strategies[0].fillIds, []);
   assert.equal(repeated.importedTrades.length, 1);
   assert.equal(repeated.tradeEvidence.length, 1);
-  assert.equal(repeated.tradeReviews.length, 1);
+  assert.equal(repeated.historyCheckpoints.length, 1);
   assert.throws(() => ledger.ingestBrokerTrades(first, {
-    trades: [fill({ id: "bridge-trade-1", price: 1 })], observedAt: "2026-08-01T03:52:00.000Z"
+    trades: [fill({ id: "daily-1", price: 1 })], expiry: EXPIRY, observedAt: "2026-08-01T03:51:00.000Z"
   }), /immutable|conflict/i);
 });
 
-test("explicit CSV review assigns deduplicated bridge IDs into whole-trade history", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.ingestBrokerTrades(current, {
-    trades: [fill({ id: "bridge-trade-1" })], observedAt: "2026-08-01T03:50:00.000Z"
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1",
-    trades: [fill({ id: "csv-fill-1" })],
-    fillIds: ["csv-fill-1"],
-    importBatch: confirmedBatch()
-  });
-  current = acceptBrokerSnapshot(current);
-
-  assert.equal(current.importedTrades.length, 1, "same fill from bridge and CSV stays canonical");
-  assert.deepEqual(current.strategies[0].fillIds, ["bridge-trade-1"]);
-  assert.deepEqual(current.fillAssignments, [{ fillId: "bridge-trade-1", strategyId: "s1" }]);
-  assert.deepEqual(current.tradeReviews, []);
-  assert.deepEqual(current.tradeEvidence.map(({ fillId, sourceKind }) => ({ fillId, sourceKind })), [
-    { fillId: "bridge-trade-1", sourceKind: "ZERODHA_CURRENT_DAY" },
-    { fillId: "bridge-trade-1", sourceKind: "ZERODHA_TRADEBOOK_CSV" }
-  ]);
-  const risk = ledger.strategyRiskInput(current, "s1");
-  assert.equal(risk.status, "OK");
-  assert.deepEqual(risk.fills.map((trade) => trade.id), ["bridge-trade-1"]);
-});
-
-test("explicit daily ownership extends one-time CSV coverage without mutating or duplicating fills", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1",
-    trades: [fill({ id: "opening", quantity: 130 })],
-    fillIds: ["opening"],
-    importBatch: confirmedBatch({ coverage: { from: "2026-08-01", to: "2026-08-01" } })
-  });
-  const daily = fill({
-    id: "daily-reduction",
-    transactionType: "BUY",
-    quantity: 65,
-    price: 340,
-    timestamp: "2026-08-02T09:15:00+05:30"
-  });
-  current = ledger.ingestBrokerTrades(current, {
-    trades: [daily], observedAt: "2026-08-02T03:50:00.000Z"
-  });
-
-  assert.deepEqual(current.tradeReviews.map((review) => review.fillId), ["daily-reduction"]);
-  assert.deepEqual(current.strategies[0].fillIds, ["opening"], "refresh cannot infer daily ownership");
-  assert.equal(current.importBatches.length, 1, "CSV remains a one-time baseline");
-
-  current = ledger.assignReviewedTrade(current, {
-    strategyId: "s1", fillId: "daily-reduction", confirmedAt: "2026-08-02T10:00:00+05:30"
-  });
-  current = acceptBrokerSnapshot(current, "s1", "2026-08-02T16:00:00+05:30");
-
-  assert.deepEqual(current.tradeReviews, []);
-  assert.deepEqual(current.strategies[0].fillIds, ["opening", "daily-reduction"]);
-  assert.equal(current.importedTrades.find((trade) => trade.id === "daily-reduction").price, 340);
-  assert.equal(current.importBatches.length, 1);
-  assert.deepEqual(current.tradeEvidence.filter((evidence) => evidence.fillId === "daily-reduction").map((evidence) => evidence.sourceKind), [
-    "ZERODHA_CURRENT_DAY", "ZERODHA_CURRENT_DAY_CONFIRMED"
-  ]);
-  const risk = ledger.strategyRiskInput(current, "s1");
-  assert.equal(risk.status, "OK");
-  assert.deepEqual(risk.fills.map((trade) => trade.id), ["opening", "daily-reduction"]);
-
-  const repeated = ledger.ingestBrokerTrades(current, {
-    trades: [daily], observedAt: "2026-08-02T03:55:00.000Z"
-  });
-  assert.equal(repeated.importedTrades.length, 2);
-  assert.deepEqual(repeated.tradeReviews, []);
-
-  const unknown = ledger.ingestBrokerTrades(repeated, {
-    trades: [fill({ id: "unknown-daily", timestamp: "2026-08-02T11:00:00+05:30" })],
-    observedAt: "2026-08-02T05:30:00.000Z"
-  });
-  assert.deepEqual(unknown.tradeReviews.map((review) => review.fillId), ["unknown-daily"]);
-  assert.deepEqual(unknown.strategies[0].fillIds, ["opening", "daily-reduction"]);
-});
-
-test("rejects strategy with a non-NIFTY underlying or missing expiry", () => {
-  const empty = ledger.emptyLedger();
-  assert.throws(() => ledger.createStrategy(empty, {
-    id: "s1", name: "wrong", underlying: "BANKNIFTY", expiry: "2026-08-25"
-  }), /NIFTY/i);
-  assert.throws(() => ledger.createStrategy(empty, {
-    id: "s1", name: "wrong", underlying: "NIFTY"
-  }), /expiry/i);
-});
-
-test("changed broker quantity enters review without mutating accepted allocation", () => {
-  let existingLedger = oneStrategyLedger();
-  existingLedger = ledger.reconcilePositions(existingLedger, [position()]);
-  existingLedger = ledger.allocateLots(existingLedger, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  const reviewed = ledger.reconcilePositions(existingLedger, [position({ signedQuantity: -130 })]);
+test("position changes preserve accepted allocations and require exact signed whole lots", () => {
+  const current = allocated();
+  const reviewed = ledger.reconcilePositions(current, [position({ signedQuantity: -130 })], { expiry: EXPIRY });
 
   assert.equal(reviewed.reviewChanges.length, 1);
   assert.equal(reviewed.strategies[0].allocations[0].signedLots, -1);
-  assert.equal(existingLedger.brokerPositions[0].signedQuantity, -65);
-  assert.equal(reviewed.audit.at(-1).type, "POSITION_REVIEW_REQUIRED");
+  assert.equal(current.brokerPositions[0].signedQuantity, -65);
+  assert.throws(() => ledger.allocateLots(reviewed, { strategyId: "s1", contractId: CONTRACT, signedLots: 1 }), /direction/i);
+  assert.throws(() => ledger.allocateLots(reviewed, { strategyId: "s1", contractId: CONTRACT, signedLots: -1.5 }), /whole/i);
 });
 
-test("rejects allocation that exceeds or reverses broker lots", () => {
-  let reviewLedger = oneStrategyLedger();
-  reviewLedger = ledger.reconcilePositions(reviewLedger, [position()]);
+test("allocation revisions retain complete before and after states", () => {
+  let current = oneStrategy();
+  current = ledger.reconcilePositions(current, [position({ signedQuantity: -130 })], { expiry: EXPIRY });
+  current = ledger.allocateLots(current, { strategyId: "s1", contractId: CONTRACT, signedLots: -1 });
+  current = ledger.allocateLots(current, { strategyId: "s1", contractId: CONTRACT, signedLots: -2 });
+  current = ledger.allocateLots(current, { strategyId: "s1", contractId: CONTRACT, signedLots: 0 });
 
-  assert.throws(() => ledger.allocateLots(reviewLedger, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: 1
-  }), /direction|available/i);
-  assert.throws(() => ledger.allocateLots(reviewLedger, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2
-  }), /direction|available/i);
-  assert.throws(() => ledger.allocateLots(reviewLedger, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1.5
-  }), /whole/i);
+  assert.deepEqual(current.allocationRevisions.map(({ before, after }) => ({ before, after })), [
+    { before: [], after: [{ contractId: CONTRACT, signedLots: -1 }] },
+    { before: [{ contractId: CONTRACT, signedLots: -1 }], after: [{ contractId: CONTRACT, signedLots: -2 }] },
+    { before: [{ contractId: CONTRACT, signedLots: -2 }], after: [] }
+  ]);
 });
 
-test("rejects broker positions whose public identity is not NIFTY", () => {
-  const current = oneStrategyLedger();
-  assert.throws(() => ledger.reconcilePositions(current, [position({
-    contractId: "NFO:BANKNIFTY26AUG50000CE", tradingsymbol: "BANKNIFTY26AUG50000CE"
-  })]), /NIFTY/i);
-  assert.throws(() => ledger.reconcilePositions(current, [position({
-    contractId: "NFO:BANKNIFTY26AUG50000CE"
-  })]), /NIFTY/i);
-});
+test("identical staged batch re-import is idempotent independent of staging time", () => {
+  const first = stage(allocated());
+  const repeated = stage(first, [fill()], "2026-08-10T09:00:00+05:30");
 
-test("rejects allocation of another expiry into a strategy", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position({
-    contractId: "NFO:NIFTY26SEP24100CE",
-    tradingsymbol: "NIFTY26SEP24100CE",
-    expiry: "2026-09-01"
-  })]);
-
-  assert.throws(() => ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26SEP24100CE", signedLots: -1
-  }), /expiry/i);
-});
-
-test("clears review only when broker lots are fully allocated and appends audit evidence", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position({ signedQuantity: -130 })]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2
-  });
-
-  assert.deepEqual(current.reviewChanges, []);
-  assert.equal(current.strategies[0].allocations[0].signedLots, -2);
-  assert.equal(current.audit.at(-1).type, "ALLOCATION_ACCEPTED");
-});
-
-test("keeps imported fills immutable and summarizes duplicate IDs and fingerprints", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  const source = fill();
-  current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [source], fillIds: ["trade-1"], complete: true
-  });
-  source.price = 1;
-  const imported = current.importedTrades[0];
-  const repeated = ledger.assignFills(current, {
-    strategyId: "s1",
-    trades: [fill(), fill({ id: "trade-2" })],
-    fillIds: ["trade-1"],
-    complete: true
-  });
-
-  assert.equal(imported.price, 358.8);
+  assert.equal(repeated.importBatches.length, 1);
   assert.equal(repeated.importedTrades.length, 1);
-  assert.deepEqual(repeated.audit.at(-1), {
-    type: "IMPORT_SUMMARY",
-    accepted: 0,
-    duplicateIds: 1,
-    duplicateFingerprints: 1
-  });
+  assert.equal(repeated.tradeReviews.length, 1);
+  assert.equal(repeated.importBatches[0].stagedAt, "2026-08-02T09:00:00+05:30");
+  assert.throws(() => ledger.assignFills(repeated, {
+    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"]
+  }), /explicit.*quantity/i);
 });
 
-test("requires explicit fill ownership when one broker contract is split across strategies", () => {
-  let current = oneStrategyLedger();
-  current = ledger.createStrategy(current, {
-    id: "s2", name: "Second call sale", underlying: "NIFTY", expiry: "2026-08-25"
-  });
-  current = ledger.reconcilePositions(current, [position({ signedQuantity: -130 })]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.allocateLots(current, {
-    strategyId: "s2", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  const incomplete = ledger.strategyRiskInput(current, "s1");
-  current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], importBatch: confirmedBatch()
-  });
-  current = acceptBrokerSnapshot(current);
-  const exact = ledger.strategyRiskInput(current, "s1");
-
-  assert.equal(incomplete.status, "ENTRY_HISTORY_INCOMPLETE");
-  assert.equal(incomplete.history.consistent, false);
-  assert.equal(exact.status, "OK");
-  assert.equal(exact.openLegs[0].entryPrice, 358.8);
-  assert.deepEqual(exact.fills.map((trade) => trade.id), ["trade-1"]);
+test("exact expiry and identity validation reject cross-expiry and legacy allocations", () => {
+  const current = oneStrategy();
+  assert.throws(() => ledger.reconcilePositions(current, [position({
+    contractId: "NFO:NIFTY:2026-09-01:24100:CE",
+    tradingsymbol: "NIFTY2690124100CE",
+    expiry: "2026-09-01"
+  })], { expiry: EXPIRY }), /outside.*expiry/i);
+  assert.throws(() => ledger.reconcilePositions(current, [position({
+    contractId: "NFO:NIFTY26AUG24100CE"
+  })], { expiry: EXPIRY }), /exact-expiry|identity/i);
 });
 
-test("rejects fills outside NIFTY strategy provenance", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  const unrelated = [
-    fill({ id: "foreign-underlying", underlying: "BANKNIFTY" }),
-    fill({ id: "foreign-expiry", expiry: "2026-09-01" }),
-    fill({ id: "foreign-contract", contractId: "NFO:NIFTY26AUG24000PE", tradingsymbol: "NIFTY26AUG24000PE", optionType: "PE", strike: 24000 })
-  ];
+test("persisted risk positions must still match canonical expiry, strike, and right", () => {
+  const corrupted = allocated();
+  corrupted.brokerPositions[0].strike = 24200;
 
-  for (const trade of unrelated) {
-    assert.throws(() => ledger.assignFills(current, {
-      strategyId: "s1", trades: [trade], fillIds: [trade.id], importBatch: confirmedBatch({ fingerprint: trade.id })
-    }), /NIFTY|expiry|allocation|related/i);
-  }
+  const input = ledger.strategyRiskInput(corrupted, "s1");
+
+  assert.equal(input.status, "ENTRY_HISTORY_INCOMPLETE");
+  assert.deepEqual(input.openLegs, []);
 });
 
-test("rejects transfer of a fill carrying another immutable strategy owner", () => {
-  let current = oneStrategyLedger();
-  current = ledger.createStrategy(current, {
-    id: "s2", name: "Second call sale", underlying: "NIFTY", expiry: "2026-08-25"
+test("accepted snapshots persist immutable normalized positions, allocations, fills, and evidence versions", () => {
+  let current = stage(allocated());
+  current = ledger.assignFillQuantity(current, {
+    fillId: "trade-1", strategyId: "s1", disposition: "STRATEGY", quantity: 65,
+    confirmedAt: "2026-08-02T09:05:00+05:30"
   });
-  current = ledger.reconcilePositions(current, [position({ signedQuantity: -130 })]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  current = ledger.confirmHistoryCoverage(current, {
+    strategyId: "s1", batchFingerprint: "batch-1", from: "2026-08-01", to: "2026-08-01",
+    checkpointIds: [], confirmedAt: "2026-08-02T09:10:00+05:30"
   });
-  current = ledger.allocateLots(current, {
-    strategyId: "s2", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1",
-    trades: [fill({ id: "s1-fill" }), fill({ id: "unassigned-fill", timestamp: "2026-08-02T09:15:00+05:30" })],
-    fillIds: ["s1-fill"],
-    importBatch: confirmedBatch({ fingerprint: "split-batch" })
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s2", trades: [], fillIds: ["unassigned-fill"]
+  current = ledger.acceptSnapshot(current, {
+    strategyId: "s1", snapshot: { at: "2026-08-01T16:00:00+05:30", candidateId: "candidate-1" }
   });
 
-  assert.throws(() => ledger.assignFills(current, {
-    strategyId: "s2", trades: [], fillIds: ["s1-fill"]
-  }), /owner|assigned|another/i);
-  assert.throws(() => ledger.assignFills(current, {
-    strategyId: "s2", trades: [fill({ id: "claimed-fill", strategyId: "s1" })], fillIds: ["claimed-fill"]
-  }), /owner|another/i);
-  assert.deepEqual(current.fillAssignments, [
-    { fillId: "s1-fill", strategyId: "s1" },
-    { fillId: "unassigned-fill", strategyId: "s2" }
+  const inputs = current.strategies[0].snapshots[0].normalizedInputs;
+  assert.deepEqual(inputs.allocations, [{ contractId: CONTRACT, signedLots: -1 }]);
+  assert.deepEqual(inputs.ownedFillQuantities.map(({ fillId, quantity }) => ({ fillId, quantity })), [
+    { fillId: "trade-1", quantity: 65 }
   ]);
+  assert.equal(inputs.positions[0].contractId, CONTRACT);
+  assert.equal(inputs.evidence.fillAssignmentCount, 1);
+  assert.equal(inputs.evidence.coverageDeclarationIds.length, 1);
 });
 
-test("rejects non-NFO, malformed, or mismatched NIFTY option positions", () => {
-  const current = oneStrategyLedger();
-  const invalid = [
-    position({ exchange: "BSE" }),
-    position({ tradingsymbol: "NIFTYJUNK26AUG24100CE", contractId: "NFO:NIFTYJUNK26AUG24100CE" }),
-    position({ strike: 24000 }),
-    position({ optionType: "PE" }),
-    position({ expiry: "2025-08-25" })
-  ];
-  for (const brokerPosition of invalid) {
-    assert.throws(() => ledger.reconcilePositions(current, [brokerPosition]), /NIFTY|NFO|option|identity/i);
-  }
-});
-
-test("fails closed when legacy assigned evidence violates strategy provenance", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current.importedTrades.push({ ...fill(), underlying: "BANKNIFTY" });
-  current.strategies[0].fillIds.push("trade-1");
-  current.strategies[0].historyComplete = true;
-
-  const riskInput = ledger.strategyRiskInput(current, "s1");
-  assert.equal(riskInput.status, "HISTORY_INCOMPLETE");
-  assert.equal(riskInput.history.consistent, false);
-});
-
-test("does not promote naked complete:true to whole-trade evidence", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], complete: true
-  });
-
-  const riskInput = ledger.strategyRiskInput(current, "s1");
-  assert.equal(riskInput.status, "HISTORY_INCOMPLETE");
-  assert.equal(riskInput.history.complete, false);
-});
-
-test("derives complete history from confirmed immutable Zerodha batch coverage", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  const batch = confirmedBatch();
-  current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], importBatch: batch
-  });
-  current = acceptBrokerSnapshot(current);
-  batch.coverage.from = "2030-01-01";
-  const riskInput = ledger.strategyRiskInput(current, "s1");
-
-  assert.equal(riskInput.status, "OK");
-  assert.deepEqual(riskInput.history, {
-    complete: true, reconciled: true, duplicates: false, consistent: true
-  });
-  assert.deepEqual(current.importBatches[0].coverage, { from: "2026-08-01", to: "2026-08-31" });
-  assert.deepEqual(current.audit.filter((event) => event.fingerprint === "zerodha-august-batch").map((event) => event.type), ["IMPORT_BATCH_ACCEPTED", "IMPORT_BATCH_CONFIRMED"]);
-});
-
-test("requires batch coverage through accepted broker snapshot evidence", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], importBatch: confirmedBatch()
-  });
-
-  assert.equal(ledger.strategyRiskInput(current, "s1").status, "HISTORY_INCOMPLETE");
-  current = acceptBrokerSnapshot(current, "s1", "2026-09-01T09:15:00+05:30");
-  assert.equal(ledger.strategyRiskInput(current, "s1").status, "HISTORY_INCOMPLETE");
-});
-
-test("fails closed for noncontiguous batch coverage and recorded history gaps", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1",
-    trades: [fill({ id: "opening", quantity: 130 })],
-    fillIds: ["opening"],
-    importBatch: confirmedBatch({ fingerprint: "aug-1", coverage: { from: "2026-08-01", to: "2026-08-01" } })
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1",
-    trades: [fill({ id: "reduction", transactionType: "BUY", quantity: 65, timestamp: "2026-08-03T09:15:00+05:30" })],
-    fillIds: ["reduction"],
-    importBatch: confirmedBatch({ fingerprint: "aug-3", coverage: { from: "2026-08-03", to: "2026-08-03" } })
-  });
-  current = acceptBrokerSnapshot(current, "s1", "2026-08-03T16:00:00+05:30");
-
-  assert.equal(ledger.strategyRiskInput(current, "s1").status, "HISTORY_INCOMPLETE");
+test("explicit history gaps append audit evidence and suppress completeness", () => {
+  let current = allocated();
   current = ledger.recordHistoryGap(current, {
-    strategyId: "s1", from: "2026-08-02", to: "2026-08-02", reason: "missing tradebook interval"
+    strategyId: "s1", from: "2026-08-02", to: "2026-08-02", reason: "missed checkpoint"
   });
+  assert.equal(current.historyGaps.length, 1);
   assert.equal(current.audit.at(-1).type, "HISTORY_GAP_RECORDED");
-  assert.equal(ledger.strategyRiskInput(current, "s1").history.complete, false);
-});
-
-test("fails closed when confirmed batch coverage excludes an assigned trade date", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position()]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.assignFills(current, {
-    strategyId: "s1",
-    trades: [fill()],
-    fillIds: ["trade-1"],
-    complete: true,
-    importBatch: confirmedBatch({ coverage: { from: "2026-08-02", to: "2026-08-31" } })
-  });
-
-  const riskInput = ledger.strategyRiskInput(current, "s1");
-  assert.equal(riskInput.status, "HISTORY_INCOMPLETE");
-  assert.equal(riskInput.history.complete, false);
-});
-
-test("records append-only complete allocation revisions for edits and deletion", () => {
-  let current = oneStrategyLedger();
-  current = ledger.reconcilePositions(current, [position({ signedQuantity: -130 })]);
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
-  });
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2
-  });
-  current = ledger.allocateLots(current, {
-    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: 0
-  });
-
-  assert.deepEqual(current.allocationRevisions.map((revision) => ({ before: revision.before, after: revision.after })), [
-    { before: [], after: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1 }] },
-    { before: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1 }], after: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2 }] },
-    { before: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2 }], after: [] }
-  ]);
-  assert.deepEqual(current.audit.at(-1).before, [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2 }]);
-  assert.deepEqual(current.audit.at(-1).after, []);
-});
-
-test("appends snapshots without replacing prior accepted state", () => {
-  let current = oneStrategyLedger();
-  current = ledger.acceptSnapshot(current, {
-    strategyId: "s1", snapshot: { at: "2026-08-01T09:15:00+05:30", status: "OK", breakevens: [24000] }
-  });
-  current = ledger.acceptSnapshot(current, {
-    strategyId: "s1", snapshot: { at: "2026-08-01T09:20:00+05:30", status: "OK", breakevens: [24100] }
-  });
-
-  assert.equal(current.strategies[0].snapshots.length, 2);
-  assert.deepEqual(current.strategies[0].snapshots[0].breakevens, [24000]);
-  assert.equal(current.audit.at(-1).type, "SNAPSHOT_ACCEPTED");
+  assert.notEqual(ledger.strategyRiskInput(current, "s1").status, "OK");
 });

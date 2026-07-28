@@ -1,7 +1,7 @@
 # Seller Safety Map — Approved Design
 
 Date: 2026-07-28
-Status: design approved; implementation not started
+Status: implemented and final-review hardened in version 0.4.0
 
 ## Goal
 
@@ -44,11 +44,22 @@ The original Pine-sync extension v0.14.0 remains disabled and untouched as backu
 - Market-data source: existing Upstox bridge and option-chain response.
 - Refresh model: one explicit **REFRESH ALL** press.
 - Strategy ownership: manual groups with lot-level allocation.
-- History source: one-time Zerodha tradebook CSV import plus read-only current-day trade capture and local tracking afterward.
+- History source: staged Zerodha tradebook CSV evidence plus read-only current-day trade capture and immutable daily checkpoints.
 - Chart output: current-risk and whole-trade breakevens, profit/loss bands, and compact risk states.
 - Popup output: broker status, risk summary, explanation, position legs, and timeline.
 - Storage: local machine only.
 - Execution: read-only; no order placement.
+
+## Final hardening invariants
+
+- Every canonical option identity contains the exact `YYYY-MM-DD` expiry. Weekly contracts on different dates never share an identity, and old month-only persisted identities fail closed for review.
+- CSV import only stages source evidence. It never assigns rows to the selected strategy and never infers historical coverage through the import date or today.
+- Every fill requires an explicit quantity disposition. A fill may be split across same-expiry strategies; any remainder must be explicitly left unassigned.
+- Same-expiry closed rolls, same-day round trips, opened/closed adjustments, and protection fills remain reviewable even when their contracts are no longer open.
+- Whole-trade publication requires operator-confirmed coverage bounds plus explicit checkpoint identities. Successful zero-trade days are immutable checkpoints; missing intervals become `HISTORY GAP` and are never inferred.
+- Accepted evidence and chart views are stored per strategy. The always-visible strategy selector restores same- or different-expiry views without a refresh while current stale, session, review, and refresh-failure gates remain active.
+- Any failed **REFRESH ALL** result immediately publishes non-renderable `REFRESH_FAILED` chart state. The popup keeps last accepted evidence, but the chart receives no 15-minute grace period after a known failure.
+- Accepted normalized positions, lot allocations, owned fill quantities, evidence versions, and checkpoints are immutable diff inputs for factual “why moved” explanations.
 
 ## Core terminology
 
@@ -140,9 +151,11 @@ Whole-trade calculations for positions opened before installation require one-ti
 - CSV stays on local machine.
 - Import parses NIFTY option fills, trade identifiers, timestamps, direction, quantity, price, expiry, option type, and strike when present.
 - Duplicate trades are ignored by stable trade identifier and validated content fingerprint.
-- Imported trades are not automatically assigned when strategy ownership is ambiguous.
-- Product proposes matching candidate fills by underlying, expiry, and contract; user confirms strategy ownership.
-- Same historical contract can be allocated by quantity when it served multiple strategies.
+- Imported trades are never automatically assigned. Matching contract or selected strategy is not ownership evidence.
+- Product filters only rows proven outside the selected account, NIFTY underlying, exchange, or exact expiry. Ambiguous rows reject the batch.
+- User confirms an exact positive quantity for each strategy assignment or unassigned disposition. The same fill can be split across strategies until its entire quantity has an explicit disposition.
+- Reviewed same-expiry contracts can be closed at import time; open-position membership is not required for historical ownership.
+- User confirms exact coverage bounds and referenced daily checkpoints after quantity review. Import never extends coverage to today by itself.
 - Imported history becomes immutable source evidence; corrections create an audit event instead of rewriting original rows silently.
 - After import, read-only current-day Zerodha trades captured by Refresh extend timeline with exact executed quantities and prices.
 - A position change first seen after its trade date cannot be reconstructed truthfully from a net-position snapshot. Mark that interval `HISTORY GAP` and require an updated tradebook CSV before showing whole-trade risk again.
@@ -255,6 +268,8 @@ Chart remains primary visual surface.
 
 Popup strategy selector determines which strategy map appears. Selected strategy expiry also drives ladder expiry. When no strategy is selected, existing expiry selection remains available for ladder-only use.
 
+The selector stays visible outside review state. Each strategy keeps its own accepted evidence and chart view; switching does not destroy another strategy or issue a refresh.
+
 ## Extension popup design
 
 Popup keeps approved Trading Desk Lite tokens and immediate Refresh placement.
@@ -359,12 +374,14 @@ Extension popup         TradingView risk renderer
 - Show **RECONNECT ZERODHA**.
 - Do not call positions endpoint repeatedly.
 - Keep last accepted map only with prominent `STALE · <timestamp>` state.
+- Immediately publish non-renderable `STALE · REFRESH FAILED` to the chart; a known failure has no 15-minute grace period.
 - Never report Refresh success.
 
 ### Zerodha positions unavailable
 
 - Keep last accepted map marked stale.
 - Preserve local strategy ledger.
+- Immediately hide chart risk with `REFRESH_FAILED`.
 - Do not update timeline.
 
 ### Zerodha current-day trades unavailable
@@ -377,7 +394,7 @@ Extension popup         TradingView risk renderer
 
 - Keep prior option-ladder numbers.
 - Keep accepted entry-based expiry map when position state is unchanged.
-- Mark live P&L/quote-dependent fields stale.
+- Mark live P&L/quote-dependent fields stale and immediately hide all chart risk layers.
 - Make no automatic retry storm.
 
 ### Broker quantities differ from allocations

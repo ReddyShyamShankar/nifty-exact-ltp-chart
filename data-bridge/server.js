@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { userInfo } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import originConfig from "./origin-config.cjs";
 import { createAsyncCache } from "./chain-cache.js";
 import { createZerodhaClient } from "./zerodha-client.js";
 import { createZerodhaSessionStore, ZERODHA_CALLBACK_FAILURE_MESSAGE } from "./zerodha-session.js";
@@ -16,8 +17,6 @@ const NIFTY_KEY = "NSE_INDEX|Nifty 50";
 const STRIKE_STEP = 50;
 const EXPIRY_CACHE_MS = 15 * 60 * 1000;
 const CHAIN_CACHE_MS = 2000;
-const DEFAULT_EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
-const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}$/;
 const KEYCHAIN_SERVICE = process.env.NIFTY_UPSTOX_KEYCHAIN_SERVICE || "NIFTY Options Upstox Analytics Token";
 let expiryCache = null;
 let candleCache = null;
@@ -126,20 +125,13 @@ function respondJson(response, status, payload, corsOrigin) {
     "Content-Type": "application/json; charset=utf-8"
   };
   if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
-  if (corsOrigin && corsOrigin !== "*") headers.Vary = "Origin";
+  if (corsOrigin) headers.Vary = "Origin";
   response.writeHead(status, headers);
   response.end(JSON.stringify(payload));
 }
 
-function respond(response, status, payload) {
-  respondJson(response, status, payload, "*");
-}
-
 function validatedExtensionOrigin(value) {
-  if (typeof value !== "string" || !EXTENSION_ORIGIN_PATTERN.test(value)) {
-    throw new Error("Invalid NIFTY extension origin.");
-  }
-  return value;
+  return originConfig.validateExtensionOrigin(value);
 }
 
 function formatChain(chain) {
@@ -274,12 +266,13 @@ export function createRequestHandler({
   expiryMetadata = cachedExpiryMetadata,
   normalizePositions = normalizeNiftyPositions,
   normalizeTrades = normalizeNiftyTrades,
-  extensionOrigin = process.env.NIFTY_EXTENSION_ORIGIN || DEFAULT_EXTENSION_ORIGIN,
+  extensionOrigin = originConfig.loadExtensionOrigin(),
   now = () => new Date()
 } = {}) {
   const allowedOrigin = validatedExtensionOrigin(extensionOrigin);
   const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/seller-refresh"]);
   return async function requestHandler(request, response) {
+  const respondPublic = (status, payload) => respondJson(response, status, payload, allowedOrigin);
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
   const accountPath = accountPaths.has(url.pathname);
   if (accountPath && request.headers.origin !== allowedOrigin) {
@@ -288,12 +281,12 @@ export function createRequestHandler({
   }
   if (request.method !== "GET") {
     if (accountPath) respondJson(response, 404, { error: "Not found" }, allowedOrigin);
-    else respond(response, 404, { error: "Not found" });
+    else respondPublic(404, { error: "Not found" });
     return;
   }
   if (url.pathname === "/") {
     const token = resolveToken();
-    respond(response, 200, {
+    respondPublic(200, {
       service: "NIFTY data bridge",
       status: "running",
       token: { configured: Boolean(token.token), source: token.source, expiresAt: token.expiresAt },
@@ -369,51 +362,51 @@ export function createRequestHandler({
   if (url.pathname === "/api/health") {
     const token = resolveToken();
     if (!token.token) {
-      respond(response, 503, { status: "error", kind: "token_missing", error: "Upstox Analytics Token is not configured." });
+      respondPublic(503, { status: "error", kind: "token_missing", error: "Upstox Analytics Token is not configured." });
       return;
     }
     if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) {
-      respond(response, 401, { status: "error", kind: "auth", error: "The saved Upstox Analytics Token has expired.", token: { source: token.source, expiresAt: token.expiresAt } });
+      respondPublic(401, { status: "error", kind: "auth", error: "The saved Upstox Analytics Token has expired.", token: { source: token.source, expiresAt: token.expiresAt } });
       return;
     }
     try {
       if (url.searchParams.get("live") === "1") await niftyExpiries();
-      respond(response, 200, { status: "ok", bridge: "online", upstox: url.searchParams.get("live") === "1" ? "reachable" : "not_checked", token: { source: token.source, expiresAt: token.expiresAt } });
+      respondPublic(200, { status: "ok", bridge: "online", upstox: url.searchParams.get("live") === "1" ? "reachable" : "not_checked", token: { source: token.source, expiresAt: token.expiresAt } });
     } catch (error) {
-      respond(response, error.status || 502, { status: "error", kind: error.kind || "upstream", error: error.message, token: { source: token.source, expiresAt: token.expiresAt } });
+      respondPublic(error.status || 502, { status: "error", kind: error.kind || "upstream", error: error.message, token: { source: token.source, expiresAt: token.expiresAt } });
     }
     return;
   }
   if (url.pathname === "/api/nifty-expiries") {
     try {
-      respond(response, 200, await niftyExpiries());
+      respondPublic(200, await niftyExpiries());
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondPublic(error.status || 502, { error: error.message, kind: error.kind || "upstream" });
     }
     return;
   }
   if (url.pathname === "/api/nifty-candles") {
     const days = Math.max(30, Math.min(365, Number(url.searchParams.get("days")) || 120));
     try {
-      respond(response, 200, await niftyCandles(days));
+      respondPublic(200, await niftyCandles(days));
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondPublic(error.status || 502, { error: error.message, kind: error.kind || "upstream" });
     }
     return;
   }
   if (url.pathname !== "/api/nifty-chain") {
-    respond(response, 404, { error: "Not found" });
+    respondPublic(404, { error: "Not found" });
     return;
   }
   const expiry = url.searchParams.get("expiry") || "current_month";
   if (!/^(current|next|far)_(week|month)$/.test(expiry) && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
-    respond(response, 400, { error: "Expiry must be a supported relative expiry or YYYY-MM-DD." });
+    respondPublic(400, { error: "Expiry must be a supported relative expiry or YYYY-MM-DD." });
     return;
   }
   try {
-    respond(response, 200, await niftyChain(expiry));
+    respondPublic(200, await niftyChain(expiry));
   } catch (error) {
-    respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+    respondPublic(error.status || 502, { error: error.message, kind: error.kind || "upstream" });
   }
   };
 }

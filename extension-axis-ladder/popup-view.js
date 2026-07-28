@@ -68,8 +68,8 @@
     return { kind: "connected", label: "ZERODHA CONNECTED · TODAY", action: null };
   }
 
-  function reviewRows(sourceLedger) {
-    return (sourceLedger.reviewChanges || []).map((change) => ({
+  function reviewRows(sourceLedger, expiry) {
+    return (sourceLedger.reviewChanges || []).filter((change) => !expiry || change.position?.expiry === expiry).map((change) => ({
       contractId: change.contractId,
       label: change.position?.tradingsymbol || change.contractId,
       signedLots: change.position ? change.signedQuantity / change.position.lotSize : 0,
@@ -87,12 +87,16 @@
     };
   }
 
-  function previousMap(strategy) {
+  function previousSnapshot(strategy) {
     const snapshots = Array.isArray(strategy?.snapshots) ? strategy.snapshots : [];
     for (let index = snapshots.length - 1; index >= 0; index -= 1) {
-      if (snapshots[index]?.currentMap) return restoreMap(snapshots[index].currentMap);
+      if (snapshots[index]?.currentMap) return snapshots[index];
     }
     return null;
+  }
+
+  function previousMap(strategy) {
+    return restoreMap(previousSnapshot(strategy)?.currentMap);
   }
 
   function latestAcceptedCandidateId(strategy) {
@@ -172,9 +176,10 @@
 
   function buildView({ ledger: sourceLedger, selectedStrategyId, brokerStatus, chain, now }) {
     const strategy = sourceLedger?.strategies?.find((candidate) => candidate.id === selectedStrategyId) || null;
-    const reviewChanges = reviewRows(sourceLedger || { reviewChanges: [] });
+    const expiry = strategy?.expiry || chain?.expiry || "";
+    const reviewChanges = reviewRows(sourceLedger || { reviewChanges: [] }, expiry);
     const tradeReviews = Array.isArray(sourceLedger?.tradeReviews)
-      ? sourceLedger.tradeReviews.map((review) => ({ ...review }))
+      ? sourceLedger.tradeReviews.filter((review) => !expiry || review.expiry === expiry).map((review) => ({ ...review }))
       : [];
     const broker = brokerView(brokerStatus, chain?.updatedAt, now);
     const candidateId = typeof chain?.candidateId === "string" ? chain.candidateId : "";
@@ -186,7 +191,7 @@
       brokerSessionExpiresAt: brokerStatus?.expiresAt || null,
       strategyId: strategy?.id || "",
       strategyName: strategy?.name || "NO STRATEGY SELECTED",
-      expiry: strategy?.expiry || chain?.expiry || "",
+      expiry,
       daysToExpiry: Number.isFinite(chain?.daysToExpiry) ? chain.daysToExpiry : null,
       spot: number(chain?.spot),
       broker,
@@ -269,15 +274,18 @@
       fills: riskInput.fills,
       history: riskInput.history
     });
-    const wholeStatus = wholeMap.status === "HISTORY_INCOMPLETE"
-      ? "HISTORY INCOMPLETE"
-      : wholeMap.status.replaceAll("_", " ");
+    const wholeStatus = wholeMap.status.replaceAll("_", " ");
     const currentDisplay = breakevens(currentMap);
     const wholeDisplay = breakevens(wholeMap);
-    const explanation = risk.explainRiskChange(previousMap(strategy), currentMap);
+    const priorSnapshot = previousSnapshot(strategy);
+    const explanation = risk.explainRiskChange(previousMap(strategy), currentMap, {
+      previousInputs: priorSnapshot?.normalizedInputs,
+      nextInputs: riskInput.normalizedInputs
+    });
     const warningParts = [];
     if (currentMap.maxLoss === -Infinity || currentMap.upsideUnbounded) warningParts.push("MAXIMUM LOSS IS UNBOUNDED");
     if (wholeMap.status === "HISTORY_INCOMPLETE") warningParts.push("HISTORY INCOMPLETE · WHOLE-TRADE MAP WITHHELD");
+    if (wholeMap.status === "HISTORY_GAP") warningParts.push("HISTORY GAP · WHOLE-TRADE MAP WITHHELD");
     if (currentMap.status === "EXCLUDING_CHARGES" || wholeMap.status === "EXCLUDING_CHARGES") warningParts.push("BROKER CHARGES EXCLUDED");
     return {
       ...base,
@@ -288,6 +296,7 @@
       maxProfit: currentMap.maxProfit === Infinity ? "UNBOUNDED" : rupees(currentMap.maxProfit, { signed: true }),
       maxLoss: currentMap.maxLoss === -Infinity ? "UNBOUNDED" : rupees(currentMap.maxLoss, { signed: true }),
       whyMoved: explanation.facts,
+      normalizedInputs: riskInput.normalizedInputs,
       warning: warningParts.join(" · ") || "NO STRUCTURAL WARNING",
       maps: { current: snapshotMap(currentMap), wholeTrade: snapshotMap(wholeMap) }
     };

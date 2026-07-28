@@ -21,6 +21,7 @@ Version 0.4.0 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain
 - Manual refresh updates LTP values and recenters ATM when spot crosses the exact midpoint.
 - Popup open, timeframe changes, zoom, and pan reuse accepted local evidence and request no positions, trades, or chain data.
 - Upstream failures are not retried automatically.
+- Any positions, trades, chain, session, rate-limit, or malformed-response failure becomes **STALE · REFRESH FAILED** immediately and hides every chart risk layer. The popup retains the last accepted operator evidence; there is no 15-minute grace period after a known failure.
 - Runs only on the NIFTY underlying chart; other TradingView tabs stay inert.
 - Preserves contract membership while zooming or panning; only screen positions change.
 
@@ -31,19 +32,26 @@ Version 0.4.0 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain
 - Profit and loss bands shade the payoff intervals between breakevens. Current-risk bands use solid shading; whole-trade profit and loss use visibly different directional hatch treatments. Bands are factual payoff regions, not recommendations.
 - **EXCLUDING CHARGES** means broker charges were unavailable and were not deducted.
 - **HISTORY GAP** or **HISTORY INCOMPLETE** means imported fill evidence does not fully cover the strategy. The affected whole-trade map is withheld instead of estimated.
-- A stale broker timestamp preserves the last accepted evidence in the popup but hides chart risk layers until a successful reviewed refresh replaces it. The chart checks the 15-minute evidence deadline and Zerodha session expiry locally before every placement, automatically hiding at the earlier deadline without a network call.
+- A stale broker timestamp preserves the last accepted evidence in the popup but hides chart risk layers until a successful reviewed refresh replaces it. The chart checks the 15-minute evidence deadline and Zerodha session expiry locally before every placement, automatically hiding at the earlier deadline without a network call. **REFRESH FAILED** immediately hides chart output as soon as a manual refresh fails.
 - New or changed positions preserve the last accepted evidence for operator inspection and enter **REVIEW POSITION CHANGES**. A separate withheld chart state hides the old map until the new positions are manually allocated and explicitly accepted.
-- Current-day Zerodha trades are stored as immutable ledger evidence and deduplicated against the one-time CSV history. Each new trade remains unassigned under **REVIEW TRADE OWNERSHIP** until the operator selects its strategy owner and presses **ASSIGN REVIEWED TRADES**; ownership is never inferred from a matching contract. Once confirmed, contiguous daily evidence extends that strategy's historical coverage without another CSV import.
+- A Zerodha tradebook CSV is staged as evidence only. Each per-fill quantity stays under **REVIEW TRADE OWNERSHIP** until the operator chooses a same-expiry strategy or explicitly leaves it unassigned. One fill can be split across multiple strategies by assigning part of its remaining quantity at a time. Import never assigns all rows to the selected strategy and never invents coverage through today.
+- Explicitly reviewed closed rolls, same-day round trips, opened/closed adjustments, and protection fills remain valid same-expiry history even when that contract is no longer open. Unrelated same-contract fills left unassigned cannot cancel owned history or change whole-trade payoff.
+- The operator confirms exact historical coverage bounds after every staged batch. Immutable successful daily checkpoints—including `trades=[]` days—extend only contiguous coverage. A missed interval becomes **HISTORY GAP**; no missing date is inferred.
+- Current-day Zerodha trades are immutable and deduplicated against imported history. Every new quantity still needs an explicit disposition before acceptance.
+- The always-visible strategy selector restores the accepted popup and chart view for each strategy without another refresh. Same-expiry and different-expiry strategies remain isolated; switching views does not delete another strategy’s accepted evidence.
+- Weekly contracts keep their exact expiry date in canonical identity. Same strike/right contracts such as 04 Aug and 11 Aug never collide or merge with a monthly contract.
+- **WHY IT MOVED** compares immutable accepted normalized inputs and reports factual lot, premium/debit, breakeven, band, protection, short-exposure, and per-leg contribution changes. It gives no advice.
 
 ## Workflow
 
 1. Keep local NIFTY bridge running at `http://127.0.0.1:8787`.
 2. Open a logged-in TradingView NIFTY chart and select the exact expiry.
 3. Daily, press **CONNECT ZERODHA** and finish the Zerodha login, then press **REFRESH ALL** once.
-4. On first use, perform the one-time Zerodha tradebook CSV import as the historical baseline.
-5. Daily, manually allocate changed whole lots. For each new current-day trade, select its same-expiry strategy owner and press **ASSIGN REVIEWED TRADES**. Confirmed contiguous daily fills extend the baseline without re-importing the CSV; duplicate refreshes preserve the prior assignment.
-6. Review the resulting map and press **ACCEPT REVIEWED SNAPSHOT**.
-7. If needed, expand **ADVANCED · PLACEMENT & HEALTH** and enable the chart ladder.
+4. Import the relevant Zerodha tradebook CSV. Review the import summary: proven rows from another account, index, exchange, or expiry are counted as ignored; ambiguous rows reject the batch.
+5. For every staged or current-day fill, enter an explicit quantity and choose a same-expiry strategy or **Leave unassigned**. Repeat to split one fill across strategies.
+6. Enter and confirm the operator-reviewed **coverage bounds**. Daily successful checkpoints can extend that baseline; a missing checkpoint creates **HISTORY GAP**.
+7. Manually allocate changed whole lots, review the resulting map, and press **ACCEPT REVIEWED SNAPSHOT**.
+8. Use the strategy selector to restore any accepted strategy without another refresh. If needed, expand **ADVANCED · PLACEMENT & HEALTH** and enable the chart ladder.
 
 The popup opens with **REFRESH ALL** beside the extension title. Expiry changes wait for the next manual refresh. Timeframe changes rebuild placement from cached data. Zoom and pan only remap the same strikes and accepted risk evidence to new screen positions.
 
@@ -54,7 +62,7 @@ No Pine symbol injection, Pine calibrator, manual center strike, screenshot capt
 - Extension never stores Upstox token.
 - Zerodha API secret and daily access token stay in the local bridge Keychain. They are never returned to or stored by the extension.
 - Tradebook rows, manual allocations, reviewed snapshots, and timeline remain in `chrome.storage.local`; no cloud upload occurs.
-- Seller Safety Map accepts only NFO NIFTY options allocated to one same-expiry strategy.
+- Seller Safety Map accepts only exact-expiry NFO NIFTY options. Old month-only stored identities fail closed for manual review and weekly identities are never merged.
 - Chrome debugger permission is used only for bounded trusted price-scale auto-fit; session detaches after every gesture.
 - Unsupported timeframes, nonlinear scales, incomplete 13-strike ranges, or unobservable native ticks fail closed and hide rows.
 - Broker integration is read-only. It can read positions and trades only: no-order placement, modification, cancellation, conversion, or exit is available.

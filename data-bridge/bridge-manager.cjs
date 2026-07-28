@@ -4,15 +4,20 @@ const { execFileSync } = require("node:child_process");
 const { existsSync, mkdirSync, writeFileSync } = require("node:fs");
 const { homedir } = require("node:os");
 const { dirname, resolve } = require("node:path");
+const originConfig = require("./origin-config.cjs");
 
 const LABEL = "com.reddy.nifty-options-bridge";
 const SERVICE = "NIFTY Options Upstox Analytics Token";
 const ZERODHA_API_KEY_SERVICE = "NIFTY Options Zerodha API Key";
 const ZERODHA_API_SECRET_SERVICE = "NIFTY Options Zerodha API Secret";
 const ZERODHA_ACCESS_TOKEN_SERVICE = "NIFTY Options Zerodha Daily Access Token";
-const DEFAULT_EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
-const EXTENSION_ORIGIN = process.env.NIFTY_EXTENSION_ORIGIN || DEFAULT_EXTENSION_ORIGIN;
-if (!/^chrome-extension:\/\/[a-p]{32}$/.test(EXTENSION_ORIGIN)) throw new Error("Invalid NIFTY extension origin.");
+const command = process.argv[2] || "status";
+if (command === "origin") {
+  const saved = originConfig.saveExtensionOrigin(process.argv[3]);
+  console.log(`Saved exact extension origin: ${saved}`);
+  process.exit(0);
+}
+const EXTENSION_ORIGIN = originConfig.loadExtensionOrigin();
 const plist = resolve(homedir(), "Library/LaunchAgents", `${LABEL}.plist`);
 const server = resolve(__dirname, "server.js");
 const log = resolve(homedir(), "Library/Logs/NiftyOptionsBridge.log");
@@ -71,11 +76,10 @@ function status() {
   }
 }
 
-const command = process.argv[2] || "status";
 if (command === "install") install();
 else if (command === "start") start();
 else if (command === "status") status();
 else {
-  console.error("Usage: node data-bridge/bridge-manager.cjs <install|start|status>");
+  console.error("Usage: node data-bridge/bridge-manager.cjs <origin chrome-extension://ID|install|start|status>");
   process.exitCode = 2;
 }

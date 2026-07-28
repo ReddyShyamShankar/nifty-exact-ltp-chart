@@ -57,11 +57,19 @@ case "$COMMAND" in
     configure_zerodha
     node "$ROOT_DIR/data-bridge/bridge-manager.cjs" install
     ;;
+  extension-origin)
+    if [[ $# -ne 2 ]]; then
+      echo "Usage: bin/nifty-bridge extension-origin chrome-extension://<32-lowercase-id>" >&2
+      exit 2
+    fi
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" origin "$2"
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" install
+    ;;
   install|start|status)
     node "$ROOT_DIR/data-bridge/bridge-manager.cjs" "$COMMAND"
     ;;
   *)
-    echo "Usage: bin/nifty-bridge <setup|token|zerodha-setup|install|start|status>" >&2
+    echo "Usage: bin/nifty-bridge <setup|token|zerodha-setup|extension-origin chrome-extension://ID|install|start|status>" >&2
     exit 2
     ;;
 esac

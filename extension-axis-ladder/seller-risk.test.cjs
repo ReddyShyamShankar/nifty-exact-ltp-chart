@@ -60,6 +60,17 @@ test("whole trade fails closed without complete reconciled history evidence", ()
   }
 });
 
+test("whole trade reports an explicit checkpoint gap instead of generic incompleteness", () => {
+  const result = risk.wholeTradeRiskMap({
+    openLegs: [{ id: "c", strike: 24100, optionType: "CE", signedLots: -1, lotSize: 65, entryPrice: 100 }],
+    fills: [{ id: "owned", transactionType: "SELL", quantity: 65, price: 100 }],
+    history: { complete: false, reconciled: true, duplicates: false, consistent: true, gap: true }
+  });
+
+  assert.equal(result.status, "HISTORY_GAP");
+  assert.deepEqual(result.breakevens, []);
+});
+
 test("bought lower Put caps a short Put downside", () => {
   const result = risk.currentRiskMap({ legs: [
     { id: "short-put", strike: 100, optionType: "PE", signedLots: -1, lotSize: 1, entryPrice: 10 },
@@ -172,4 +183,51 @@ test("explains risk changes with deterministic factual movements", () => {
     "Maximum profit increased by 6500.00.",
     "Upside loss is now unbounded."
   ]);
+});
+
+test("explains normalized lot, premium, protection, exposure, band, and per-leg changes literally", () => {
+  const previousLegs = [
+    { id: "NFO:NIFTY:2026-08-25:24100:CE", strike: 24100, optionType: "CE", signedLots: -1, lotSize: 65, entryPrice: 100 },
+    { id: "NFO:NIFTY:2026-08-25:24100:PE", strike: 24100, optionType: "PE", signedLots: -1, lotSize: 65, entryPrice: 120 }
+  ];
+  const nextLegs = [
+    { id: "NFO:NIFTY:2026-08-25:23500:PE", strike: 23500, optionType: "PE", signedLots: 1, lotSize: 65, entryPrice: 20 },
+    { id: "NFO:NIFTY:2026-08-25:24100:CE", strike: 24100, optionType: "CE", signedLots: -2, lotSize: 65, entryPrice: 105 },
+    { id: "NFO:NIFTY:2026-08-25:24100:PE", strike: 24100, optionType: "PE", signedLots: -1, lotSize: 65, entryPrice: 115 }
+  ];
+  const normalizedInputs = (legs, version) => ({
+    version: 1,
+    strategyId: "seller",
+    expiry: "2026-08-25",
+    positions: legs.map((leg) => ({
+      contractId: leg.id, expiry: "2026-08-25", strike: leg.strike, optionType: leg.optionType,
+      signedQuantity: leg.signedLots * leg.lotSize, lotSize: leg.lotSize, averagePrice: leg.entryPrice
+    })),
+    allocations: legs.map((leg) => ({ contractId: leg.id, signedLots: leg.signedLots })),
+    ownedFillQuantities: [],
+    evidence: { allocationRevisionCount: version, fillAssignmentCount: 0, coverageDeclarationIds: [], checkpointIds: [] }
+  });
+  const previous = risk.currentRiskMap({ legs: previousLegs });
+  const next = risk.currentRiskMap({ legs: nextLegs });
+
+  const explanation = risk.explainRiskChange(previous, next, {
+    previousInputs: normalizedInputs(previousLegs, 2),
+    nextInputs: normalizedInputs(nextLegs, 5)
+  });
+
+  assert.deepEqual(explanation.facts, [
+    "23,500 PE allocation changed from 0 lots to +1 lot.",
+    "Bought 23,500 PE protection added: +1 lot.",
+    "24,100 CE allocation changed from -1 lot to -2 lots.",
+    "Short 24,100 CE exposure increased from 1 lot to 2 lots.",
+    "23,500 PE premium/debit contribution changed from ₹0.00 to −₹1,300.00 (−₹1,300.00).",
+    "24,100 CE premium/debit contribution changed from +₹6,500.00 to +₹13,650.00 (+₹7,150.00).",
+    "24,100 PE premium/debit contribution changed from +₹7,800.00 to +₹7,475.00 (−₹325.00).",
+    "Net premium/debit changed from +₹14,300.00 to +₹19,825.00 (+₹5,525.00).",
+    "Lower breakeven moved 85.00 points lower.",
+    "Upper breakeven moved 67.50 points lower.",
+    "Profit/loss band boundaries changed.",
+    "Maximum profit increased by 5525.00."
+  ]);
+  assert.doesNotMatch(explanation.facts.join(" "), /should|consider|recommend|advice/i);
 });

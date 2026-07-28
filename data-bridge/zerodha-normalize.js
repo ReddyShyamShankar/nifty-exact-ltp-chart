@@ -3,7 +3,6 @@ const MONTHS = {
   JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
   JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12"
 };
-const MONTH_NAMES = Object.fromEntries(Object.entries(MONTHS).map(([name, number]) => [number, name]));
 const WEEKLY_MONTHS = { 1: "01", 2: "02", 3: "03", 4: "04", 5: "05", 6: "06", 7: "07", 8: "08", 9: "09", O: "10", N: "11", D: "12" };
 
 function exactIsoDate(expiry) {
@@ -33,8 +32,9 @@ function canonicalIdentity(symbol, expiry, expiryKind) {
   } else {
     throw new Error("Invalid NIFTY option identity from Zerodha.");
   }
-  const tradingsymbol = `NIFTY${expiry.slice(2, 4)}${MONTH_NAMES[expiry.slice(5, 7)]}${strike}${optionType}`;
-  return { tradingsymbol, strike, optionType };
+  const tradingsymbol = value;
+  const contractId = `NFO:NIFTY:${expiry}:${strike}:${optionType}`;
+  return { tradingsymbol, contractId, strike, optionType };
 }
 
 function finiteNumber(value, label) {
@@ -51,9 +51,23 @@ function assertPayload(payload, rows, label) {
 function normalizedTimestamp(value) {
   if (typeof value !== "string" || !value.trim()) throw new Error("Invalid Zerodha trade timestamp.");
   const timestamp = value.trim();
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) return timestamp.replace(" ", "T") + "+05:30";
-  if (!Number.isFinite(Date.parse(timestamp))) throw new Error("Invalid Zerodha trade timestamp.");
-  return timestamp;
+  const match = timestamp.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})?$/);
+  if (!match) throw new Error("Invalid Zerodha trade timestamp.");
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59 ||
+    calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) {
+    throw new Error("Invalid Zerodha trade timestamp.");
+  }
+  if (match[8] && match[8] !== "Z") {
+    const [offsetHour, offsetMinute] = match[8].slice(1).split(":").map(Number);
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+      throw new Error("Invalid Zerodha trade timestamp.");
+    }
+  }
+  const normalized = timestamp.replace(" ", "T") + (match[8] ? "" : "+05:30");
+  if (!Number.isFinite(Date.parse(normalized))) throw new Error("Invalid Zerodha trade timestamp.");
+  return normalized;
 }
 
 export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown" } = {}) {
@@ -70,7 +84,7 @@ export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown
     if (signedQuantity === 0) continue;
     if (signedQuantity % LOT_SIZE !== 0) throw new Error("Zerodha position must use whole NIFTY lots.");
     normalized.push({
-      contractId: `NFO:${identity.tradingsymbol}`,
+      contractId: identity.contractId,
       tradingsymbol: identity.tradingsymbol,
       expiry,
       exchange: "NFO",
@@ -103,7 +117,7 @@ export function normalizeNiftyTrades(payload, expiry, { expiryKind = "unknown" }
     if (typeof row.trade_id !== "string" || !row.trade_id) throw new Error("Invalid Zerodha trade ID.");
     normalized.push({
       id: row.trade_id,
-      contractId: `NFO:${identity.tradingsymbol}`,
+      contractId: identity.contractId,
       tradingsymbol: identity.tradingsymbol,
       underlying: "NIFTY",
       exchange: "NFO",

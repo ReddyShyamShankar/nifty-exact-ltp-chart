@@ -117,7 +117,7 @@ git commit -m "feat(risk): add deterministic seller payoff engine"
 - Create: `extension-axis-ladder/tradebook-csv.test.cjs`
 
 **Interfaces:**
-- Produces from `NiftySellerLedger`: `emptyLedger()`, `createStrategy(ledger, input)`, `reconcilePositions(ledger, positions)`, `allocateLots(ledger, input)`, `assignFills(ledger, input)`, `acceptSnapshot(ledger, input)`, `strategyRiskInput(ledger, strategyId)`.
+- Produces from `NiftySellerLedger`: `emptyLedger()`, `createStrategy(ledger, input)`, exact-expiry `reconcilePositions(ledger, positions, { expiry })`, `allocateLots(ledger, input)`, `stageTradebookImport(ledger, input)`, `assignFillQuantity(ledger, input)`, `confirmHistoryCoverage(ledger, input)`, `acceptSnapshot(ledger, input)`, and `strategyRiskInput(ledger, strategyId)`.
 - Produces from `NiftyTradebookCsv`: `parseTradebookCsv(text)`, `tradeFingerprint(trade)`.
 - Position: `{ contractId, tradingsymbol, expiry, strike, optionType, signedQuantity, lotSize, averagePrice, lastPrice, pnl }`.
 - Ledger is JSON-serializable, versioned, append-oriented, and immutable-by-return-value.
@@ -129,7 +129,7 @@ Cover:
 ```js
 test("changed broker quantity enters review without mutating accepted allocation", () => {
   const reviewed = ledger.reconcilePositions(existingLedger, [{
-    contractId: "NFO:NIFTY26AUG24100CE", signedQuantity: -130, lotSize: 65,
+    contractId: "NFO:NIFTY:2026-08-25:24100:CE", signedQuantity: -130, lotSize: 65,
     expiry: "2026-08-25", strike: 24100, optionType: "CE", averagePrice: 358.8
   }]);
   assert.equal(reviewed.reviewChanges.length, 1);
@@ -307,7 +307,7 @@ WHOLE-TRADE TIMELINE ▸
 ADVANCED · PLACEMENT & HEALTH ▸
 ```
 
-Review panel provides strategy-name input, selected-strategy control, per-contract available-lot input, **ALLOCATE LOTS**, CSV file input, import summary, and **ACCEPT REVIEWED SNAPSHOT**. Never auto-assign ambiguous fills. Connect button opens bridge-provided official login URL in new tab.
+The selected-strategy control remains visible outside review and restores each strategy’s accepted view. Review provides strategy-name input, per-contract available-lot input, **ALLOCATE LOTS**, CSV staging summary, explicit per-fill quantity/owner controls (including split and unassigned remainder), coverage bounds/checkpoint confirmation, and **ACCEPT REVIEWED SNAPSHOT**. Never auto-assign a fill or infer coverage. Connect button opens the bridge-provided official login URL in a new tab.
 
 After accepted refresh, calculate maps through `NiftySellerRisk`, build explanation against prior accepted snapshot, save `sellerSafetyView`, and leave option-chain rows on chart only.
 

@@ -45,7 +45,7 @@ test("normalizes strict monthly NIFTY net positions and removes all out-of-scope
   };
 
   assert.deepEqual(normalizeNiftyPositions(payload, "2026-08-25", { expiryKind: "monthly" }), [{
-    contractId: "NFO:NIFTY26AUG24100CE",
+    contractId: "NFO:NIFTY:2026-08-25:24100:CE",
     tradingsymbol: "NIFTY26AUG24100CE",
     expiry: "2026-08-25",
     exchange: "NFO",
@@ -60,12 +60,12 @@ test("normalizes strict monthly NIFTY net positions and removes all out-of-scope
   }]);
 });
 
-test("matches weekly symbol through exact expiry hint and canonicalizes ledger identity", () => {
+test("matches weekly symbol through exact expiry hint and preserves exact identity", () => {
   const payload = { status: "success", data: { net: [position({ tradingsymbol: "NIFTY2681824000PE", quantity: 65 })] } };
 
   assert.deepEqual(normalizeNiftyPositions(payload, "2026-08-18"), [{
-    contractId: "NFO:NIFTY26AUG24000PE",
-    tradingsymbol: "NIFTY26AUG24000PE",
+    contractId: "NFO:NIFTY:2026-08-18:24000:PE",
+    tradingsymbol: "NIFTY2681824000PE",
     expiry: "2026-08-18",
     exchange: "NFO",
     underlying: "NIFTY",
@@ -109,8 +109,8 @@ test("normalizes NFO NIFTY BUY and SELL fills with exact signed directions", () 
   assert.deepEqual(normalizeNiftyTrades(payload, "2026-08-18"), [
     {
       id: "trade-1",
-      contractId: "NFO:NIFTY26AUG24100CE",
-      tradingsymbol: "NIFTY26AUG24100CE",
+      contractId: "NFO:NIFTY:2026-08-18:24100:CE",
+      tradingsymbol: "NIFTY2681824100CE",
       underlying: "NIFTY",
       exchange: "NFO",
       expiry: "2026-08-18",
@@ -123,8 +123,8 @@ test("normalizes NFO NIFTY BUY and SELL fills with exact signed directions", () 
     },
     {
       id: "trade-2",
-      contractId: "NFO:NIFTY26AUG24000PE",
-      tradingsymbol: "NIFTY26AUG24000PE",
+      contractId: "NFO:NIFTY:2026-08-18:24000:PE",
+      tradingsymbol: "NIFTY2681824000PE",
       underlying: "NIFTY",
       exchange: "NFO",
       expiry: "2026-08-18",
@@ -180,4 +180,34 @@ test("rejects non-number trade fields before conversion and preserves numeric ze
     { expiryKind: "weekly" }
   );
   assert.equal(normalized.price, 0);
+});
+
+test("canonical identities keep Aug-04 and Aug-11 weekly contracts isolated", () => {
+  const august4 = normalizeNiftyPositions({
+    status: "success",
+    data: { net: [position({ tradingsymbol: "NIFTY2680424100CE", quantity: -65 })] }
+  }, "2026-08-04", { expiryKind: "weekly" });
+  const august11 = normalizeNiftyPositions({
+    status: "success",
+    data: { net: [position({ tradingsymbol: "NIFTY2681124100CE", quantity: -65 })] }
+  }, "2026-08-11", { expiryKind: "weekly" });
+
+  assert.equal(august4[0].contractId, "NFO:NIFTY:2026-08-04:24100:CE");
+  assert.equal(august11[0].contractId, "NFO:NIFTY:2026-08-11:24100:CE");
+  assert.notEqual(august4[0].contractId, august11[0].contractId);
+  assert.equal(august4[0].tradingsymbol, "NIFTY2680424100CE");
+  assert.equal(august11[0].tradingsymbol, "NIFTY2681124100CE");
+});
+
+test("trade timestamps reject impossible dates and trailing suffixes", () => {
+  for (const fillTimestamp of [
+    "2026-02-30 09:15:00",
+    "2026-08-18T09:15:00+05:30junk",
+    "2026-08-18T25:15:00+05:30"
+  ]) {
+    assert.throws(
+      () => normalizeNiftyTrades({ status: "success", data: [trade({ fill_timestamp: fillTimestamp })] }, "2026-08-18", { expiryKind: "weekly" }),
+      /timestamp/i
+    );
+  }
 });

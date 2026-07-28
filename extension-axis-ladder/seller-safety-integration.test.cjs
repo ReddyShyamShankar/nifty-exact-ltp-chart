@@ -155,6 +155,15 @@ async function acceptThroughPopup(refreshPayload) {
   await runtime.listeners.get("allocate-lots:click")();
   runtime.nodes.get("tradebook-csv").files = [{ name: "tradebook.csv", text: async () => csvFixture() }];
   await runtime.listeners.get("tradebook-csv:change")({ target: runtime.nodes.get("tradebook-csv") });
+  const strategyId = runtime.storage.selectedStrategyId;
+  const owners = runtime.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-id]");
+  const quantities = runtime.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-quantity]");
+  for (const owner of owners) owner.value = strategyId;
+  for (const quantity of quantities) quantity.value = quantity.max;
+  await runtime.listeners.get("assign-trades:click")();
+  runtime.nodes.get("coverage-from").value = "2026-08-01";
+  runtime.nodes.get("coverage-to").value = "2026-08-01";
+  await runtime.listeners.get("confirm-coverage:click")();
   await runtime.listeners.get("accept-snapshot:click")();
   return runtime;
 }
@@ -254,17 +263,17 @@ test("stale, changed-position, and missing-history states fail closed without er
     updatedAt: ACCEPTED_AT,
     positions: [
       {
-        contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", expiry: EXPIRY,
+        contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE", expiry: EXPIRY,
         exchange: "NFO", underlying: "NIFTY", strike: 24100, optionType: "CE",
         signedQuantity: -130, lotSize: 65, averagePrice: 358.8, lastPrice: 320, pnl: 5044
       },
       {
-        contractId: "NFO:NIFTY26AUG24100PE", tradingsymbol: "NIFTY26AUG24100PE", expiry: EXPIRY,
+        contractId: "NFO:NIFTY:2026-08-25:24100:PE", tradingsymbol: "NIFTY26AUG24100PE", expiry: EXPIRY,
         exchange: "NFO", underlying: "NIFTY", strike: 24100, optionType: "PE",
         signedQuantity: -65, lotSize: 65, averagePrice: 315.45, lastPrice: 300, pnl: 1004.25
       },
       {
-        contractId: "NFO:NIFTY26AUG22500PE", tradingsymbol: "NIFTY26AUG22500PE", expiry: EXPIRY,
+        contractId: "NFO:NIFTY:2026-08-25:22500:PE", tradingsymbol: "NIFTY26AUG22500PE", expiry: EXPIRY,
         exchange: "NFO", underlying: "NIFTY", strike: 22500, optionType: "PE",
         signedQuantity: -65, lotSize: 65, averagePrice: 77.8, lastPrice: 70, pnl: 507
       }
@@ -366,6 +375,8 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl, dateImpl
         const found = [];
         const visit = (candidate) => {
           if (selector === "[data-allocation-contract]" && candidate.dataset?.allocationContract) found.push(candidate);
+          if (selector === "[data-trade-review-id]" && candidate.dataset?.tradeReviewId) found.push(candidate);
+          if (selector === "[data-trade-review-quantity]" && candidate.dataset?.tradeReviewQuantity) found.push(candidate);
           (candidate.children || []).forEach(visit);
         };
         this.children.forEach(visit);
@@ -410,7 +421,11 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl, dateImpl
     },
     document: {
       querySelector(selector) { return nodeFor(selector.replace(/^#/, "")); },
-      querySelectorAll(selector) { return nodeFor("allocation-list").querySelectorAll(selector); },
+      querySelectorAll(selector) {
+        const container = selector === "[data-trade-review-id]" || selector === "[data-trade-review-quantity]"
+          ? "trade-review-list" : "allocation-list";
+        return nodeFor(container).querySelectorAll(selector);
+      },
       createElement(tagName) { return nodeFor("", tagName); }
     },
     fetch: async (url) => {
@@ -674,9 +689,15 @@ test("standalone whole-trade bands render without blessing blocked current-risk 
 
 test("release artifacts expose one refresh control, no popup chain table, and version 0.4.0", () => {
   const html = fs.readFileSync(path.join(__dirname, "popup.html"), "utf8");
+  const rootReadme = fs.readFileSync(path.join(__dirname, "../README.md"), "utf8");
+  const bridgePackage = JSON.parse(fs.readFileSync(path.join(__dirname, "../data-bridge/package.json"), "utf8"));
   assert.equal((html.match(/id="refresh-all"/g) || []).length, 1);
   assert.doesNotMatch(html, /OPEN FULL CHAIN|id="chain-panel"|id="chain"|<table/i);
   assert.equal(manifest.version, "0.4.0");
+  assert.equal(bridgePackage.version, "0.4.0");
+  assert.equal(bridgePackage.scripts.test, "node --test ../extension-axis-ladder/*.test.cjs ./*.test.js");
+  assert.match(rootReadme, /NIFTY Axis Ladder[\s\S]*Seller Safety Map/i);
+  assert.doesNotMatch(rootReadme, /SYNC PINE INPUTS|ten exact option symbols/i);
 });
 
 test("operator docs define setup, daily review, map semantics, stale behavior, and no-order limits", () => {
@@ -685,8 +706,14 @@ test("operator docs define setup, daily review, map semantics, stale behavior, a
 
   assert.match(bridgeReadme, /http:\/\/127\.0\.0\.1:8787\/api\/zerodha\/callback/);
   assert.match(bridgeReadme, /bin\/nifty-bridge zerodha-setup/);
+  assert.match(bridgeReadme, /bin\/nifty-bridge extension-origin chrome-extension:\/\/<32-lowercase-id>/);
+  assert.match(bridgeReadme, /exact-origin[\s\S]*no wildcard CORS/i);
   assert.match(extensionReadme, /daily[\s\S]*CONNECT ZERODHA[\s\S]*REFRESH ALL/i);
-  assert.match(extensionReadme, /one-time[\s\S]*tradebook CSV import/i);
+  assert.match(extensionReadme, /tradebook CSV[\s\S]*staged[\s\S]*per-fill quantity[\s\S]*split[\s\S]*unassigned/i);
+  assert.match(extensionReadme, /coverage bounds[\s\S]*checkpoint/i);
+  assert.match(extensionReadme, /weekly[\s\S]*exact expiry/i);
+  assert.match(extensionReadme, /REFRESH FAILED[\s\S]*immediately[\s\S]*hides/i);
+  assert.match(extensionReadme, /strategy selector[\s\S]*without another refresh/i);
   assert.match(extensionReadme, /manual[\s\S]*strategy[\s\S]*allocation[\s\S]*review/i);
   assert.match(extensionReadme, /current[\s\S]*solid/i);
   assert.match(extensionReadme, /whole-trade[\s\S]*dashed/i);

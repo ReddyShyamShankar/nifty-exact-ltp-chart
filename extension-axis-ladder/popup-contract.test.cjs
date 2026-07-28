@@ -17,6 +17,10 @@ test("popup keeps refresh immediate, preserves approved glyph, and removes full-
   assert.match(html, /class="refresh-glyph"/);
   assert.doesNotMatch(html, /class="refresh-icon"/);
   assert.match(html, />REFRESH ALL</);
+  assert.ok(html.indexOf('id="selected-strategy"') < html.indexOf('id="review-panel"'), "strategy selector stays visible outside review panel");
+  assert.match(html, /id="coverage-from"/);
+  assert.match(html, /id="coverage-to"/);
+  assert.match(html, /id="confirm-coverage"/);
   assert.match(html, /id="advanced-panel" hidden/);
   assert.match(html, /ADVANCED · PLACEMENT &amp; HEALTH/);
   assert.match(html, /RETRY PLACEMENT/);
@@ -46,6 +50,18 @@ function fixedDate(iso) {
 }
 
 function acceptedStorage({ acceptedAt = "2026-08-01T09:00:00+05:30", candidateId = "candidate-stored" } = {}) {
+  const view = {
+    version: 1, candidateId, acceptedAt, canPublish: true,
+    priority: { kind: "risk", label: "CURRENT RISK" },
+    currentRisk: { lower: "23,900.00", upper: "24,300.00" },
+    wholeTrade: { lower: "23,875.00", upper: "24,325.00", status: "EXCLUDING CHARGES" },
+    livePnl: "+₹750.00", maxProfit: "+₹14,300.00", maxLoss: "UNBOUNDED",
+    whyMoved: [], warning: "MAXIMUM LOSS IS UNBOUNDED", legs: [], timeline: [], reviewChanges: [], tradeReviews: [],
+    broker: { kind: "connected", label: "ZERODHA CONNECTED · TODAY", action: null },
+    strategyId: "stored-strategy", strategyName: "Stored seller",
+    expiry: "2026-08-25", daysToExpiry: 24, spot: "24,120.00",
+    brokerUpdatedAt: acceptedAt, brokerSessionExpiresAt: "2026-08-02T00:30:00.000Z"
+  };
   return {
     expiry: "2026-08-25",
     selectedStrategyId: "stored-strategy",
@@ -56,21 +72,53 @@ function acceptedStorage({ acceptedAt = "2026-08-01T09:00:00+05:30", candidateId
         allocations: [], fillIds: [], historyComplete: false,
         snapshots: [{ at: acceptedAt, candidateId, currentMap: { breakevens: [23900, 24300] } }]
       }],
-      brokerPositions: [], importedTrades: [], fillAssignments: [], importBatches: [], historyGaps: [],
+      brokerPositions: [], importedTrades: [], tradeEvidence: [], tradeReviews: [], fillAssignments: [], fillDispositions: [],
+      importBatches: [], coverageDeclarations: [], historyCheckpoints: [], historyGaps: [],
       allocationRevisions: [], reviewChanges: [], audit: []
     },
     sellerSafetyPending: null,
-    sellerSafetyView: {
-      version: 1, candidateId, acceptedAt, canPublish: true,
-      priority: { kind: "risk", label: "CURRENT RISK" },
-      currentRisk: { lower: "23,900.00", upper: "24,300.00" },
-      wholeTrade: { lower: "23,875.00", upper: "24,325.00", status: "EXCLUDING CHARGES" },
-      livePnl: "+₹750.00", maxProfit: "+₹14,300.00", maxLoss: "UNBOUNDED",
-      whyMoved: [], warning: "MAXIMUM LOSS IS UNBOUNDED", legs: [], timeline: [], reviewChanges: [],
-      broker: { kind: "connected", label: "ZERODHA CONNECTED · TODAY", action: null },
-      expiry: "2026-08-25", daysToExpiry: 24, spot: "24,120.00"
-    }
+    sellerSafetyView: view,
+    sellerSafetyChartView: view,
+    sellerSafetyViewsByStrategy: { "stored-strategy": view },
+    sellerSafetyChartViewsByStrategy: { "stored-strategy": view }
   };
+}
+
+function multiStrategyStorage() {
+  const storage = acceptedStorage();
+  const baseView = storage.sellerSafetyView;
+  const sameExpiryView = {
+    ...structuredClone(baseView),
+    candidateId: "candidate-same-expiry",
+    strategyId: "same-expiry",
+    strategyName: "Same expiry",
+    currentRisk: { lower: "23,800.00", upper: "24,400.00" }
+  };
+  const septemberView = {
+    ...structuredClone(baseView),
+    candidateId: "candidate-september",
+    strategyId: "september",
+    strategyName: "September",
+    expiry: "2026-09-01",
+    currentRisk: { lower: "23,700.00", upper: "24,500.00" }
+  };
+  storage.sellerSafetyLedger.strategies.push(
+    {
+      id: "same-expiry", name: "Same expiry", underlying: "NIFTY", expiry: "2026-08-25",
+      allocations: [], fillIds: [], snapshots: [{ at: baseView.acceptedAt, candidateId: sameExpiryView.candidateId }]
+    },
+    {
+      id: "september", name: "September", underlying: "NIFTY", expiry: "2026-09-01",
+      allocations: [], fillIds: [], snapshots: [{ at: baseView.acceptedAt, candidateId: septemberView.candidateId }]
+    }
+  );
+  storage.sellerSafetyViewsByStrategy = {
+    "stored-strategy": baseView,
+    "same-expiry": sameExpiryView,
+    september: septemberView
+  };
+  storage.sellerSafetyChartViewsByStrategy = structuredClone(storage.sellerSafetyViewsByStrategy);
+  return storage;
 }
 
 function dailyReviewStorage() {
@@ -80,26 +128,34 @@ function dailyReviewStorage() {
     id: "stored-strategy", name: "Stored seller", underlying: "NIFTY", expiry: "2026-08-25"
   });
   value = sellerLedger.reconcilePositions(value, [{
-    contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+    contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
     underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
     signedQuantity: -65, lotSize: 65, averagePrice: 358.8, lastPrice: 320, pnl: 2522
   }]);
   value = sellerLedger.allocateLots(value, {
-    strategyId: "stored-strategy", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+    strategyId: "stored-strategy", contractId: "NFO:NIFTY:2026-08-25:24100:CE", signedLots: -1
   });
-  value = sellerLedger.assignFills(value, {
-    strategyId: "stored-strategy",
+  const openingTrade = {
+    id: "opening", contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE",
+    underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+    transactionType: "SELL", quantity: 130, price: 358.8, timestamp: "2026-08-01T09:15:00+05:30"
+  };
+  value = sellerLedger.stageTradebookImport(value, {
+    sourceKind: "ZERODHA_TRADEBOOK_CSV",
+    batchFingerprint: "baseline-once",
+    stagedAt: "2026-08-01T16:00:00+05:30",
+    scope: { underlying: "NIFTY", expiry: "2026-08-25" },
     trades: [{
-      id: "opening", contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
-      underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100, optionType: "CE",
-      transactionType: "SELL", quantity: 130, price: 358.8, timestamp: "2026-08-01T09:15:00+05:30"
-    }],
-    fillIds: ["opening"],
-    importBatch: {
-      sourceKind: "ZERODHA_TRADEBOOK_CSV", fingerprint: "baseline-once",
-      coverage: { from: "2026-08-01", to: "2026-08-01" },
-      acceptedAt: "2026-08-01T16:00:00+05:30", confirmedAt: "2026-08-01T16:00:00+05:30"
-    }
+      ...openingTrade
+    }]
+  });
+  value = sellerLedger.assignFillQuantity(value, {
+    fillId: "opening", strategyId: "stored-strategy", quantity: 130, disposition: "STRATEGY",
+    confirmedAt: "2026-08-01T16:01:00+05:30"
+  });
+  value = sellerLedger.confirmHistoryCoverage(value, {
+    strategyId: "stored-strategy", batchFingerprint: "baseline-once", from: "2026-08-01", to: "2026-08-01",
+    checkpointIds: [], confirmedAt: "2026-08-01T16:02:00+05:30"
   });
   value = sellerLedger.acceptSnapshot(value, {
     strategyId: "stored-strategy", snapshot: { at: "2026-08-01T16:00:00+05:30", candidateId: "baseline" }
@@ -145,6 +201,7 @@ function popupHarness(initialStorage = {}, options = {}) {
         const visit = (candidate) => {
           if (selector === "[data-allocation-contract]" && candidate.dataset?.allocationContract) all.push(candidate);
           if (selector === "[data-trade-review-id]" && candidate.dataset?.tradeReviewId) all.push(candidate);
+          if (selector === "[data-trade-review-quantity]" && candidate.dataset?.tradeReviewQuantity) all.push(candidate);
           (candidate.children || []).forEach(visit);
         };
         this.children.forEach(visit);
@@ -161,7 +218,7 @@ function popupHarness(initialStorage = {}, options = {}) {
     "whole-status", "live-pnl", "max-profit", "max-loss", "why-moved", "warning", "placement-status",
     "review-panel", "strategy-name", "create-strategy", "selected-strategy", "allocation-list", "allocate-lots",
     "trade-review-list", "assign-trades",
-    "tradebook-csv", "import-summary", "accept-snapshot", "legs-toggle", "legs-panel", "legs-list",
+    "tradebook-csv", "import-summary", "coverage-from", "coverage-to", "confirm-coverage", "accept-snapshot", "legs-toggle", "legs-panel", "legs-list",
     "timeline-toggle", "timeline-panel", "timeline-list", "advanced-toggle", "advanced-panel", "enabled",
     "retry-placement"
   ];
@@ -174,12 +231,14 @@ function popupHarness(initialStorage = {}, options = {}) {
     selectedStrategyId: "",
     sellerSafetyView: null,
     sellerSafetyPending: null,
+    sellerSafetyViewsByStrategy: {},
+    sellerSafetyChartViewsByStrategy: {},
     ...initialStorage
   };
   const defaultRefreshPayload = {
     updatedAt: "2026-08-01T03:50:00.000Z",
     positions: [{
-      contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+      contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
       underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
       signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
     }],
@@ -208,7 +267,8 @@ function popupHarness(initialStorage = {}, options = {}) {
     document: {
       querySelector(selector) { return nodes.get(selector.replace(/^#/, "")); },
       querySelectorAll(selector) {
-        const container = selector === "[data-trade-review-id]" ? "trade-review-list" : "allocation-list";
+        const container = selector === "[data-trade-review-id]" || selector === "[data-trade-review-quantity]"
+          ? "trade-review-list" : "allocation-list";
         return nodes.get(container).querySelectorAll(selector);
       },
       createElement(tagName) { return makeNode("", tagName); }
@@ -216,13 +276,14 @@ function popupHarness(initialStorage = {}, options = {}) {
     fetch: async (url) => {
       requests.push(String(url));
       if (String(url).includes("/api/health")) return response({ status: "ok" });
-      if (String(url).includes("/api/nifty-expiries")) return response({ expiries: [{ expiry: "2026-08-25", daysToExpiry: 24 }] });
+      if (String(url).includes("/api/nifty-expiries")) return response({ expiries: options.expiries || [{ expiry: "2026-08-25", daysToExpiry: 24 }] });
       if (String(url).includes("/api/zerodha/status")) return response(options.brokerStatus || {
         configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z"
       });
       if (String(url).includes("/api/seller-refresh")) {
         const payload = refreshPayloads[Math.min(refreshIndex, refreshPayloads.length - 1)];
         refreshIndex += 1;
+        if (payload?.__httpError) return response({ error: payload.error, kind: payload.kind }, false, payload.status || 502);
         return response(payload);
       }
       if (String(url).includes("/api/zerodha/login-url")) return response({ loginUrl: "https://kite.zerodha.com/connect/login?v=3&api_key=public-key" });
@@ -297,6 +358,93 @@ test("changed-position refresh preserves accepted evidence across popup reopen w
   assert.equal(reopened.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
 });
 
+test("failed REFRESH ALL immediately withholds chart while accepted evidence survives reopen", async () => {
+  const initial = acceptedStorage();
+  const harness = popupHarness(initial, {
+    refreshPayload: { __httpError: true, status: 429, kind: "rate_limit", error: "Upstream rate limit." }
+  });
+  await settle();
+
+  await harness.listeners.get("refresh-all:click")();
+
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  assert.equal(harness.storage.sellerSafetyView.candidateId, "candidate-stored");
+  assert.equal(harness.storage.sellerSafetyViewsByStrategy["stored-strategy"].candidateId, "candidate-stored");
+  assert.equal(harness.storage.sellerSafetyChartView.canPublish, false);
+  assert.equal(harness.storage.sellerSafetyChartView.state, "REFRESH_FAILED");
+  assert.equal(harness.storage.sellerSafetyChartView.priority.label, "STALE · REFRESH FAILED");
+  assert.equal(harness.storage.sellerSafetyPending, null);
+
+  const reopened = popupHarness(structuredClone(harness.storage));
+  await settle();
+  assert.equal(reopened.nodes.get("current-lower").textContent, "23,900.00");
+  assert.equal(reopened.storage.sellerSafetyChartView.state, "REFRESH_FAILED");
+});
+
+test("strategy switch restores same-expiry and September accepted views without refresh or global destruction", async () => {
+  const initial = multiStrategyStorage();
+  const options = {
+    expiries: [
+      { expiry: "2026-08-25", daysToExpiry: 24 },
+      { expiry: "2026-09-01", daysToExpiry: 31 }
+    ]
+  };
+  const harness = popupHarness(initial, options);
+  await settle();
+
+  const selector = harness.nodes.get("selected-strategy");
+  assert.equal(selector.children.length, 4, "selector lists all strategies plus placeholder");
+  await harness.listeners.get("selected-strategy:change")({ target: { value: "same-expiry" } });
+  assert.equal(harness.storage.sellerSafetyView.candidateId, "candidate-same-expiry");
+  assert.equal(harness.nodes.get("current-lower").textContent, "23,800.00");
+
+  await harness.listeners.get("selected-strategy:change")({ target: { value: "september" } });
+  assert.equal(harness.storage.expiry, "2026-09-01");
+  assert.equal(harness.storage.sellerSafetyView.candidateId, "candidate-september");
+  assert.equal(harness.storage.sellerSafetyChartView.candidateId, "candidate-september");
+  assert.equal(Object.keys(harness.storage.sellerSafetyViewsByStrategy).length, 3);
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 0);
+
+  const reopened = popupHarness(structuredClone(harness.storage), options);
+  await settle();
+  assert.equal(reopened.nodes.get("current-lower").textContent, "23,700.00");
+  assert.equal(reopened.storage.sellerSafetyViewsByStrategy["stored-strategy"].candidateId, "candidate-stored");
+});
+
+test("CSV import stays staged until explicit quantity dispositions and coverage confirmation", async () => {
+  const harness = popupHarness({}, { Date: fixedDate("2026-08-02T09:00:00+05:30") });
+  await settle();
+  await harness.listeners.get("refresh-all:click")();
+  harness.nodes.get("strategy-name").value = "August seller";
+  await harness.listeners.get("create-strategy:click")();
+  const allocation = harness.nodes.get("allocation-list").querySelectorAll("[data-allocation-contract]")[0];
+  allocation.value = "-1";
+  await harness.listeners.get("allocate-lots:click")();
+
+  const csvText = "trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "owned,order-1,NFO,NIFTY26AUG24100CE,SELL,65,100,2026-08-01T09:15:00+05:30,2026-08-25\n";
+  harness.nodes.get("tradebook-csv").files = [{ name: "tradebook.csv", text: async () => csvText }];
+  await harness.listeners.get("tradebook-csv:change")({ target: harness.nodes.get("tradebook-csv") });
+
+  assert.equal(harness.storage.sellerSafetyLedger.importedTrades.length, 1);
+  assert.equal(harness.storage.sellerSafetyLedger.fillAssignments.length, 0);
+  assert.equal(harness.storage.sellerSafetyLedger.coverageDeclarations.length, 0);
+  assert.equal(harness.storage.sellerSafetyLedger.tradeReviews[0].remainingQuantity, 65);
+
+  const owner = harness.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-id]")[0];
+  const quantity = harness.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-quantity]")[0];
+  owner.value = harness.storage.selectedStrategyId;
+  quantity.value = "65";
+  await harness.listeners.get("assign-trades:click")();
+  assert.equal(harness.storage.sellerSafetyLedger.fillAssignments[0].quantity, 65);
+  assert.equal(harness.storage.sellerSafetyLedger.coverageDeclarations.length, 0);
+
+  harness.nodes.get("coverage-from").value = "2026-08-01";
+  harness.nodes.get("coverage-to").value = "2026-08-01";
+  await harness.listeners.get("confirm-coverage:click")();
+  assert.equal(harness.storage.sellerSafetyLedger.coverageDeclarations.length, 1);
+});
+
 test("REFRESH ALL persists validated chain rows for chart consumption without a second chain request", async () => {
   const rows = Array.from({ length: 13 }, (_, index) => ({
     strike: 23800 + index * 50,
@@ -328,14 +476,14 @@ test("REFRESH ALL persists validated chain rows for chart consumption without a 
 
 test("REFRESH ALL persists and deduplicates current-day trade IDs without silently assigning ownership", async () => {
   const bridgeTrade = {
-    id: "bridge-trade-1", contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
+    id: "bridge-trade-1", contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE",
     underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100, optionType: "CE",
     transactionType: "SELL", quantity: 65, price: 110, timestamp: "2026-08-01T09:15:00+05:30"
   };
   const payload = {
     updatedAt: "2026-08-01T03:50:00.000Z",
     positions: [{
-      contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+      contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
       underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
       signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
     }],
@@ -358,14 +506,14 @@ test("REFRESH ALL persists and deduplicates current-day trade IDs without silent
 
 test("operator explicitly assigns post-import daily trade once and unknown trades remain review-required", async () => {
   const daily = {
-    id: "daily-reduction", contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
+    id: "daily-reduction", contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE",
     underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100, optionType: "CE",
     transactionType: "BUY", quantity: 65, price: 340, timestamp: "2026-08-02T09:15:00+05:30"
   };
   const basePayload = {
     updatedAt: "2026-08-02T03:50:00.000Z",
     positions: [{
-      contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+      contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
       underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
       signedQuantity: -65, lotSize: 65, averagePrice: 358.8, lastPrice: 320, pnl: 2522
     }],
@@ -387,6 +535,8 @@ test("operator explicitly assigns post-import daily trade once and unknown trade
   assert.equal(owner.value, "", "popup cannot preselect or automatically allocate an owner");
 
   owner.value = "stored-strategy";
+  const ownedQuantity = first.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-quantity]")[0];
+  ownedQuantity.value = "65";
   await first.listeners.get("assign-trades:click")();
   assert.deepEqual(first.storage.sellerSafetyLedger.tradeReviews, []);
   assert.deepEqual(first.storage.sellerSafetyLedger.strategies[0].fillIds, ["opening", "daily-reduction"]);
@@ -427,7 +577,7 @@ test("malformed refresh clears old candidate and cannot be accepted", async () =
   const valid = {
     updatedAt: "2026-08-01T03:50:00.000Z",
     positions: [{
-      contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+      contractId: "NFO:NIFTY:2026-08-25:24100:CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
       underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
       signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
     }],
@@ -448,6 +598,8 @@ test("malformed refresh clears old candidate and cannot be accepted", async () =
   await harness.listeners.get("accept-snapshot:click")();
 
   assert.equal(harness.storage.sellerSafetyPending, null);
+  assert.equal(harness.storage.sellerSafetyChartView.state, "REFRESH_FAILED");
+  assert.equal(harness.storage.sellerSafetyChartView.canPublish, false);
   assert.equal(harness.storage.sellerSafetyLedger.strategies[0].snapshots.length, 0);
   assert.match(harness.nodes.get("placement-status").textContent, /PRESS REFRESH ALL/);
 });
@@ -490,6 +642,14 @@ test("explicit strategy, whole-lot allocation, CSV import, and acceptance publis
     "fill-1,order-1,NFO,NIFTY26AUG24100CE,SELL,65,110,2026-08-01T09:15:00+05:30,2026-08-25\n";
   harness.nodes.get("tradebook-csv").files = [{ name: "tradebook.csv", text: async () => csvText }];
   await harness.listeners.get("tradebook-csv:change")({ target: harness.nodes.get("tradebook-csv") });
+  const owner = harness.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-id]")[0];
+  const quantity = harness.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-quantity]")[0];
+  owner.value = harness.storage.selectedStrategyId;
+  quantity.value = "65";
+  await harness.listeners.get("assign-trades:click")();
+  harness.nodes.get("coverage-from").value = "2026-08-01";
+  harness.nodes.get("coverage-to").value = "2026-08-01";
+  await harness.listeners.get("confirm-coverage:click")();
   await harness.listeners.get("accept-snapshot:click")();
 
   assert.equal(harness.storage.sellerSafetyLedger.strategies.length, 1);
@@ -505,7 +665,7 @@ test("explicit strategy, whole-lot allocation, CSV import, and acceptance publis
   assert.equal(harness.storage.sellerSafetyView.currentRisk.lower, "24,200.00");
   assert.equal(harness.storage.sellerSafetyView.wholeTrade.lower, "24,210.00");
   assert.equal(harness.storage.sellerSafetyView.wholeTrade.status, "EXCLUDING CHARGES");
-  assert.match(harness.nodes.get("import-summary").textContent, /1 fill imported/i);
+  assert.match(harness.nodes.get("import-summary").textContent, /1 fill staged/i);
 });
 
 test("stored accepted numbers survive while stale broker label is rebuilt", async () => {

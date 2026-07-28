@@ -27,9 +27,9 @@
     };
   }
 
-  function historyIncompleteResult() {
+  function historyIncompleteResult(status = "HISTORY_INCOMPLETE") {
     return {
-      status: "HISTORY_INCOMPLETE",
+      status,
       breakevens: [],
       bands: [],
       maxProfit: null,
@@ -192,7 +192,9 @@
     if (!input || !validLegs(input.openLegs) || !Array.isArray(input.fills) || !input.fills.every(validFill)) {
       return invalidResult();
     }
-    if (!hasCompleteReconciledHistory(input.history, input.fills)) return historyIncompleteResult();
+    if (!hasCompleteReconciledHistory(input.history, input.fills)) {
+      return historyIncompleteResult(input.history?.gap === true ? "HISTORY_GAP" : "HISTORY_INCOMPLETE");
+    }
     const charges = readCharges(input.charges);
     if (!charges) return invalidResult();
     const cashBalance = input.fills.reduce((total, fill) => (
@@ -220,13 +222,99 @@
     return `Breakeven ${index + 1}`;
   }
 
-  function explainRiskChange(previous, next) {
+  function inputLegs(inputs) {
+    if (!inputs || !Array.isArray(inputs.positions) || !Array.isArray(inputs.allocations)) return null;
+    const positions = new Map(inputs.positions.map((position) => [position.contractId, position]));
+    const legs = new Map();
+    for (const allocation of inputs.allocations) {
+      const position = positions.get(allocation?.contractId);
+      if (!position || !finiteNumber(allocation.signedLots) || !finiteNumber(position.lotSize) ||
+        !finiteNumber(position.averagePrice) || !finiteNumber(position.strike) ||
+        !["CE", "PE"].includes(position.optionType)) return null;
+      legs.set(allocation.contractId, {
+        contractId: allocation.contractId,
+        strike: position.strike,
+        optionType: position.optionType,
+        signedLots: allocation.signedLots,
+        contribution: normalized(-allocation.signedLots * position.lotSize * position.averagePrice)
+      });
+    }
+    return legs;
+  }
+
+  function legOrder(left, right) {
+    return left.strike - right.strike || left.optionType.localeCompare(right.optionType) || left.contractId.localeCompare(right.contractId);
+  }
+
+  function legLabel(leg) {
+    return `${leg.strike.toLocaleString("en-IN")} ${leg.optionType}`;
+  }
+
+  function lots(value) {
+    return `${value > 0 ? "+" : ""}${value} ${Math.abs(value) === 1 ? "lot" : "lots"}`;
+  }
+
+  function signedRupees(value) {
+    const prefix = value > EPSILON ? "+" : value < -EPSILON ? "−" : "";
+    return `${prefix}₹${Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  function inputChangeFacts(previousInputs, nextInputs) {
+    const previous = inputLegs(previousInputs);
+    const next = inputLegs(nextInputs);
+    if (!previous || !next) return [];
+    const ids = new Set([...previous.keys(), ...next.keys()]);
+    const entries = Array.from(ids, (contractId) => ({
+      contractId,
+      prior: previous.get(contractId) || null,
+      current: next.get(contractId) || null
+    })).map((entry) => ({ ...entry, descriptor: entry.current || entry.prior })).sort((left, right) => legOrder(left.descriptor, right.descriptor));
+    const facts = [];
+    for (const { prior, current, descriptor } of entries) {
+      const before = prior?.signedLots || 0;
+      const after = current?.signedLots || 0;
+      const label = legLabel(descriptor);
+      if (!sameValue(before, after)) {
+        facts.push(`${label} allocation changed from ${lots(before)} to ${lots(after)}.`);
+        if (before <= 0 && after > 0) facts.push(`Bought ${label} protection added: ${lots(after)}.`);
+        else if (before > 0 && after <= 0) facts.push(`Bought ${label} protection removed: ${lots(before)} to ${lots(after)}.`);
+        else if (before > 0 && after > 0) facts.push(`Bought ${label} protection ${after > before ? "increased" : "decreased"} from ${lots(before)} to ${lots(after)}.`);
+        if (before >= 0 && after < 0) facts.push(`Short ${label} exposure added: ${lots(Math.abs(after)).replace("+", "")}.`);
+        else if (before < 0 && after >= 0) facts.push(`Short ${label} exposure removed from ${lots(Math.abs(before)).replace("+", "")}.`);
+        else if (before < 0 && after < 0) facts.push(`Short ${label} exposure ${Math.abs(after) > Math.abs(before) ? "increased" : "decreased"} from ${lots(Math.abs(before)).replace("+", "")} to ${lots(Math.abs(after)).replace("+", "")}.`);
+      }
+    }
+    for (const { prior, current, descriptor } of entries) {
+      const before = prior?.contribution || 0;
+      const after = current?.contribution || 0;
+      if (!sameValue(before, after)) {
+        facts.push(`${legLabel(descriptor)} premium/debit contribution changed from ${signedRupees(before)} to ${signedRupees(after)} (${signedRupees(normalized(after - before))}).`);
+      }
+    }
+    const previousCash = normalized(Array.from(previous.values()).reduce((total, leg) => total + leg.contribution, 0));
+    const nextCash = normalized(Array.from(next.values()).reduce((total, leg) => total + leg.contribution, 0));
+    if (!sameValue(previousCash, nextCash)) {
+      facts.push(`Net premium/debit changed from ${signedRupees(previousCash)} to ${signedRupees(nextCash)} (${signedRupees(normalized(nextCash - previousCash))}).`);
+    }
+    return facts;
+  }
+
+  function bandSignature(map) {
+    if (!Array.isArray(map?.bands)) return null;
+    return map.bands.map((band) => [
+      band.kind,
+      band.from === Infinity ? "INFINITY" : band.from,
+      band.to === Infinity ? "INFINITY" : band.to
+    ]);
+  }
+
+  function explainRiskChange(previous, next, inputs = {}) {
     const prior = previous || {};
     const current = next || {};
     const oldRoots = Array.isArray(prior.breakevens) ? prior.breakevens.filter(finiteNumber) : [];
     const newRoots = Array.isArray(current.breakevens) ? current.breakevens.filter(finiteNumber) : [];
     const breakevenMoves = [];
-    const facts = [];
+    const facts = inputChangeFacts(inputs.previousInputs, inputs.nextInputs);
     const count = Math.min(oldRoots.length, newRoots.length);
     for (let index = 0; index < count; index += 1) {
       const points = normalized(newRoots[index] - oldRoots[index]);
@@ -235,6 +323,11 @@
       if (Math.abs(points) > EPSILON) {
         facts.push(`${breakevenLabel(index, count)} moved ${Math.abs(points).toFixed(2)} points ${points < 0 ? "lower" : "higher"}.`);
       }
+    }
+    const priorBands = bandSignature(prior);
+    const currentBands = bandSignature(current);
+    if (priorBands && currentBands && JSON.stringify(priorBands) !== JSON.stringify(currentBands)) {
+      facts.push("Profit/loss band boundaries changed.");
     }
     const maxProfitChange = finiteNumber(prior.maxProfit) && finiteNumber(current.maxProfit)
       ? normalized(current.maxProfit - prior.maxProfit)
