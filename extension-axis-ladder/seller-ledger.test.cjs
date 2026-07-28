@@ -37,6 +37,17 @@ function fill(overrides = {}) {
   };
 }
 
+function confirmedBatch(overrides = {}) {
+  return {
+    sourceType: "ZERODHA_TRADEBOOK_CSV",
+    fingerprint: "zerodha-august-batch",
+    coverage: { from: "2026-08-01", to: "2026-08-31" },
+    acceptedAt: "2026-08-31T16:00:00+05:30",
+    confirmedAt: "2026-08-31T16:01:00+05:30",
+    ...overrides
+  };
+}
+
 function oneStrategyLedger() {
   let current = ledger.emptyLedger();
   current = ledger.createStrategy(current, {
@@ -62,6 +73,9 @@ test("creates versioned JSON-safe ledger without mutating previous value", () =>
     strategies: [],
     brokerPositions: [],
     importedTrades: [],
+    importBatches: [],
+    historyGaps: [],
+    allocationRevisions: [],
     reviewChanges: [],
     audit: []
   });
@@ -107,6 +121,16 @@ test("rejects allocation that exceeds or reverses broker lots", () => {
   assert.throws(() => ledger.allocateLots(reviewLedger, {
     strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1.5
   }), /whole/i);
+});
+
+test("rejects broker positions whose public identity is not NIFTY", () => {
+  const current = oneStrategyLedger();
+  assert.throws(() => ledger.reconcilePositions(current, [position({
+    contractId: "NFO:BANKNIFTY26AUG50000CE", tradingsymbol: "BANKNIFTY26AUG50000CE"
+  })]), /NIFTY/i);
+  assert.throws(() => ledger.reconcilePositions(current, [position({
+    contractId: "NFO:BANKNIFTY26AUG50000CE"
+  })]), /NIFTY/i);
 });
 
 test("rejects allocation of another expiry into a strategy", () => {
@@ -176,7 +200,7 @@ test("requires explicit fill ownership when one broker contract is split across 
   });
   const incomplete = ledger.strategyRiskInput(current, "s1");
   current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], complete: true
+    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], importBatch: confirmedBatch()
   });
   const exact = ledger.strategyRiskInput(current, "s1");
 
@@ -187,29 +211,115 @@ test("requires explicit fill ownership when one broker contract is split across 
   assert.deepEqual(exact.fills.map((trade) => trade.id), ["trade-1"]);
 });
 
-test("fails whole-trade evidence closed until complete assigned history exists", () => {
+test("rejects fills outside NIFTY strategy provenance", () => {
   let current = oneStrategyLedger();
   current = ledger.reconcilePositions(current, [position()]);
   current = ledger.allocateLots(current, {
     strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
   });
-  const noHistory = ledger.strategyRiskInput(current, "s1");
-  current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], complete: false
-  });
-  const incompleteHistory = ledger.strategyRiskInput(current, "s1");
-  current = ledger.assignFills(current, {
-    strategyId: "s1", trades: [], fillIds: [], complete: true
-  });
-  const completeHistory = ledger.strategyRiskInput(current, "s1");
+  const unrelated = [
+    fill({ id: "foreign-underlying", underlying: "BANKNIFTY" }),
+    fill({ id: "foreign-expiry", expiry: "2026-09-01" }),
+    fill({ id: "foreign-contract", contractId: "NFO:NIFTY26AUG24000PE", tradingsymbol: "NIFTY26AUG24000PE", optionType: "PE", strike: 24000 })
+  ];
 
-  assert.equal(noHistory.status, "HISTORY_INCOMPLETE");
-  assert.equal(noHistory.history.complete, false);
-  assert.equal(incompleteHistory.status, "HISTORY_INCOMPLETE");
-  assert.equal(completeHistory.status, "OK");
-  assert.deepEqual(completeHistory.history, {
+  for (const trade of unrelated) {
+    assert.throws(() => ledger.assignFills(current, {
+      strategyId: "s1", trades: [trade], fillIds: [trade.id], importBatch: confirmedBatch({ fingerprint: trade.id })
+    }), /NIFTY|expiry|allocation|related/i);
+  }
+});
+
+test("fails closed when legacy assigned evidence violates strategy provenance", () => {
+  let current = oneStrategyLedger();
+  current = ledger.reconcilePositions(current, [position()]);
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  current.importedTrades.push({ ...fill(), underlying: "BANKNIFTY" });
+  current.strategies[0].fillIds.push("trade-1");
+  current.strategies[0].historyComplete = true;
+
+  const riskInput = ledger.strategyRiskInput(current, "s1");
+  assert.equal(riskInput.status, "HISTORY_INCOMPLETE");
+  assert.equal(riskInput.history.consistent, false);
+});
+
+test("does not promote naked complete:true to whole-trade evidence", () => {
+  let current = oneStrategyLedger();
+  current = ledger.reconcilePositions(current, [position()]);
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  current = ledger.assignFills(current, {
+    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], complete: true
+  });
+
+  const riskInput = ledger.strategyRiskInput(current, "s1");
+  assert.equal(riskInput.status, "HISTORY_INCOMPLETE");
+  assert.equal(riskInput.history.complete, false);
+});
+
+test("derives complete history from confirmed immutable Zerodha batch coverage", () => {
+  let current = oneStrategyLedger();
+  current = ledger.reconcilePositions(current, [position()]);
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  const batch = confirmedBatch();
+  current = ledger.assignFills(current, {
+    strategyId: "s1", trades: [fill()], fillIds: ["trade-1"], importBatch: batch
+  });
+  batch.coverage.from = "2030-01-01";
+  const riskInput = ledger.strategyRiskInput(current, "s1");
+
+  assert.equal(riskInput.status, "OK");
+  assert.deepEqual(riskInput.history, {
     complete: true, reconciled: true, duplicates: false, consistent: true
   });
+  assert.deepEqual(current.importBatches[0].coverage, { from: "2026-08-01", to: "2026-08-31" });
+  assert.deepEqual(current.audit.slice(-3, -1).map((event) => event.type), ["IMPORT_BATCH_ACCEPTED", "IMPORT_BATCH_CONFIRMED"]);
+});
+
+test("fails closed when confirmed batch coverage excludes an assigned trade date", () => {
+  let current = oneStrategyLedger();
+  current = ledger.reconcilePositions(current, [position()]);
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  current = ledger.assignFills(current, {
+    strategyId: "s1",
+    trades: [fill()],
+    fillIds: ["trade-1"],
+    complete: true,
+    importBatch: confirmedBatch({ coverage: { from: "2026-08-02", to: "2026-08-31" } })
+  });
+
+  const riskInput = ledger.strategyRiskInput(current, "s1");
+  assert.equal(riskInput.status, "HISTORY_INCOMPLETE");
+  assert.equal(riskInput.history.complete, false);
+});
+
+test("records append-only complete allocation revisions for edits and deletion", () => {
+  let current = oneStrategyLedger();
+  current = ledger.reconcilePositions(current, [position({ signedQuantity: -130 })]);
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2
+  });
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: 0
+  });
+
+  assert.deepEqual(current.allocationRevisions.map((revision) => ({ before: revision.before, after: revision.after })), [
+    { before: [], after: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1 }] },
+    { before: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1 }], after: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2 }] },
+    { before: [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2 }], after: [] }
+  ]);
+  assert.deepEqual(current.audit.at(-1).before, [{ contractId: "NFO:NIFTY26AUG24100CE", signedLots: -2 }]);
+  assert.deepEqual(current.audit.at(-1).after, []);
 });
 
 test("appends snapshots without replacing prior accepted state", () => {

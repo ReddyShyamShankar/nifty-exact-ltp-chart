@@ -104,6 +104,11 @@
         return { trades: [], errors: [{ row: 1, reason: `missing required header: ${label}` }], summary };
       }
     }
+    const trustedZerodhaShape = ["tradeid", "orderid", "exchange", "tradingsymbol", "transactiontype", "quantity", "price", "filltimestamp"]
+      .every((name) => typeof headers[name] === "number");
+    if (!trustedZerodhaShape) {
+      return { trades: [], errors: [{ row: 1, reason: "untrusted Zerodha tradebook header" }], summary };
+    }
 
     const errors = [];
     const candidates = [];
@@ -117,7 +122,8 @@
       }
       const transactionType = valueFor(row, headers, ["transactiontype", "buyorsell", "side"]).toUpperCase();
       const quantity = Number(valueFor(row, headers, ["quantity", "filledquantity"]));
-      const price = Number(valueFor(row, headers, ["price", "tradeprice", "averageprice"]));
+      const rawPrice = valueFor(row, headers, ["price", "tradeprice", "averageprice"]);
+      const price = Number(rawPrice);
       const timestamp = valueFor(row, headers, ["timestamp", "tradetime", "filltimestamp", "executiontime"]);
       const expiry = valueFor(row, headers, ["expiry", "expirydate"]);
       const details = optionDetails(tradingsymbol);
@@ -127,6 +133,10 @@
       }
       if (!Number.isFinite(quantity) || quantity <= 0) {
         errors.push({ row: rowNumber, reason: "quantity must be a positive number" });
+        continue;
+      }
+      if (!rawPrice) {
+        errors.push({ row: rowNumber, reason: "price is required" });
         continue;
       }
       if (!Number.isFinite(price) || price < 0) {
