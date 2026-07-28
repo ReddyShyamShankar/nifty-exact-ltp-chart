@@ -213,6 +213,27 @@ test("rejects adversarial and origin-less browser access before account data is 
   assert.deepEqual(calls, { status: 0, login: 0, credentials: 0 });
 });
 
+test("accepts Chrome extension account GET when Chrome omits Origin but sends extension fetch metadata", async (t) => {
+  const server = await runningServer();
+  t.after(() => close(server));
+
+  const response = await fetch(`${baseUrl(server)}/api/zerodha/status`, {
+    headers: {
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty"
+    }
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), EXTENSION_ORIGIN);
+  assert.deepEqual(await response.json(), {
+    configured: true,
+    connected: true,
+    expiresAt: "2026-07-29T00:30:00.000Z"
+  });
+});
+
 test("validates configured extension origin as exact Chrome extension origin", () => {
   const sessionStore = { status: async () => ({}) };
   for (const invalid of [

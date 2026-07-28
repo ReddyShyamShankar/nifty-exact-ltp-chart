@@ -134,6 +134,14 @@ function validatedExtensionOrigin(value) {
   return originConfig.validateExtensionOrigin(value);
 }
 
+function isExtensionAccountRequest(headers, allowedOrigin) {
+  if (headers.origin === allowedOrigin) return true;
+  return !headers.origin &&
+    headers["sec-fetch-site"] === "none" &&
+    headers["sec-fetch-mode"] === "cors" &&
+    headers["sec-fetch-dest"] === "empty";
+}
+
 function formatChain(chain) {
   const spot = chain.find((item) => Number.isFinite(item.underlying_spot_price))?.underlying_spot_price;
   if (!Number.isFinite(spot)) throw new Error("Upstox response did not contain NIFTY spot price.");
@@ -275,7 +283,7 @@ export function createRequestHandler({
   const respondPublic = (status, payload) => respondJson(response, status, payload, allowedOrigin);
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
   const accountPath = accountPaths.has(url.pathname);
-  if (accountPath && request.headers.origin !== allowedOrigin) {
+  if (accountPath && !isExtensionAccountRequest(request.headers, allowedOrigin)) {
     respondJson(response, 403, { error: "Forbidden origin." }, null);
     return;
   }
