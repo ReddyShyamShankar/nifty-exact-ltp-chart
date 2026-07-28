@@ -6,18 +6,51 @@ const path = require("node:path");
 
 function loadBackground() {
   const listeners = {};
+  const sidePanelCalls = [];
+  const session = {};
   global.chrome = {
-    runtime: { onMessage: { addListener(listener) { listeners.message = listener; } } },
+    runtime: {
+      onMessage: { addListener(listener) { listeners.message = listener; } },
+      onInstalled: { addListener(listener) { listeners.installed = listener; } },
+      onStartup: { addListener(listener) { listeners.startup = listener; } }
+    },
+    tabs: {
+      onCreated: { addListener(listener) { listeners.created = listener; } },
+      onUpdated: { addListener(listener) { listeners.updated = listener; } },
+      onActivated: { addListener(listener) { listeners.activated = listener; } },
+      async query() { return []; },
+      async get() { return undefined; }
+    },
+    sidePanel: {
+      async setPanelBehavior(value) { sidePanelCalls.push(["behavior", value]); },
+      async setOptions(value) { sidePanelCalls.push(["options", value]); },
+      async close(value) { sidePanelCalls.push(["close", value]); }
+    },
+    action: {
+      async enable() {},
+      async disable() {}
+    },
+    storage: {
+      session: {
+        async get(key) { return { [key]: session[key] }; },
+        async set(values) { Object.assign(session, values); }
+      }
+    },
     debugger: {
       async attach() {},
       async detach() {},
       async sendCommand() {}
     }
   };
-  global.importScripts = () => { global.NiftyOverlay = require("./overlay-utils.js"); };
+  global.importScripts = (...files) => {
+    for (const file of files) {
+      if (file === "overlay-utils.js") global.NiftyOverlay = require("./overlay-utils.js");
+      if (file === "side-panel.js") global.NiftySidePanel = require("./side-panel.js");
+    }
+  };
   const filename = path.join(__dirname, "background.js");
   delete require.cache[filename];
-  return { api: require(filename), listeners };
+  return { api: require(filename), listeners, sidePanelCalls };
 }
 
 test("exports native-axis-only capture API", () => {
@@ -28,6 +61,19 @@ test("exports native-axis-only capture API", () => {
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), false);
   assert.equal(api.isFitMessage("FIT_AXIS_SCALE"), true);
+});
+
+test("background installs tab-specific side panel without changing capture API", async () => {
+  const { api, listeners, sidePanelCalls } = loadBackground();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof listeners.installed, "function");
+  assert.equal(typeof listeners.startup, "function");
+  assert.equal(typeof listeners.created, "function");
+  assert.equal(typeof listeners.updated, "function");
+  assert.equal(typeof listeners.activated, "function");
+  assert.deepEqual(sidePanelCalls[0], ["behavior", { openPanelOnActionClick: true }]);
+  assert.equal(typeof api.captureAxisScale, "function");
+  assert.equal(typeof api.fitAxisScale, "function");
 });
 
 test("first trusted scale fit resets TradingView price scale and detaches", async () => {

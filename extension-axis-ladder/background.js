@@ -1,6 +1,8 @@
 "use strict";
 
-importScripts("overlay-utils.js");
+importScripts("overlay-utils.js", "side-panel.js");
+
+NiftySidePanel.install(chrome);
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
