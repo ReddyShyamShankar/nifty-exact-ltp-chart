@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { normalizeNiftyPositions, normalizeNiftyTrades } from "./zerodha-normalize.js";
-import { startServer } from "./server.js";
+import * as bridgeServer from "./server.js";
+
+const { createRequestHandler, startServer } = bridgeServer;
+const EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
 
 async function close(server) {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -24,14 +27,20 @@ async function runningServer(overrides = {}) {
       getTrades: async () => ({ status: "success", data: [] })
     })),
     chainLoader: overrides.chainLoader || (async (expiry) => ({ source: "Upstox", expiry, rows: [] })),
+    expiryMetadata: overrides.expiryMetadata || ((expiry) => ({ expiry, weekly: false })),
     normalizePositions: normalizeNiftyPositions,
     normalizeTrades: normalizeNiftyTrades,
+    extensionOrigin: overrides.extensionOrigin || EXTENSION_ORIGIN,
     now: () => new Date("2026-07-28T18:15:00.000Z")
   });
 }
 
 function baseUrl(server) {
   return `http://127.0.0.1:${server.address().port}`;
+}
+
+function accountFetch(server, path, origin = EXTENSION_ORIGIN) {
+  return fetch(`${baseUrl(server)}${path}`, { headers: { Origin: origin } });
 }
 
 test("serves Zerodha status, login URL, and callback without returning any token", async (t) => {
@@ -48,11 +57,18 @@ test("serves Zerodha status, login URL, and callback without returning any token
   const server = await runningServer({ sessionStore });
   t.after(() => close(server));
 
-  const status = await (await fetch(`${baseUrl(server)}/api/zerodha/status`)).json();
-  const login = await (await fetch(`${baseUrl(server)}/api/zerodha/login-url`)).json();
-  const callbackResponse = await fetch(`${baseUrl(server)}/api/zerodha/callback?request_token=one-time-token`);
+  const statusResponse = await accountFetch(server, "/api/zerodha/status");
+  const loginResponse = await accountFetch(server, "/api/zerodha/login-url");
+  const status = await statusResponse.json();
+  const login = await loginResponse.json();
+  const callbackResponse = await fetch(`${baseUrl(server)}/api/zerodha/callback?request_token=one-time-token`, {
+    headers: { Origin: "https://attacker.example" }
+  });
   const callback = await callbackResponse.json();
 
+  assert.equal(statusResponse.headers.get("access-control-allow-origin"), EXTENSION_ORIGIN);
+  assert.equal(loginResponse.headers.get("access-control-allow-origin"), EXTENSION_ORIGIN);
+  assert.equal(callbackResponse.headers.get("access-control-allow-origin"), null);
   assert.deepEqual(status, { configured: true, connected: false, expiresAt: null });
   assert.deepEqual(login, { loginUrl: "https://kite.zerodha.com/connect/login?v=3&api_key=public-key" });
   assert.deepEqual(callback, { configured: true, connected: true, expiresAt: "2026-07-29T00:30:00.000Z" });
@@ -87,10 +103,11 @@ test("one seller refresh coordinates positions, trades, and chain exactly once",
   });
   t.after(() => close(server));
 
-  const response = await fetch(`${baseUrl(server)}/api/seller-refresh?expiry=2026-08-25`);
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
   const payload = await response.json();
 
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), EXTENSION_ORIGIN);
   assert.deepEqual(calls, { positions: 1, trades: 1, chain: 1 });
   assert.equal(payload.updatedAt, "2026-07-28T18:15:00.000Z");
   assert.equal(payload.positions[0].contractId, "NFO:NIFTY26AUG24100CE");
@@ -113,7 +130,7 @@ test("invalid exact ISO expiry fails before every upstream call", async (t) => {
   });
   t.after(() => close(server));
 
-  const response = await fetch(`${baseUrl(server)}/api/seller-refresh?expiry=2026-02-30`);
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-02-30");
   assert.equal(response.status, 400);
   assert.deepEqual(calls, { client: 0, chain: 0, credentials: 0 });
 });
@@ -129,8 +146,97 @@ test("an upstream failure returns one error and performs no automatic retry", as
   });
   t.after(() => close(server));
 
-  const response = await fetch(`${baseUrl(server)}/api/seller-refresh?expiry=2026-08-25`);
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
   assert.equal(response.status, 502);
   assert.deepEqual(await response.json(), { error: "positions unavailable", kind: "upstream" });
   assert.deepEqual(calls, { positions: 1, trades: 1, chain: 1 });
+});
+
+test("rejects adversarial and origin-less browser access before account data is read", async (t) => {
+  const calls = { status: 0, login: 0, credentials: 0 };
+  const sessionStore = {
+    status: async () => { calls.status += 1; return { connected: true }; },
+    loginUrl: async () => { calls.login += 1; return "https://kite.zerodha.com/connect/login?v=3&api_key=public-key"; },
+    exchangeRequestToken: async () => ({}),
+    credentials: async () => { calls.credentials += 1; return { apiKey: "public-key", accessToken: "secret-token" }; }
+  };
+  const server = await runningServer({ sessionStore });
+  t.after(() => close(server));
+  const attacks = [
+    { path: "/api/zerodha/status", origin: "https://attacker.example" },
+    { path: "/api/zerodha/login-url", origin: "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem.attacker.example" },
+    { path: "/api/seller-refresh?expiry=2026-08-25", origin: "chrome-extension://qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" },
+    { path: "/api/zerodha/status", origin: null }
+  ];
+
+  for (const attack of attacks) {
+    const options = attack.origin ? { headers: { Origin: attack.origin } } : {};
+    const response = await fetch(`${baseUrl(server)}${attack.path}`, options);
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("access-control-allow-origin"), null);
+    assert.deepEqual(await response.json(), { error: "Forbidden origin." });
+  }
+  assert.deepEqual(calls, { status: 0, login: 0, credentials: 0 });
+});
+
+test("validates configured extension origin as exact Chrome extension origin", () => {
+  const sessionStore = { status: async () => ({}) };
+  for (const invalid of [
+    "https://example.com",
+    "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem/",
+    "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjeq",
+    "chrome-extension://HJGKNHDBPLFOELDAALPIDHKAHNFLDJEM"
+  ]) {
+    assert.throws(() => createRequestHandler({ sessionStore, extensionOrigin: invalid }), /extension origin/i);
+  }
+  assert.doesNotThrow(() => createRequestHandler({ sessionStore, extensionOrigin: EXTENSION_ORIGIN }));
+});
+
+test("preserves weekly and monthly markers from cached Upstox contract metadata", () => {
+  assert.deepEqual(bridgeServer.summarizeNiftyExpiries([
+    { expiry: "2026-08-18", weekly: true, instrument_type: "CE" },
+    { expiry: "2026-08-18", weekly: true, instrument_type: "PE" },
+    { expiry: "2026-08-25", weekly: false, instrument_type: "CE" },
+    { expiry: "2026-08-25", weekly: false, instrument_type: "PE" }
+  ], "2026-08-01"), [
+    { expiry: "2026-08-18", daysToExpiry: 17, weekly: true },
+    { expiry: "2026-08-25", daysToExpiry: 24, weekly: false }
+  ]);
+});
+
+test("fails coordinated refresh when Upstox resolves a different expiry", async (t) => {
+  const calls = { positions: 0, trades: 0, chain: 0 };
+  const server = await runningServer({
+    zerodhaClientFactory: () => ({
+      getPositions: async () => { calls.positions += 1; return { status: "success", data: { net: [] } }; },
+      getTrades: async () => { calls.trades += 1; return { status: "success", data: [] }; }
+    }),
+    chainLoader: async () => { calls.chain += 1; return { source: "Upstox", expiry: "2026-08-18", rows: [] }; }
+  });
+  t.after(() => close(server));
+
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { error: "Upstox chain expiry did not match requested expiry.", kind: "expiry_mismatch" });
+  assert.deepEqual(calls, { positions: 1, trades: 1, chain: 1 });
+});
+
+test("fails closed when monthly Zerodha identity lacks cached monthly proof", async (t) => {
+  const server = await runningServer({
+    zerodhaClientFactory: () => ({
+      getPositions: async () => ({ status: "success", data: { net: [{
+        exchange: "NFO", tradingsymbol: "NIFTY26AUG24100CE", quantity: -65,
+        average_price: 358.8, last_price: 320, pnl: 2522
+      }] } }),
+      getTrades: async () => ({ status: "success", data: [] })
+    }),
+    expiryMetadata: () => null
+  });
+  t.after(() => close(server));
+
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
+  const payload = await response.json();
+  assert.equal(response.status, 502);
+  assert.match(payload.error, /monthly expiry.*cannot be proved/i);
+  assert.equal(Object.hasOwn(payload, "positions"), false);
 });

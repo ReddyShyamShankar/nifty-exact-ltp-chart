@@ -16,6 +16,8 @@ const NIFTY_KEY = "NSE_INDEX|Nifty 50";
 const STRIKE_STEP = 50;
 const EXPIRY_CACHE_MS = 15 * 60 * 1000;
 const CHAIN_CACHE_MS = 2000;
+const DEFAULT_EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
+const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}$/;
 const KEYCHAIN_SERVICE = process.env.NIFTY_UPSTOX_KEYCHAIN_SERVICE || "NIFTY Options Upstox Analytics Token";
 let expiryCache = null;
 let candleCache = null;
@@ -118,13 +120,26 @@ async function upstoxGet(url) {
   return body;
 }
 
-function respond(response, status, payload) {
-  response.writeHead(status, {
-    "Access-Control-Allow-Origin": "*",
+function respondJson(response, status, payload, corsOrigin) {
+  const headers = {
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8"
-  });
+  };
+  if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
+  if (corsOrigin && corsOrigin !== "*") headers.Vary = "Origin";
+  response.writeHead(status, headers);
   response.end(JSON.stringify(payload));
+}
+
+function respond(response, status, payload) {
+  respondJson(response, status, payload, "*");
+}
+
+function validatedExtensionOrigin(value) {
+  if (typeof value !== "string" || !EXTENSION_ORIGIN_PATTERN.test(value)) {
+    throw new Error("Invalid NIFTY extension origin.");
+  }
+  return value;
 }
 
 function formatChain(chain) {
@@ -178,6 +193,20 @@ function niftyChain(expiry) {
   return chainCache.get(expiry, () => loadNiftyChain(expiry));
 }
 
+export function summarizeNiftyExpiries(contracts, today) {
+  const markers = new Map();
+  for (const contract of Array.isArray(contracts) ? contracts : []) {
+    if (!exactIsoDate(contract?.expiry) || contract.expiry < today) continue;
+    if (!markers.has(contract.expiry)) markers.set(contract.expiry, new Set());
+    if (typeof contract.weekly === "boolean") markers.get(contract.expiry).add(contract.weekly);
+  }
+  return Array.from(markers, ([expiry, values]) => ({
+    expiry,
+    daysToExpiry: Math.ceil((new Date(`${expiry}T00:00:00Z`) - new Date(`${today}T00:00:00Z`)) / 86400000),
+    weekly: values.size === 1 ? values.values().next().value : null
+  })).sort((left, right) => left.expiry.localeCompare(right.expiry));
+}
+
 async function niftyExpiries() {
   if (expiryCache && Date.now() - expiryCache.updatedAt < EXPIRY_CACHE_MS) return expiryCache.payload;
 
@@ -189,13 +218,14 @@ async function niftyExpiries() {
   const payload = {
     source: "Upstox",
     updatedAt: new Date().toISOString(),
-    expiries: [...new Set((body.data || []).map((item) => item.expiry))]
-      .filter((expiry) => expiry >= today)
-      .sort()
-      .map((expiry) => ({ expiry, daysToExpiry: Math.ceil((new Date(`${expiry}T00:00:00Z`) - new Date(`${today}T00:00:00Z`)) / 86400000) }))
+    expiries: summarizeNiftyExpiries(body.data, today)
   };
   expiryCache = { updatedAt: Date.now(), payload };
   return payload;
+}
+
+function cachedExpiryMetadata(expiry) {
+  return expiryCache?.payload?.expiries?.find((entry) => entry.expiry === expiry) || null;
 }
 
 function tokenOrThrow() {
@@ -241,14 +271,24 @@ export function createRequestHandler({
   sessionStore = defaultZerodhaSessionStore(),
   zerodhaClientFactory = createZerodhaClient,
   chainLoader = niftyChain,
+  expiryMetadata = cachedExpiryMetadata,
   normalizePositions = normalizeNiftyPositions,
   normalizeTrades = normalizeNiftyTrades,
+  extensionOrigin = process.env.NIFTY_EXTENSION_ORIGIN || DEFAULT_EXTENSION_ORIGIN,
   now = () => new Date()
 } = {}) {
+  const allowedOrigin = validatedExtensionOrigin(extensionOrigin);
+  const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/seller-refresh"]);
   return async function requestHandler(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
+  const accountPath = accountPaths.has(url.pathname);
+  if (accountPath && request.headers.origin !== allowedOrigin) {
+    respondJson(response, 403, { error: "Forbidden origin." }, null);
+    return;
+  }
   if (request.method !== "GET") {
-    respond(response, 404, { error: "Not found" });
+    if (accountPath) respondJson(response, 404, { error: "Not found" }, allowedOrigin);
+    else respond(response, 404, { error: "Not found" });
     return;
   }
   if (url.pathname === "/") {
@@ -266,37 +306,37 @@ export function createRequestHandler({
   }
   if (url.pathname === "/api/zerodha/status") {
     try {
-      respond(response, 200, await sessionStore.status());
+      respondJson(response, 200, await sessionStore.status(), allowedOrigin);
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
     }
     return;
   }
   if (url.pathname === "/api/zerodha/login-url") {
     try {
-      respond(response, 200, { loginUrl: await sessionStore.loginUrl() });
+      respondJson(response, 200, { loginUrl: await sessionStore.loginUrl() }, allowedOrigin);
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
     }
     return;
   }
   if (url.pathname === "/api/zerodha/callback") {
     const requestToken = url.searchParams.get("request_token");
     if (!requestToken) {
-      respond(response, 400, { error: "Zerodha callback did not include a request token.", kind: "invalid_request" });
+      respondJson(response, 400, { error: "Zerodha callback did not include a request token.", kind: "invalid_request" }, null);
       return;
     }
     try {
-      respond(response, 200, await sessionStore.exchangeRequestToken(requestToken));
+      respondJson(response, 200, await sessionStore.exchangeRequestToken(requestToken), null);
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, null);
     }
     return;
   }
   if (url.pathname === "/api/seller-refresh") {
     const expiry = url.searchParams.get("expiry") || "";
     if (!exactIsoDate(expiry)) {
-      respond(response, 400, { error: "Expiry must be an exact YYYY-MM-DD date." });
+      respondJson(response, 400, { error: "Expiry must be an exact YYYY-MM-DD date." }, allowedOrigin);
       return;
     }
     try {
@@ -307,14 +347,22 @@ export function createRequestHandler({
         client.getTrades(),
         chainLoader(expiry)
       ]);
-      respond(response, 200, {
+      if (!chain || chain.expiry !== expiry) {
+        const error = new Error("Upstox chain expiry did not match requested expiry.");
+        error.status = 502;
+        error.kind = "expiry_mismatch";
+        throw error;
+      }
+      const metadata = expiryMetadata(expiry);
+      const expiryKind = metadata?.weekly === false ? "monthly" : metadata?.weekly === true ? "weekly" : "unknown";
+      respondJson(response, 200, {
         updatedAt: new Date(now()).toISOString(),
-        positions: normalizePositions(positionsPayload, expiry),
-        trades: normalizeTrades(tradesPayload, expiry),
+        positions: normalizePositions(positionsPayload, expiry, { expiryKind }),
+        trades: normalizeTrades(tradesPayload, expiry, { expiryKind }),
         chain
-      });
+      }, allowedOrigin);
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
     }
     return;
   }

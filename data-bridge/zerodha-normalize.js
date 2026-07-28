@@ -12,7 +12,7 @@ function exactIsoDate(expiry) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === expiry;
 }
 
-function canonicalIdentity(symbol, expiry) {
+function canonicalIdentity(symbol, expiry, expiryKind) {
   const value = typeof symbol === "string" ? symbol.trim().toUpperCase() : "";
   if (!value.startsWith("NIFTY")) return null;
   const monthly = value.match(/^NIFTY(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)([1-9]\d{3,5})(CE|PE)$/);
@@ -21,10 +21,13 @@ function canonicalIdentity(symbol, expiry) {
   let optionType;
   if (monthly) {
     if (expiry.slice(2, 4) !== monthly[1] || expiry.slice(5, 7) !== MONTHS[monthly[2]]) return null;
+    if (expiryKind === "weekly") return null;
+    if (expiryKind !== "monthly") throw new Error("Monthly expiry identity cannot be proved from cached Upstox metadata.");
     strike = Number(monthly[3]);
     optionType = monthly[4];
   } else if (weekly) {
     if (expiry.slice(2, 4) !== weekly[1] || expiry.slice(5, 7) !== WEEKLY_MONTHS[weekly[2]] || expiry.slice(8, 10) !== weekly[3]) return null;
+    if (expiryKind === "monthly") throw new Error("Weekly Zerodha symbol conflicts with monthly Upstox expiry metadata.");
     strike = Number(weekly[4]);
     optionType = weekly[5];
   } else {
@@ -35,9 +38,8 @@ function canonicalIdentity(symbol, expiry) {
 }
 
 function finiteNumber(value, label) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) throw new Error(`Invalid Zerodha ${label}.`);
-  return number;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid Zerodha ${label}.`);
+  return value;
 }
 
 function assertPayload(payload, rows, label) {
@@ -54,14 +56,14 @@ function normalizedTimestamp(value) {
   return timestamp;
 }
 
-export function normalizeNiftyPositions(payload, expiry) {
+export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown" } = {}) {
   if (!exactIsoDate(expiry)) throw new Error("Expiry must be an exact ISO date.");
   const rows = payload?.data?.net;
   assertPayload(payload, rows, "positions");
   const normalized = [];
   for (const row of rows) {
     if (row?.exchange !== "NFO") continue;
-    const identity = canonicalIdentity(row.tradingsymbol, expiry);
+    const identity = canonicalIdentity(row.tradingsymbol, expiry, expiryKind);
     if (!identity) continue;
     const signedQuantity = finiteNumber(row.quantity, "position quantity");
     if (!Number.isInteger(signedQuantity)) throw new Error("Zerodha position quantity must be an integer.");
@@ -84,14 +86,14 @@ export function normalizeNiftyPositions(payload, expiry) {
   }
   return normalized;
 }
-export function normalizeNiftyTrades(payload, expiry) {
+export function normalizeNiftyTrades(payload, expiry, { expiryKind = "unknown" } = {}) {
   if (!exactIsoDate(expiry)) throw new Error("Expiry must be an exact ISO date.");
   const rows = payload?.data;
   assertPayload(payload, rows, "trades");
   const normalized = [];
   for (const row of rows) {
     if (row?.exchange !== "NFO") continue;
-    const identity = canonicalIdentity(row.tradingsymbol, expiry);
+    const identity = canonicalIdentity(row.tradingsymbol, expiry, expiryKind);
     if (!identity) continue;
     const transactionType = String(row.transaction_type || "").toUpperCase();
     if (transactionType !== "BUY" && transactionType !== "SELL") throw new Error("Zerodha trade must be BUY or SELL.");

@@ -44,7 +44,7 @@ test("normalizes strict monthly NIFTY net positions and removes all out-of-scope
     }
   };
 
-  assert.deepEqual(normalizeNiftyPositions(payload, "2026-08-25"), [{
+  assert.deepEqual(normalizeNiftyPositions(payload, "2026-08-25", { expiryKind: "monthly" }), [{
     contractId: "NFO:NIFTY26AUG24100CE",
     tradingsymbol: "NIFTY26AUG24100CE",
     expiry: "2026-08-25",
@@ -80,9 +80,19 @@ test("matches weekly symbol through exact expiry hint and canonicalizes ledger i
   assert.deepEqual(normalizeNiftyPositions(payload, "2026-08-11"), []);
 });
 
+test("does not accept same-month monthly symbol for a weekly August expiry", () => {
+  const payload = { status: "success", data: { net: [position()] } };
+
+  assert.deepEqual(normalizeNiftyPositions(payload, "2026-08-18", { expiryKind: "weekly" }), []);
+  assert.throws(
+    () => normalizeNiftyPositions(payload, "2026-08-25", { expiryKind: "unknown" }),
+    /monthly expiry.*cannot be proved/i
+  );
+});
+
 test("fails closed when a matching NIFTY position is not a whole lot", () => {
   const payload = { status: "success", data: { net: [position({ quantity: -66 })] } };
-  assert.throws(() => normalizeNiftyPositions(payload, "2026-08-25"), /whole NIFTY lots/i);
+  assert.throws(() => normalizeNiftyPositions(payload, "2026-08-25", { expiryKind: "monthly" }), /whole NIFTY lots/i);
 });
 
 test("normalizes NFO NIFTY BUY and SELL fills with exact signed directions", () => {
@@ -134,4 +144,40 @@ test("rejects indivisible or unsigned matching NIFTY trade evidence atomically",
 
   assert.throws(() => normalizeNiftyTrades(indivisible, "2026-08-18"), /whole NIFTY lots/i);
   assert.throws(() => normalizeNiftyTrades(unsigned, "2026-08-18"), /BUY or SELL/i);
+});
+
+test("rejects non-number position fields before conversion and preserves numeric zero", () => {
+  const invalidValues = [null, undefined, "", "   ", "0", false, [], {}];
+  for (const field of ["quantity", "average_price", "last_price", "pnl"]) {
+    for (const value of invalidValues) {
+      const payload = { status: "success", data: { net: [position({ [field]: value })] } };
+      assert.throws(
+        () => normalizeNiftyPositions(payload, "2026-08-25", { expiryKind: "monthly" }),
+        /invalid Zerodha|must be an integer/i
+      );
+    }
+  }
+
+  const zeroPayload = { status: "success", data: { net: [position({ quantity: -65, average_price: 0, last_price: 0, pnl: 0 })] } };
+  const [normalized] = normalizeNiftyPositions(zeroPayload, "2026-08-25", { expiryKind: "monthly" });
+  assert.equal(normalized.averagePrice, 0);
+  assert.equal(normalized.lastPrice, 0);
+  assert.equal(normalized.pnl, 0);
+});
+
+test("rejects non-number trade fields before conversion and preserves numeric zero price", () => {
+  const invalidValues = [null, undefined, "", "   ", "65", false, [], {}];
+  for (const field of ["quantity", "average_price"]) {
+    for (const value of invalidValues) {
+      const payload = { status: "success", data: [trade({ [field]: value })] };
+      assert.throws(() => normalizeNiftyTrades(payload, "2026-08-18", { expiryKind: "weekly" }), /invalid Zerodha|must be positive/i);
+    }
+  }
+
+  const [normalized] = normalizeNiftyTrades(
+    { status: "success", data: [trade({ average_price: 0 })] },
+    "2026-08-18",
+    { expiryKind: "weekly" }
+  );
+  assert.equal(normalized.price, 0);
 });

@@ -10,6 +10,9 @@ const SERVICE = "NIFTY Options Upstox Analytics Token";
 const ZERODHA_API_KEY_SERVICE = "NIFTY Options Zerodha API Key";
 const ZERODHA_API_SECRET_SERVICE = "NIFTY Options Zerodha API Secret";
 const ZERODHA_ACCESS_TOKEN_SERVICE = "NIFTY Options Zerodha Daily Access Token";
+const DEFAULT_EXTENSION_ORIGIN = "chrome-extension://hjgknhdbplfoeldaalpidhkahnfldjem";
+const EXTENSION_ORIGIN = process.env.NIFTY_EXTENSION_ORIGIN || DEFAULT_EXTENSION_ORIGIN;
+if (!/^chrome-extension:\/\/[a-p]{32}$/.test(EXTENSION_ORIGIN)) throw new Error("Invalid NIFTY extension origin.");
 const plist = resolve(homedir(), "Library/LaunchAgents", `${LABEL}.plist`);
 const server = resolve(__dirname, "server.js");
 const log = resolve(homedir(), "Library/Logs/NiftyOptionsBridge.log");
@@ -38,6 +41,7 @@ function install() {
     <key>NIFTY_ZERODHA_API_KEYCHAIN_SERVICE</key><string>${ZERODHA_API_KEY_SERVICE}</string>
     <key>NIFTY_ZERODHA_API_SECRET_KEYCHAIN_SERVICE</key><string>${ZERODHA_API_SECRET_SERVICE}</string>
     <key>NIFTY_ZERODHA_ACCESS_TOKEN_KEYCHAIN_SERVICE</key><string>${ZERODHA_ACCESS_TOKEN_SERVICE}</string>
+    <key>NIFTY_EXTENSION_ORIGIN</key><string>${escape(EXTENSION_ORIGIN)}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
