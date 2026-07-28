@@ -1,7 +1,12 @@
 import http from "node:http";
 import { spawnSync } from "node:child_process";
 import { userInfo } from "node:os";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createAsyncCache } from "./chain-cache.js";
+import { createZerodhaClient } from "./zerodha-client.js";
+import { createZerodhaSessionStore } from "./zerodha-session.js";
+import { normalizeNiftyPositions, normalizeNiftyTrades } from "./zerodha-normalize.js";
 
 const PORT = Number(process.env.NIFTY_BRIDGE_PORT || 8787);
 const UPSTOX_CHAIN_URL = "https://api.upstox.com/v2/option/chain";
@@ -16,6 +21,46 @@ let expiryCache = null;
 let candleCache = null;
 let keychainToken = null;
 const chainCache = createAsyncCache({ ttlMs: CHAIN_CACHE_MS });
+
+function zerodhaServices() {
+  return {
+    apiKey: process.env.NIFTY_ZERODHA_API_KEYCHAIN_SERVICE || "NIFTY Options Zerodha API Key",
+    apiSecret: process.env.NIFTY_ZERODHA_API_SECRET_KEYCHAIN_SERVICE || "NIFTY Options Zerodha API Secret",
+    accessToken: process.env.NIFTY_ZERODHA_ACCESS_TOKEN_KEYCHAIN_SERVICE || "NIFTY Options Zerodha Daily Access Token"
+  };
+}
+
+function readKeychainSecret(service) {
+  if (process.platform !== "darwin") return null;
+  const result = spawnSync("/usr/bin/security", [
+    "find-generic-password", "-a", userInfo().username, "-s", service, "-w"
+  ], { encoding: "utf8", timeout: 3000 });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
+function writeKeychainSecret(service, secret) {
+  if (process.platform !== "darwin") throw new Error("macOS Keychain is required for Zerodha credentials.");
+  const result = spawnSync("/usr/bin/security", [
+    "add-generic-password", "-U", "-a", userInfo().username, "-s", service, "-w", secret
+  ], { encoding: "utf8", timeout: 3000 });
+  if (result.status !== 0) throw new Error("Could not save Zerodha credential in macOS Keychain.");
+}
+
+function deleteKeychainSecret(service) {
+  if (process.platform !== "darwin") return;
+  spawnSync("/usr/bin/security", [
+    "delete-generic-password", "-a", userInfo().username, "-s", service
+  ], { encoding: "utf8", timeout: 3000 });
+}
+
+function defaultZerodhaSessionStore() {
+  return createZerodhaSessionStore({
+    readSecret: readKeychainSecret,
+    writeSecret: writeKeychainSecret,
+    deleteSecret: deleteKeychainSecret,
+    services: zerodhaServices()
+  });
+}
 
 function tokenExpiry(token) {
   try {
@@ -186,8 +231,22 @@ async function niftyCandles(days = 120) {
   return payload;
 }
 
-http.createServer(async (request, response) => {
-  const url = new URL(request.url, `http://${request.headers.host}`);
+function exactIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+export function createRequestHandler({
+  sessionStore = defaultZerodhaSessionStore(),
+  zerodhaClientFactory = createZerodhaClient,
+  chainLoader = niftyChain,
+  normalizePositions = normalizeNiftyPositions,
+  normalizeTrades = normalizeNiftyTrades,
+  now = () => new Date()
+} = {}) {
+  return async function requestHandler(request, response) {
+  const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
   if (request.method !== "GET") {
     respond(response, 404, { error: "Not found" });
     return;
@@ -198,8 +257,65 @@ http.createServer(async (request, response) => {
       service: "NIFTY data bridge",
       status: "running",
       token: { configured: Boolean(token.token), source: token.source, expiresAt: token.expiresAt },
-      endpoints: ["/api/health", "/api/nifty-chain", "/api/nifty-expiries", "/api/nifty-candles"]
+      endpoints: [
+        "/api/health", "/api/nifty-chain", "/api/nifty-expiries", "/api/nifty-candles",
+        "/api/zerodha/status", "/api/zerodha/login-url", "/api/zerodha/callback", "/api/seller-refresh"
+      ]
     });
+    return;
+  }
+  if (url.pathname === "/api/zerodha/status") {
+    try {
+      respond(response, 200, await sessionStore.status());
+    } catch (error) {
+      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/zerodha/login-url") {
+    try {
+      respond(response, 200, { loginUrl: await sessionStore.loginUrl() });
+    } catch (error) {
+      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/zerodha/callback") {
+    const requestToken = url.searchParams.get("request_token");
+    if (!requestToken) {
+      respond(response, 400, { error: "Zerodha callback did not include a request token.", kind: "invalid_request" });
+      return;
+    }
+    try {
+      respond(response, 200, await sessionStore.exchangeRequestToken(requestToken));
+    } catch (error) {
+      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/seller-refresh") {
+    const expiry = url.searchParams.get("expiry") || "";
+    if (!exactIsoDate(expiry)) {
+      respond(response, 400, { error: "Expiry must be an exact YYYY-MM-DD date." });
+      return;
+    }
+    try {
+      const credentials = await sessionStore.credentials();
+      const client = zerodhaClientFactory(credentials);
+      const [positionsPayload, tradesPayload, chain] = await Promise.all([
+        client.getPositions(),
+        client.getTrades(),
+        chainLoader(expiry)
+      ]);
+      respond(response, 200, {
+        updatedAt: new Date(now()).toISOString(),
+        positions: normalizePositions(positionsPayload, expiry),
+        trades: normalizeTrades(tradesPayload, expiry),
+        chain
+      });
+    } catch (error) {
+      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+    }
     return;
   }
   if (url.pathname === "/api/health") {
@@ -251,6 +367,26 @@ http.createServer(async (request, response) => {
   } catch (error) {
     respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
   }
-}).listen(PORT, "127.0.0.1", () => {
-  console.log(`NIFTY data bridge listening at http://127.0.0.1:${PORT}`);
-});
+  };
+}
+
+export function startServer({ port = PORT, host = "127.0.0.1", ...handlerOptions } = {}) {
+  const server = http.createServer(createRequestHandler(handlerOptions));
+  return new Promise((resolveServer, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolveServer(server);
+    });
+  });
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  startServer().then(() => {
+    console.log(`NIFTY data bridge listening at http://127.0.0.1:${PORT}`);
+  }).catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

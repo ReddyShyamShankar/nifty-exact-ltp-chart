@@ -7,6 +7,9 @@ const { dirname, resolve } = require("node:path");
 
 const LABEL = "com.reddy.nifty-options-bridge";
 const SERVICE = "NIFTY Options Upstox Analytics Token";
+const ZERODHA_API_KEY_SERVICE = "NIFTY Options Zerodha API Key";
+const ZERODHA_API_SECRET_SERVICE = "NIFTY Options Zerodha API Secret";
+const ZERODHA_ACCESS_TOKEN_SERVICE = "NIFTY Options Zerodha Daily Access Token";
 const plist = resolve(homedir(), "Library/LaunchAgents", `${LABEL}.plist`);
 const server = resolve(__dirname, "server.js");
 const log = resolve(homedir(), "Library/Logs/NiftyOptionsBridge.log");
@@ -32,6 +35,9 @@ function install() {
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>NIFTY_UPSTOX_KEYCHAIN_SERVICE</key><string>${SERVICE}</string>
+    <key>NIFTY_ZERODHA_API_KEYCHAIN_SERVICE</key><string>${ZERODHA_API_KEY_SERVICE}</string>
+    <key>NIFTY_ZERODHA_API_SECRET_KEYCHAIN_SERVICE</key><string>${ZERODHA_API_SECRET_SERVICE}</string>
+    <key>NIFTY_ZERODHA_ACCESS_TOKEN_KEYCHAIN_SERVICE</key><string>${ZERODHA_ACCESS_TOKEN_SERVICE}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
