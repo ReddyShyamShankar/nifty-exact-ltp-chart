@@ -117,7 +117,7 @@ test("accepted popup map survives JSON storage and renders current and whole-tra
     ...stored,
     activeStrategyId: "aug-seller",
     activeExpiry: "2026-08-25"
-  }, (price) => 700 - (price - 23800), { left: 100, top: 20, right: 900, bottom: 700 });
+  }, (price) => 700 - (price - 23800), { left: 100, top: 20, right: 900, bottom: 700 }, { labelRight: 643 });
 
   assert.equal(layers.status, "OK");
   assert.deepEqual(layers.bands.filter((band) => band.layer === "current").map((band) => band.kind), ["loss", "profit", "loss"]);

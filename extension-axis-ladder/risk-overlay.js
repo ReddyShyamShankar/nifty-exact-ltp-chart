@@ -10,9 +10,6 @@
     "INVALID INPUT",
     "RISK INPUT INVALID"
   ]);
-  const LANE_ZERO_TOKEN_WIDTH_PX = 220;
-  const RISK_LABEL_GAP_PX = 12;
-  const LABEL_CLEARANCE_PX = LANE_ZERO_TOKEN_WIDTH_PX + RISK_LABEL_GAP_PX;
 
   function empty(status) {
     return { status, lines: [], bands: [] };
@@ -100,7 +97,7 @@
     return { layer, kind: band.kind, from, to, top, bottom, left: rect.left, right: rect.right };
   }
 
-  function buildLayer(layer, map, toY, rect) {
+  function buildLayer(layer, map, toY, rect, labelRight) {
     if (!isRiskMap(map) || BLOCKED_LAYER_STATES.has(normalizedState(map.status))) {
       return { blocked: true, lines: [], bands: [] };
     }
@@ -113,7 +110,6 @@
     const lineStyle = layer === "current"
       ? { stroke: "mint", dash: "solid", prefix: "CURRENT" }
       : { stroke: "graphite", dash: "dashed", prefix: "WHOLE" };
-    const labelRight = rect.right - LABEL_CLEARANCE_PX;
     const lines = roots.map((price, index) => ({
       layer,
       price,
@@ -121,7 +117,7 @@
       left: rect.left,
       right: rect.right,
       labelAnchor: "right",
-      labelClearance: LABEL_CLEARANCE_PX,
+      labelClearance: rect.right - labelRight,
       labelRight,
       label: `${lineStyle.prefix} BE ${index + 1} · ${formatPrice(price)}`,
       stroke: lineStyle.stroke,
@@ -139,10 +135,14 @@
     return { blocked: false, lines, bands: builtBands.filter(Boolean) };
   }
 
-  function buildRiskLayers(view, toY, plotRect) {
+  function buildRiskLayers(view, toY, plotRect, layout) {
     const rect = finiteRect(plotRect);
     if (!view || typeof toY !== "function" || !rect) return empty("PLACEMENT_UNAVAILABLE");
-    if (rect.right - LABEL_CLEARANCE_PX <= rect.left) return empty("LABEL_SPACE_UNAVAILABLE");
+    const labelRight = layout?.labelRight;
+    if (typeof labelRight !== "number"
+      || !Number.isFinite(labelRight)
+      || labelRight <= rect.left
+      || labelRight >= rect.right) return empty("LABEL_SPACE_UNAVAILABLE");
     const viewState = view?.broker?.kind === "stale"
       ? "STALE"
       : normalizedState(view.state || view.priority?.label);
@@ -155,8 +155,8 @@
     if (activeExpiry && view.expiry !== activeExpiry) return empty("EXPIRY_MISMATCH");
 
     const maps = riskMaps(view);
-    const current = buildLayer("current", maps.current, toY, rect);
-    const wholeTrade = buildLayer("whole-trade", maps.wholeTrade, toY, rect);
+    const current = buildLayer("current", maps.current, toY, rect, labelRight);
+    const wholeTrade = buildLayer("whole-trade", maps.wholeTrade, toY, rect, labelRight);
     if (current.blocked && wholeTrade.blocked) return empty(viewState || "RISK_LAYERS_WITHHELD");
     return {
       status: current.blocked || wholeTrade.blocked ? "PARTIAL" : "OK",

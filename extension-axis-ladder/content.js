@@ -14,6 +14,7 @@
   const LABELS_ID = "nifty-axis-ladder";
   const MAX_LANES = 13;
   const MINIMUM_ROW_GAP = 22;
+  const RISK_LABEL_GAP_PX = 12;
   const timeframeApi = root.NiftyTimeframeLadder
     || (typeof module !== "undefined" && module.exports ? require("./timeframe-ladder.js") : null);
   const riskOverlayApi = root.NiftyRiskOverlay
@@ -104,6 +105,18 @@
         && y + rowHeight / 2 <= bottom
         && rowLeft >= left;
     });
+  }
+
+  function riskLabelLayout(laneZeroRows) {
+    const rows = Array.isArray(laneZeroRows) ? laneZeroRows : [laneZeroRows];
+    if (!rows.length || rows.some((row) => !row || typeof row.getBoundingClientRect !== "function")) return null;
+    const rects = rows.map((row) => row.getBoundingClientRect());
+    if (rects.some((rect) => typeof rect?.left !== "number"
+      || typeof rect?.right !== "number"
+      || !Number.isFinite(rect.left)
+      || !Number.isFinite(rect.right)
+      || rect.right <= rect.left)) return null;
+    return { labelRight: Math.min(...rects.map((rect) => rect.left)) - RISK_LABEL_GAP_PX };
   }
 
   function axisPriceToY(axisPairs) {
@@ -218,6 +231,7 @@
     let retryTimer = null;
     let retryIndex = 0;
     let cachedAxisToY = null;
+    let cachedRiskLayout = null;
     let placementRevision = 0;
     let membershipRevision = 0;
     let committedAxisObservedAt = 0;
@@ -246,10 +260,15 @@
     function placeCached(membership = current) {
       const positioned = positionedRows(membership, cachedAxisToY);
       if (!positioned) return false;
-      if (placeRows(positioned, membership) === false) return false;
+      cachedRiskLayout = null;
+      const rowPlacement = placeRows(positioned, membership);
+      if (rowPlacement === false) return false;
+      cachedRiskLayout = rowPlacement && typeof rowPlacement === "object"
+        ? rowPlacement.riskLayout || null
+        : null;
       if (riskView) {
         try {
-          placeRisk(riskView, cachedAxisToY, membership);
+          placeRisk(riskView, cachedAxisToY, membership, cachedRiskLayout);
         } catch {
           hideRisk();
         }
@@ -267,7 +286,7 @@
       }
       if (!current || typeof cachedAxisToY !== "function") return false;
       try {
-        placeRisk(riskView, cachedAxisToY, current);
+        placeRisk(riskView, cachedAxisToY, current, cachedRiskLayout);
         return true;
       } catch {
         hideRisk();
@@ -299,6 +318,7 @@
       if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
       current = null;
       cachedAxisToY = null;
+      cachedRiskLayout = null;
       hideRisk();
       hideRows(message || "AXIS CALIBRATION UNAVAILABLE");
       const delayFloor = message === "AUTO-FITTING PRICE SCALE" ? 500 : 0;
@@ -412,6 +432,7 @@
         transitionMinimumObservedAt = 0;
         current = null;
         cachedAxisToY = null;
+        cachedRiskLayout = null;
         hideRisk();
         hideRows("UNSUPPORTED TIMEFRAME");
         setStatus("UNSUPPORTED TIMEFRAME");
@@ -561,6 +582,7 @@
       current = null;
       cachedChain = null;
       cachedAxisToY = null;
+      cachedRiskLayout = null;
       hideRisk();
       dataStatus = "STALE";
       hideRows("PRESS REFRESH OPTION NUMBERS");
@@ -581,6 +603,7 @@
       desiredTimeframe = null;
       current = null;
       cachedAxisToY = null;
+      cachedRiskLayout = null;
       hideRisk();
       dataStatus = "STALE";
       placementRevision += 1;
@@ -616,7 +639,7 @@
     return changed;
   }
 
-  const api = { applyRiskStorageChanges, axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, rowLaneLayout, rowsFitPlot };
+  const api = { applyRiskStorageChanges, axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, riskLabelLayout, rowLaneLayout, rowsFitPlot };
   root.NiftyAxisLadderContent = api;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
@@ -707,7 +730,7 @@
     document.getElementById("nifty-seller-risk")?.remove();
   }
 
-  function placeRisk(view, toY) {
+  function placeRisk(view, toY, _membership, layout) {
     const canvas = chartCanvas();
     if (!canvas || typeof toY !== "function") {
       clearRisk();
@@ -718,7 +741,7 @@
       ...view,
       activeStrategyId: settings.selectedStrategyId || view?.strategyId,
       activeExpiry: settings.expiry
-    }, toY, rect);
+    }, toY, rect, layout);
     clearRisk();
     if (!layers.lines.length && !layers.bands.length) return false;
     const node = riskRoot();
@@ -919,9 +942,12 @@
         element.style.right = `${baseRight + lane * laneOffset}px`;
         element.style.top = `${row.y}px`;
       });
+      const laneZeroRows = elements
+        .filter((_entry, index) => layout.lanes[index] === 0)
+        .map(({ element }) => element);
       scaleFitAttempts = 0;
       scaleFitTimeframe = membership?.timeframe || scaleFitTimeframe;
-      return true;
+      return { riskLayout: riskLabelLayout(laneZeroRows) };
     } catch (error) {
       elements.forEach(({ element }) => { element.hidden = true; });
       throw error;

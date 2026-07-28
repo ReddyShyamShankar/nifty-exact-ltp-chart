@@ -85,6 +85,16 @@ test("native canvas tick map follows an inverted TradingView price scale", () =>
   assert.equal(toY(24050), 180);
 });
 
+test("risk layout clears the leftmost measured lane-zero border box with a fixed gap", () => {
+  const laneZeroRows = [
+    { getBoundingClientRect: () => ({ left: 655, top: 286, right: 893, bottom: 316 }) },
+    { getBoundingClientRect: () => ({ left: 640, top: 336, right: 893, bottom: 366 }) }
+  ];
+
+  assert.deepEqual(api.riskLabelLayout?.(laneZeroRows), { labelRight: 628 });
+  assert.equal(api.riskLabelLayout?.(null), null);
+});
+
 test("controller rebuild succeeds and places exact contracts on an inverted TradingView scale", async () => {
   const placements = [];
   const controller = api.createLadderController({
@@ -150,10 +160,10 @@ test("risk view changes redraw from cached axis while zoom pan and timeframe reu
     fetchChain: async () => { fetches += 1; return chain(23767.45); },
     captureAxisScale: async () => { captures += 1; return scale(); },
     renderRows: () => {},
-    placeRows: () => true,
+    placeRows: () => ({ riskLayout: { labelRight: 643 } }),
     hideRisk: () => { riskHides += 1; },
-    placeRisk: (view, toY, membership) => {
-      riskPlacements.push({ view, y: toY(23750), timeframe: membership.timeframe });
+    placeRisk: (view, toY, membership, layout) => {
+      riskPlacements.push({ view, y: toY(23750), timeframe: membership.timeframe, labelRight: layout?.labelRight });
       return true;
     }
   });
@@ -170,7 +180,7 @@ test("risk view changes redraw from cached axis while zoom pan and timeframe reu
   assert.equal(settings.sellerSafetyView, accepted);
   assert.equal(fetches, 1);
   assert.equal(captures, 2, "storage update must not capture axis independently");
-  assert.deepEqual(riskPlacements.at(-1), { view: accepted, y: 150, timeframe: "1h" });
+  assert.deepEqual(riskPlacements.at(-1), { view: accepted, y: 150, timeframe: "1h", labelRight: 643 });
   assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: null } }, "sync", settings, controller), false);
   assert.equal(riskPlacements.length, 1, "non-local storage must not redraw");
   assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: null } }, "local", settings, controller), true);
@@ -184,6 +194,31 @@ test("risk view changes redraw from cached axis while zoom pan and timeframe reu
   assert.equal(fetches, 1, "zoom, pan, and timeframe remaps use cached chain");
   assert.equal(captures, 6, "two placements capture once each; timeframe rebuild keeps two-capture stability check");
   assert.deepEqual(riskPlacements.slice(-3).map((placement) => placement.timeframe), ["1h", "1h", "1D"]);
+});
+
+test("failed row placement clears the cached risk label boundary", async () => {
+  let rowPlacements = 0;
+  const labelRights = [];
+  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED" };
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    riskView: accepted,
+    fetchChain: async () => chain(23767.45),
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => {
+      rowPlacements += 1;
+      return rowPlacements === 1 ? { riskLayout: { labelRight: 643 } } : false;
+    },
+    placeRisk: (_view, _toY, _membership, layout) => {
+      labelRights.push(layout?.labelRight ?? null);
+    }
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(await controller.place(), false);
+  controller.setRiskView({ ...accepted, acceptedAt: "later" });
+  assert.deepEqual(labelRights, [643, null]);
 });
 
 test("failed initial chain request waits for manual refresh instead of retrying automatically", async () => {
