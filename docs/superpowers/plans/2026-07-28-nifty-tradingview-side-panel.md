@@ -199,6 +199,11 @@ Create `extension-axis-ladder/side-panel.js` with no broker or market-data depen
     const reported = new Set();
     let activationQueue = Promise.resolve();
 
+    function isExpectedCloseError(error) {
+      const message = error?.message || String(error);
+      return /No active side panel|No tab with id|Invalid tab ID/i.test(message);
+    }
+
     function reportOnce(error) {
       const message = error?.message || String(error);
       if (reported.has(message)) return;
@@ -227,7 +232,7 @@ Create `extension-axis-ladder/side-panel.js` with no broker or market-data depen
       const previousTabId = Number(activeTabs[String(numericWindowId)]);
       if (Number.isInteger(previousTabId) && previousTabId > 0 && previousTabId !== numericTabId) {
         try { await chromeApi.sidePanel.close({ tabId: previousTabId }); }
-        catch (error) { reportOnce(error); }
+        catch (error) { if (!isExpectedCloseError(error)) reportOnce(error); }
       }
       activeTabs[String(numericWindowId)] = numericTabId;
       await chromeApi.storage.session.set({ [ACTIVE_TABS_KEY]: activeTabs });
@@ -306,18 +311,22 @@ test("created and URL-updated listeners configure only supplied tabs", async () 
   ]);
 });
 
-test("repeated identical close failures are reported once", async () => {
+test("expected close failures stay silent and unexpected failures are reported once", async () => {
   const chromeApi = fakeChrome([
     { id: 12, windowId: 3, url: "https://www.tradingview.com/chart/two" },
-    { id: 13, windowId: 3, url: "https://www.tradingview.com/chart/three" }
+    { id: 13, windowId: 3, url: "https://www.tradingview.com/chart/three" },
+    { id: 14, windowId: 3, url: "https://www.tradingview.com/chart/four" }
   ]);
   chromeApi.session.niftySidePanelActiveTabs = { "3": 11 };
   chromeApi.sidePanel.close = async () => { throw new Error("No active side panel"); };
   const reports = [];
   const controller = sidePanel.createController(chromeApi, { report: (message) => reports.push(message) });
   await controller.handleActivated({ tabId: 12, windowId: 3 });
+  assert.deepEqual(reports, []);
+  chromeApi.sidePanel.close = async () => { throw new Error("Unexpected close failure"); };
   await controller.handleActivated({ tabId: 13, windowId: 3 });
-  assert.deepEqual(reports, ["NIFTY side panel: No active side panel"]);
+  await controller.handleActivated({ tabId: 14, windowId: 3 });
+  assert.deepEqual(reports, ["NIFTY side panel: Unexpected close failure"]);
 });
 ```
 
