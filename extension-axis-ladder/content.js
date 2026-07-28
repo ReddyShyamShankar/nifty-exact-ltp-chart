@@ -232,6 +232,7 @@
     let retryIndex = 0;
     let cachedAxisToY = null;
     let cachedRiskLayout = null;
+    let cachedRiskGeneration = null;
     let placementRevision = 0;
     let membershipRevision = 0;
     let committedAxisObservedAt = 0;
@@ -257,15 +258,21 @@
       return positioned.length === 13 && positioned.every((row) => Number.isFinite(row.y)) ? positioned : null;
     }
 
+    function clearCachedRiskPlacement() {
+      cachedRiskLayout = null;
+      cachedRiskGeneration = null;
+    }
+
     function placeCached(membership = current) {
       const positioned = positionedRows(membership, cachedAxisToY);
       if (!positioned) return false;
-      cachedRiskLayout = null;
+      clearCachedRiskPlacement();
       const rowPlacement = placeRows(positioned, membership);
       if (rowPlacement === false) return false;
       cachedRiskLayout = rowPlacement && typeof rowPlacement === "object"
         ? rowPlacement.riskLayout || null
         : null;
+      if (cachedRiskLayout) cachedRiskGeneration = generation;
       if (riskView) {
         try {
           placeRisk(riskView, cachedAxisToY, membership, cachedRiskLayout);
@@ -284,9 +291,21 @@
         hideRisk();
         return true;
       }
-      if (!current || typeof cachedAxisToY !== "function") return false;
+      if (rebuilding
+        || !current
+        || current.expiry !== expiry
+        || current.timeframe !== desiredTimeframe
+        || typeof cachedAxisToY !== "function"
+        || !cachedRiskLayout
+        || cachedRiskGeneration !== generation) {
+        hideRisk();
+        return false;
+      }
       try {
-        placeRisk(riskView, cachedAxisToY, current, cachedRiskLayout);
+        if (placeRisk(riskView, cachedAxisToY, current, cachedRiskLayout) === false) {
+          hideRisk();
+          return false;
+        }
         return true;
       } catch {
         hideRisk();
@@ -318,7 +337,7 @@
       if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
       current = null;
       cachedAxisToY = null;
-      cachedRiskLayout = null;
+      clearCachedRiskPlacement();
       hideRisk();
       hideRows(message || "AXIS CALIBRATION UNAVAILABLE");
       const delayFloor = message === "AUTO-FITTING PRICE SCALE" ? 500 : 0;
@@ -328,6 +347,7 @@
 
     async function rebuild(timeframe, resetRetry = true, minimumObservedAt = 0) {
       if (!timeframe) return false;
+      clearCachedRiskPlacement();
       refreshRevision += 1;
       refreshAbort?.abort();
       refreshAbort = null;
@@ -432,7 +452,7 @@
         transitionMinimumObservedAt = 0;
         current = null;
         cachedAxisToY = null;
-        cachedRiskLayout = null;
+        clearCachedRiskPlacement();
         hideRisk();
         hideRows("UNSUPPORTED TIMEFRAME");
         setStatus("UNSUPPORTED TIMEFRAME");
@@ -525,6 +545,7 @@
     async function place() {
       const snapshot = current;
       if (!snapshot || rebuilding || snapshot.expiry !== expiry || snapshot.timeframe !== desiredTimeframe) return false;
+      clearCachedRiskPlacement();
       const placementGeneration = generation;
       const localPlacementRevision = ++placementRevision;
       const placementMembershipRevision = membershipRevision;
@@ -561,6 +582,7 @@
           || snapshot.expiry !== expiry
           || snapshot.timeframe !== desiredTimeframe
           || !current) return false;
+        clearCachedRiskPlacement();
         concealRows(error?.message || "AXIS CALIBRATION UNAVAILABLE");
         setStatus(error?.message || "AXIS CALIBRATION UNAVAILABLE");
         return false;
@@ -582,7 +604,7 @@
       current = null;
       cachedChain = null;
       cachedAxisToY = null;
-      cachedRiskLayout = null;
+      clearCachedRiskPlacement();
       hideRisk();
       dataStatus = "STALE";
       hideRows("PRESS REFRESH OPTION NUMBERS");
@@ -603,7 +625,7 @@
       desiredTimeframe = null;
       current = null;
       cachedAxisToY = null;
-      cachedRiskLayout = null;
+      clearCachedRiskPlacement();
       hideRisk();
       dataStatus = "STALE";
       placementRevision += 1;

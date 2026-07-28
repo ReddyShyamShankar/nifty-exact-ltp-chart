@@ -198,6 +198,7 @@ test("risk view changes redraw from cached axis while zoom pan and timeframe reu
 
 test("failed row placement clears the cached risk label boundary", async () => {
   let rowPlacements = 0;
+  let riskHides = 0;
   const labelRights = [];
   const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED" };
   const controller = api.createLadderController({
@@ -212,13 +213,146 @@ test("failed row placement clears the cached risk label boundary", async () => {
     },
     placeRisk: (_view, _toY, _membership, layout) => {
       labelRights.push(layout?.labelRight ?? null);
-    }
+    },
+    hideRisk: () => { riskHides += 1; }
   });
 
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
   assert.equal(await controller.place(), false);
-  controller.setRiskView({ ...accepted, acceptedAt: "later" });
-  assert.deepEqual(labelRights, [643, null]);
+  assert.equal(controller.setRiskView({ ...accepted, acceptedAt: "later" }), false);
+  assert.deepEqual(labelRights, [643]);
+  assert.equal(riskHides, 1);
+});
+
+test("storage risk update during rebuild cannot revive prior layout", async () => {
+  let fetches = 0;
+  let captures = 0;
+  let riskVisible = false;
+  let resolveRebuildCapture;
+  const pendingRebuildCapture = new Promise((resolve) => { resolveRebuildCapture = resolve; });
+  const riskPlacements = [];
+  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED", acceptedAt: "old" };
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    riskView: accepted,
+    fetchChain: async () => { fetches += 1; return chain(23767.45); },
+    captureAxisScale: async () => {
+      captures += 1;
+      return captures === 3 ? pendingRebuildCapture : scale();
+    },
+    renderRows: () => {},
+    placeRows: () => ({ riskLayout: { labelRight: 643 } }),
+    placeRisk: (view) => {
+      riskVisible = true;
+      riskPlacements.push(view.acceptedAt);
+    },
+    concealRows: () => { riskVisible = false; },
+    hideRisk: () => { riskVisible = false; }
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(riskVisible, true);
+  const rebuilding = controller.rebuild("1D");
+  assert.equal(captures, 3);
+  assert.equal(riskVisible, false);
+
+  const nextView = { ...accepted, acceptedAt: "during-rebuild" };
+  const settings = { enabled: true, sellerSafetyView: accepted };
+  assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: nextView } }, "local", settings, controller), true);
+  assert.equal(riskVisible, false);
+  assert.deepEqual(riskPlacements, ["old"]);
+  assert.equal(fetches, 1);
+  assert.equal(captures, 3);
+
+  resolveRebuildCapture(scale());
+  assert.equal(await rebuilding, true);
+  assert.deepEqual(riskPlacements, ["old", "during-rebuild"]);
+});
+
+test("storage risk update after capture failure cannot revive prior layout", async () => {
+  let fetches = 0;
+  let captures = 0;
+  let rowPlacements = 0;
+  let riskVisible = false;
+  const riskPlacements = [];
+  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED", acceptedAt: "old" };
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    riskView: accepted,
+    fetchChain: async () => { fetches += 1; return chain(23767.45); },
+    captureAxisScale: async () => {
+      captures += 1;
+      if (captures === 3) throw new Error("capture failed");
+      return scale();
+    },
+    renderRows: () => {},
+    placeRows: () => {
+      rowPlacements += 1;
+      return { riskLayout: { labelRight: 643 } };
+    },
+    placeRisk: (view) => {
+      riskVisible = true;
+      riskPlacements.push(view.acceptedAt);
+    },
+    concealRows: () => { riskVisible = false; },
+    hideRisk: () => { riskVisible = false; }
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(await controller.place(), false);
+  assert.equal(riskVisible, false);
+
+  const nextView = { ...accepted, acceptedAt: "after-failure" };
+  const settings = { enabled: true, sellerSafetyView: accepted };
+  assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: nextView } }, "local", settings, controller), true);
+  assert.equal(riskVisible, false);
+  assert.deepEqual(riskPlacements, ["old"]);
+  assert.equal(rowPlacements, 1, "failed capture must not reach row placement");
+  assert.equal(fetches, 1);
+  assert.equal(captures, 3);
+});
+
+test("storage risk update while capture is pending cannot redraw prior layout", async () => {
+  let fetches = 0;
+  let captures = 0;
+  let riskVisible = false;
+  let resolvePlacementCapture;
+  const pendingPlacementCapture = new Promise((resolve) => { resolvePlacementCapture = resolve; });
+  const riskPlacements = [];
+  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED", acceptedAt: "old" };
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    riskView: accepted,
+    fetchChain: async () => { fetches += 1; return chain(23767.45); },
+    captureAxisScale: async () => {
+      captures += 1;
+      return captures === 3 ? pendingPlacementCapture : scale();
+    },
+    renderRows: () => {},
+    placeRows: () => ({ riskLayout: { labelRight: 643 } }),
+    placeRisk: (view) => {
+      riskVisible = true;
+      riskPlacements.push(view.acceptedAt);
+    },
+    concealRows: () => { riskVisible = false; },
+    hideRisk: () => { riskVisible = false; }
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  const placing = controller.place();
+  assert.equal(captures, 3);
+
+  const nextView = { ...accepted, acceptedAt: "during-capture" };
+  const settings = { enabled: true, sellerSafetyView: accepted };
+  assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: nextView } }, "local", settings, controller), true);
+  assert.equal(riskVisible, false);
+  assert.deepEqual(riskPlacements, ["old"]);
+  assert.equal(fetches, 1);
+  assert.equal(captures, 3);
+
+  resolvePlacementCapture(scale());
+  assert.equal(await placing, true);
+  assert.deepEqual(riskPlacements, ["old", "during-capture"]);
 });
 
 test("failed initial chain request waits for manual refresh instead of retrying automatically", async () => {
