@@ -1,7 +1,14 @@
 (function (root) {
   "use strict";
 
-  const DEFAULTS = { enabled: false, expiry: "current_month", labelCount: "5", panelOpen: false };
+  const DEFAULTS = {
+    enabled: false,
+    expiry: "current_month",
+    labelCount: "5",
+    panelOpen: false,
+    selectedStrategyId: "",
+    sellerSafetyView: null
+  };
   const RETRY_DELAYS = [0, 250, 650, 1200];
   const API = "http://127.0.0.1:8787";
   const LABELS_ID = "nifty-axis-ladder";
@@ -9,6 +16,8 @@
   const MINIMUM_ROW_GAP = 22;
   const timeframeApi = root.NiftyTimeframeLadder
     || (typeof module !== "undefined" && module.exports ? require("./timeframe-ladder.js") : null);
+  const riskOverlayApi = root.NiftyRiskOverlay
+    || (typeof module !== "undefined" && module.exports ? require("./risk-overlay.js") : null);
 
   function quote(value) {
     if (typeof value === "boolean" || value === null || value === undefined) return null;
@@ -188,6 +197,8 @@
     const captureAxisScale = dependencies.captureAxisScale;
     const renderRows = dependencies.renderRows || (() => {});
     const placeRows = dependencies.placeRows || (() => {});
+    const placeRisk = dependencies.placeRisk || (() => {});
+    const hideRisk = dependencies.hideRisk || (() => {});
     const hideRows = dependencies.hideRows || (() => {});
     const concealRows = dependencies.concealRows || (() => {});
     const setStatus = dependencies.setStatus || (() => {});
@@ -214,6 +225,7 @@
     let lastSpot = null;
     let dataStatus = "STALE";
     let cachedChain = null;
+    let riskView = dependencies.riskView || null;
 
     function clearRebuildRetry() {
       if (retryTimer !== null) cancelRetry(retryTimer);
@@ -234,7 +246,33 @@
     function placeCached(membership = current) {
       const positioned = positionedRows(membership, cachedAxisToY);
       if (!positioned) return false;
-      return placeRows(positioned, membership) !== false;
+      if (placeRows(positioned, membership) === false) return false;
+      if (riskView) {
+        try {
+          placeRisk(riskView, cachedAxisToY, membership);
+        } catch {
+          hideRisk();
+        }
+      } else {
+        hideRisk();
+      }
+      return true;
+    }
+
+    function setRiskView(nextView) {
+      riskView = nextView || null;
+      if (!riskView) {
+        hideRisk();
+        return true;
+      }
+      if (!current || typeof cachedAxisToY !== "function") return false;
+      try {
+        placeRisk(riskView, cachedAxisToY, current);
+        return true;
+      } catch {
+        hideRisk();
+        return false;
+      }
     }
 
     function isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal) {
@@ -261,6 +299,7 @@
       if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
       current = null;
       cachedAxisToY = null;
+      hideRisk();
       hideRows(message || "AXIS CALIBRATION UNAVAILABLE");
       const delayFloor = message === "AUTO-FITTING PRICE SCALE" ? 500 : 0;
       if (allowRetry) retryRebuild(localGeneration, timeframe, requestedExpiry, minimumObservedAt, delayFloor);
@@ -373,6 +412,7 @@
         transitionMinimumObservedAt = 0;
         current = null;
         cachedAxisToY = null;
+        hideRisk();
         hideRows("UNSUPPORTED TIMEFRAME");
         setStatus("UNSUPPORTED TIMEFRAME");
         return false;
@@ -521,6 +561,7 @@
       current = null;
       cachedChain = null;
       cachedAxisToY = null;
+      hideRisk();
       dataStatus = "STALE";
       hideRows("PRESS REFRESH OPTION NUMBERS");
       setStatus("MANUAL REFRESH REQUIRED");
@@ -540,6 +581,7 @@
       desiredTimeframe = null;
       current = null;
       cachedAxisToY = null;
+      hideRisk();
       dataStatus = "STALE";
       placementRevision += 1;
       membershipRevision += 1;
@@ -554,11 +596,27 @@
       rebuild,
       refreshLtp,
       setExpiry,
+      setRiskView,
       syncTimeframe
     };
   }
 
-  const api = { axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, rowLaneLayout, rowsFitPlot };
+  function applyRiskStorageChanges(changes, area, targetSettings, activeController) {
+    if (area !== "local" || !changes || !targetSettings) return false;
+    let changed = false;
+    if (changes.selectedStrategyId) {
+      targetSettings.selectedStrategyId = changes.selectedStrategyId.newValue || "";
+      changed = true;
+    }
+    if (changes.sellerSafetyView) {
+      targetSettings.sellerSafetyView = changes.sellerSafetyView.newValue || null;
+      changed = true;
+    }
+    if (changed && targetSettings.enabled) activeController?.setRiskView(targetSettings.sellerSafetyView);
+    return changed;
+  }
+
+  const api = { applyRiskStorageChanges, axisPriceToY, createLadderController, formatRow, freezeMembership, intervalFromAxisScale, isNiftyChartLabel, refreshMembership, rowLaneLayout, rowsFitPlot };
   root.NiftyAxisLadderContent = api;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
@@ -602,6 +660,7 @@
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => row.remove());
     node.hidden = !settings.enabled;
+    clearRisk();
     showStatus(status);
   }
 
@@ -609,6 +668,7 @@
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => { row.hidden = true; });
     node.hidden = !settings.enabled;
+    clearRisk();
     showStatus(status);
   }
 
@@ -631,6 +691,63 @@
     });
     existing.forEach((row) => row.remove());
     node.hidden = false;
+  }
+
+  function riskRoot() {
+    const node = rootNode();
+    let risk = node.querySelector("#nifty-seller-risk");
+    if (risk) return risk;
+    risk = document.createElement("div");
+    risk.id = "nifty-seller-risk";
+    node.append(risk);
+    return risk;
+  }
+
+  function clearRisk() {
+    document.getElementById("nifty-seller-risk")?.remove();
+  }
+
+  function placeRisk(view, toY) {
+    const canvas = chartCanvas();
+    if (!canvas || typeof toY !== "function") {
+      clearRisk();
+      return false;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const layers = riskOverlayApi.buildRiskLayers({
+      ...view,
+      activeStrategyId: settings.selectedStrategyId || view?.strategyId,
+      activeExpiry: settings.expiry
+    }, toY, rect);
+    clearRisk();
+    if (!layers.lines.length && !layers.bands.length) return false;
+    const node = riskRoot();
+    node.dataset.status = layers.status;
+    layers.bands.forEach((band) => {
+      const element = document.createElement("div");
+      element.className = `nifty-seller-risk__band is-${band.layer} is-${band.kind}`;
+      element.dataset.riskLayer = band.layer;
+      element.style.left = `${band.left}px`;
+      element.style.top = `${band.top}px`;
+      element.style.width = `${band.right - band.left}px`;
+      element.style.height = `${band.bottom - band.top}px`;
+      node.append(element);
+    });
+    layers.lines.forEach((line) => {
+      const element = document.createElement("div");
+      element.className = `nifty-seller-risk__line is-${line.layer}`;
+      element.dataset.riskLayer = line.layer;
+      element.style.left = `${line.left}px`;
+      element.style.top = `${line.y}px`;
+      element.style.width = `${line.right - line.left}px`;
+      const label = document.createElement("span");
+      label.className = "nifty-seller-risk__label";
+      label.style.left = `${line.labelX - line.left}px`;
+      label.textContent = line.label;
+      element.append(label);
+      node.append(element);
+    });
+    return true;
   }
 
   function chartCanvas() {
@@ -890,8 +1007,11 @@
       fetchChain,
       hideRows,
       concealRows,
+      hideRisk: clearRisk,
       placeRows,
+      placeRisk,
       renderRows,
+      riskView: settings.sellerSafetyView,
       setStatus: showStatus
     });
     currentLabel = chartCanvas()?.getAttribute("aria-label") || "";
@@ -935,6 +1055,7 @@
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
       if (settings.enabled) controller?.setExpiry(settings.expiry).then((rebuilt) => { if (rebuilt) requestPlacementRetries(); });
     }
+    applyRiskStorageChanges(changes, area, settings, controller);
   });
 
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {

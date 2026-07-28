@@ -140,6 +140,52 @@ test("timeframe changes rebuild from cached chain without another data request",
   assert.equal(fetches, 1);
 });
 
+test("risk view changes redraw from cached axis while zoom pan and timeframe reuse normal capture without fetching", async () => {
+  let fetches = 0;
+  let captures = 0;
+  let riskHides = 0;
+  const riskPlacements = [];
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => { fetches += 1; return chain(23767.45); },
+    captureAxisScale: async () => { captures += 1; return scale(); },
+    renderRows: () => {},
+    placeRows: () => true,
+    hideRisk: () => { riskHides += 1; },
+    placeRisk: (view, toY, membership) => {
+      riskPlacements.push({ view, y: toY(23750), timeframe: membership.timeframe });
+      return true;
+    }
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  assert.equal(fetches, 1);
+  assert.equal(captures, 2);
+  assert.deepEqual(riskPlacements, []);
+  assert.equal(riskHides, 1);
+
+  const accepted = { strategyId: "s1", expiry: "current_month", state: "ACCEPTED" };
+  const settings = { enabled: true, selectedStrategyId: "s1", sellerSafetyView: null };
+  assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: accepted } }, "local", settings, controller), true);
+  assert.equal(settings.sellerSafetyView, accepted);
+  assert.equal(fetches, 1);
+  assert.equal(captures, 2, "storage update must not capture axis independently");
+  assert.deepEqual(riskPlacements.at(-1), { view: accepted, y: 150, timeframe: "1h" });
+  assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: null } }, "sync", settings, controller), false);
+  assert.equal(riskPlacements.length, 1, "non-local storage must not redraw");
+  assert.equal(api.applyRiskStorageChanges({ sellerSafetyView: { newValue: null } }, "local", settings, controller), true);
+  assert.equal(riskHides, 2, "pending review clearing accepted view removes risk layer");
+  assert.equal(captures, 2, "clearing accepted view must not capture axis");
+  api.applyRiskStorageChanges({ sellerSafetyView: { newValue: accepted } }, "local", settings, controller);
+
+  await controller.place();
+  await controller.place();
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 day");
+  assert.equal(fetches, 1, "zoom, pan, and timeframe remaps use cached chain");
+  assert.equal(captures, 6, "two placements capture once each; timeframe rebuild keeps two-capture stability check");
+  assert.deepEqual(riskPlacements.slice(-3).map((placement) => placement.timeframe), ["1h", "1h", "1D"]);
+});
+
 test("failed initial chain request waits for manual refresh instead of retrying automatically", async () => {
   const scheduled = [];
   const controller = api.createLadderController({
