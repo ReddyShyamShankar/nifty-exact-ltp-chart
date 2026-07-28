@@ -1386,6 +1386,18 @@ test("new content has no collision spreading or Pine input synchronization path"
   assert.match(source, /chain:\s*controller\.chain\(\)/);
 });
 
+test("chart ladder uses popup design tokens with compact centered labels", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(css, /--ladder-surface:\s*#111315/);
+  assert.match(css, /--ladder-line:\s*#2c3238/);
+  assert.match(css, /--ladder-ink:\s*#f4f4f5/);
+  assert.match(css, /--ladder-accent:\s*#34d399/);
+  assert.match(css, /--ladder-accent-dark:\s*#063d2d/);
+  assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?width:\s*max-content/);
+  assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?text-align:\s*center/);
+  assert.doesNotMatch(css, /#ff9f0a|rgba\(66,\s*71,\s*82/);
+});
+
 test("every non-axis lane draws a full connector back to the exact right-axis anchor", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
