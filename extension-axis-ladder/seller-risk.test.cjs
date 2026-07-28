@@ -2,6 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const risk = require("./seller-risk.js");
 
+function completeHistory() {
+  return { complete: true, reconciled: true, duplicates: false, consistent: true };
+}
+
 test("calculates user short-option fixture without double counting", () => {
   const result = risk.currentRiskMap({ legs: [
     { id: "c", strike: 24100, optionType: "CE", signedLots: -2, lotSize: 65, entryPrice: 358.80 },
@@ -18,10 +22,42 @@ test("whole trade counts imported open premiums once", () => {
   const result = risk.wholeTradeRiskMap({
     openLegs: [{ id: "c", strike: 24100, optionType: "CE", signedLots: -1, lotSize: 65, entryPrice: 999 }],
     fills: [{ id: "f", transactionType: "SELL", quantity: 65, price: 100 }],
+    history: completeHistory(),
     charges: 0
   });
   assert.deepEqual(result.breakevens, [24200]);
   assert.equal(result.cashBalance, 6500);
+});
+
+test("whole trade fails closed without complete reconciled history evidence", () => {
+  const input = {
+    openLegs: [{ id: "c", strike: 100, optionType: "CE", signedLots: -1, lotSize: 1, entryPrice: 999 }],
+    fills: [{ id: "f", transactionType: "SELL", quantity: 1, price: 10 }],
+    charges: 0
+  };
+  const incompleteInputs = [
+    input,
+    { ...input, history: { complete: false, reconciled: true, duplicates: false, consistent: true } },
+    { ...input, history: { complete: true, reconciled: false, duplicates: false, consistent: true } },
+    { ...input, history: { complete: true, reconciled: true, duplicates: true, consistent: true } },
+    { ...input, history: { complete: true, reconciled: true, duplicates: false, consistent: false } },
+    { ...input, fills: [], history: completeHistory() },
+    { ...input, fills: [{ id: "f", transactionType: "SELL", quantity: 1, price: 10 }, { id: "f", transactionType: "BUY", quantity: 1, price: 5 }], history: completeHistory() }
+  ];
+  for (const wholeTradeInput of incompleteInputs) {
+    const result = risk.wholeTradeRiskMap(wholeTradeInput);
+    assert.deepEqual(result, {
+      status: "HISTORY_INCOMPLETE",
+      breakevens: [],
+      bands: [],
+      maxProfit: null,
+      maxLoss: null,
+      upsideUnbounded: false,
+      downsideValue: null,
+      cashBalance: null,
+      segments: []
+    });
+  }
 });
 
 test("bought lower Put caps a short Put downside", () => {
@@ -101,6 +137,7 @@ test("applies known charges once", () => {
   const result = risk.wholeTradeRiskMap({
     openLegs: [{ id: "c", strike: 100, optionType: "CE", signedLots: -1, lotSize: 1, entryPrice: 999 }],
     fills: [{ id: "f", transactionType: "SELL", quantity: 1, price: 10 }],
+    history: completeHistory(),
     charges: 2
   });
   assert.equal(result.cashBalance, 8);

@@ -27,6 +27,20 @@
     };
   }
 
+  function historyIncompleteResult() {
+    return {
+      status: "HISTORY_INCOMPLETE",
+      breakevens: [],
+      bands: [],
+      maxProfit: null,
+      maxLoss: null,
+      upsideUnbounded: false,
+      downsideValue: null,
+      cashBalance: null,
+      segments: []
+    };
+  }
+
   function validLeg(leg) {
     return leg && typeof leg.id === "string" && leg.id.length > 0 &&
       finiteNumber(leg.strike) && leg.strike >= 0 &&
@@ -165,10 +179,20 @@
       finiteNumber(fill.price) && fill.price >= 0;
   }
 
+  function hasCompleteReconciledHistory(history, fills) {
+    if (!history || history.complete !== true || history.reconciled !== true ||
+      history.duplicates !== false || history.consistent !== true || fills.length === 0) {
+      return false;
+    }
+    const fillIds = new Set(fills.map((fill) => fill.id));
+    return fillIds.size === fills.length;
+  }
+
   function wholeTradeRiskMap(input) {
     if (!input || !validLegs(input.openLegs) || !Array.isArray(input.fills) || !input.fills.every(validFill)) {
       return invalidResult();
     }
+    if (!hasCompleteReconciledHistory(input.history, input.fills)) return historyIncompleteResult();
     const charges = readCharges(input.charges);
     if (!charges) return invalidResult();
     const cashBalance = input.fills.reduce((total, fill) => (
