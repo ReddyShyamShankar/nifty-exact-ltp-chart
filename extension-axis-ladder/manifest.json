@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "141",
   "name": "NIFTY Axis LTP Ladder",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
-  "permissions": ["storage", "activeTab", "debugger"],
+  "permissions": ["storage", "activeTab", "debugger", "sidePanel"],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
     "https://tradingview.com/*",
@@ -25,9 +26,9 @@
       "32": "icons/nifty-mark-32.png",
       "48": "icons/nifty-mark-48.png",
       "128": "icons/nifty-mark-128.png"
-    },
-    "default_popup": "popup.html"
+    }
   },
+  "side_panel": { "default_path": "popup.html" },
   "commands": {
     "_execute_action": {
       "suggested_key": {
