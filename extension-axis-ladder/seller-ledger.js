@@ -11,6 +11,7 @@
       strategies: [],
       brokerPositions: [],
       importedTrades: [],
+      fillAssignments: [],
       importBatches: [],
       historyGaps: [],
       allocationRevisions: [],
@@ -31,6 +32,7 @@
     assertLedger(ledger);
     const next = clone(ledger);
     if (!Array.isArray(next.importBatches)) next.importBatches = [];
+    if (!Array.isArray(next.fillAssignments)) next.fillAssignments = [];
     if (!Array.isArray(next.historyGaps)) next.historyGaps = [];
     if (!Array.isArray(next.allocationRevisions)) next.allocationRevisions = [];
     return next;
@@ -46,17 +48,18 @@
     return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
   }
 
-  function niftySymbol(value) {
-    return typeof value === "string" && /^NIFTY(?=[A-Z0-9])/.test(value.trim().toUpperCase());
-  }
-
-  function niftyContract(value) {
-    return typeof value === "string" && /^(?:[A-Z_]+:)?NIFTY(?=[A-Z0-9])/.test(value.trim().toUpperCase());
+  function optionIdentity(symbol, expiry) {
+    const match = typeof symbol === "string" && symbol.trim().toUpperCase().match(/^NIFTY(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{4,6})(CE|PE)$/);
+    const months = { JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06", JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12" };
+    if (!match || !validExpiry(expiry) || expiry.slice(2, 4) !== match[1] || expiry.slice(5, 7) !== months[match[2]]) return null;
+    return { symbol: symbol.trim().toUpperCase(), strike: Number(match[3]), optionType: match[4] };
   }
 
   function validatePosition(input) {
-    if (!input || typeof input.contractId !== "string" || !input.contractId ||
-      !niftyContract(input.contractId) || !niftySymbol(input.tradingsymbol) ||
+    const identity = input && optionIdentity(input.tradingsymbol, input.expiry);
+    if (!input || typeof input.contractId !== "string" || !input.contractId || input.exchange !== "NFO" ||
+      (Object.prototype.hasOwnProperty.call(input, "underlying") && input.underlying !== "NIFTY") || !identity ||
+      input.contractId !== `NFO:${identity.symbol}` || input.strike !== identity.strike || input.optionType !== identity.optionType ||
       !validExpiry(input.expiry) || !Number.isFinite(input.strike) || input.strike < 0 ||
       (input.optionType !== "CE" && input.optionType !== "PE") ||
       !Number.isInteger(input.signedQuantity) || !Number.isInteger(input.lotSize) || input.lotSize <= 0 ||
@@ -194,9 +197,10 @@
   }
 
   function validTrade(trade) {
+    const identity = trade && optionIdentity(trade.tradingsymbol, trade.expiry);
     return trade && typeof trade.contractId === "string" && trade.contractId &&
-      trade.underlying === "NIFTY" && niftyContract(trade.contractId) &&
-      validExpiry(trade.expiry) &&
+      trade.underlying === "NIFTY" && trade.exchange === "NFO" && identity &&
+      trade.contractId === `NFO:${identity.symbol}` && trade.strike === identity.strike && trade.optionType === identity.optionType &&
       (trade.transactionType === "BUY" || trade.transactionType === "SELL") &&
       Number.isFinite(trade.quantity) && trade.quantity > 0 &&
       Number.isFinite(trade.price) && trade.price >= 0;
@@ -207,17 +211,16 @@
     return validExpiry(date) && date >= coverage.from && date <= coverage.to;
   }
 
-  function normalizeImportBatch(input, strategyId) {
+  function normalizeImportBatch(input) {
     if (!input) return null;
-    if (input.sourceType !== "ZERODHA_TRADEBOOK_CSV" || typeof input.fingerprint !== "string" || !input.fingerprint ||
+    if (input.sourceKind !== "ZERODHA_TRADEBOOK_CSV" || typeof input.fingerprint !== "string" || !input.fingerprint ||
       !input.coverage || !validExpiry(input.coverage.from) || !validExpiry(input.coverage.to) ||
       input.coverage.from > input.coverage.to || typeof input.acceptedAt !== "string" || !input.acceptedAt ||
       typeof input.confirmedAt !== "string" || !input.confirmedAt) {
       throw new Error("invalid Zerodha import batch evidence");
     }
     return {
-      strategyId,
-      sourceType: "ZERODHA_TRADEBOOK_CSV",
+      sourceKind: "ZERODHA_TRADEBOOK_CSV",
       fingerprint: input.fingerprint,
       coverage: clone(input.coverage),
       acceptedAt: input.acceptedAt,
@@ -235,6 +238,16 @@
     if (!validTrade(trade)) throw new Error("invalid imported NIFTY trade");
     if (trade.expiry !== strategy.expiry) throw new Error("fill expiry must match strategy expiry");
     if (!allowedContracts.has(trade.contractId)) throw new Error("fill contract must relate to strategy allocation or history");
+    if (trade.strategyId && trade.strategyId !== strategy.id) throw new Error("fill already has another strategy owner");
+  }
+
+  function ownerFor(ledger, fillId) {
+    const trade = ledger.importedTrades.find((candidate) => candidate.id === fillId);
+    const owners = new Set();
+    if (trade && trade.strategyId) owners.add(trade.strategyId);
+    ledger.fillAssignments.filter((assignment) => assignment.fillId === fillId).forEach((assignment) => owners.add(assignment.strategyId));
+    ledger.strategies.filter((strategy) => strategy.fillIds.includes(fillId)).forEach((strategy) => owners.add(strategy.id));
+    return owners.size === 1 ? Array.from(owners)[0] : owners.size > 1 ? "CONFLICT" : null;
   }
 
   function assignFills(ledger, input) {
@@ -243,7 +256,7 @@
       throw new Error("fills require strategy, trades, and fill ids");
     }
     const strategy = strategyFor(next, input.strategyId);
-    const batch = normalizeImportBatch(input.importBatch, strategy.id);
+    const batch = normalizeImportBatch(input.importBatch);
     const allowedContracts = relatedContracts(strategy, next);
     input.trades.forEach((trade) => assertTradeProvenance(trade, strategy, allowedContracts));
     const ids = new Set(next.importedTrades.map((trade) => trade.id));
@@ -254,14 +267,13 @@
       if (existingBatch && JSON.stringify(existingBatch) !== JSON.stringify(batch)) throw new Error("import batch fingerprint already exists");
       if (!existingBatch) {
         next.importBatches.push(clone(batch));
-        next.audit.push({ type: "IMPORT_BATCH_ACCEPTED", fingerprint: batch.fingerprint, sourceType: batch.sourceType, coverage: clone(batch.coverage), acceptedAt: batch.acceptedAt });
+        next.audit.push({ type: "IMPORT_BATCH_ACCEPTED", fingerprint: batch.fingerprint, sourceKind: batch.sourceKind, coverage: clone(batch.coverage), acceptedAt: batch.acceptedAt });
         next.audit.push({ type: "IMPORT_BATCH_CONFIRMED", fingerprint: batch.fingerprint, confirmedAt: batch.confirmedAt });
       }
     }
     for (const sourceTrade of input.trades) {
       const trade = clone(sourceTrade);
       trade.id = trade.id || fingerprint(trade);
-      trade.strategyId = strategy.id;
       if (batch) trade.importBatchFingerprint = batch.fingerprint;
       const content = fingerprint(trade);
       if (ids.has(trade.id)) summary.duplicateIds += 1;
@@ -274,12 +286,15 @@
       }
     }
     const known = new Map(next.importedTrades.map((trade) => [trade.id, trade]));
-    const assignedElsewhere = new Set(next.strategies.filter((candidate) => candidate.id !== strategy.id)
-      .flatMap((candidate) => candidate.fillIds));
     for (const fillId of input.fillIds) {
       if (!known.has(fillId)) throw new Error("unknown imported fill");
-      if (assignedElsewhere.has(fillId)) throw new Error("fill is already assigned to another strategy");
+      const owner = ownerFor(next, fillId);
+      if (owner && owner !== strategy.id) throw new Error("fill already has another strategy owner");
       assertTradeProvenance(known.get(fillId), strategy, allowedContracts);
+      if (!owner) {
+        next.fillAssignments.push({ fillId, strategyId: strategy.id });
+        next.audit.push({ type: "FILL_ASSIGNED", fillId, strategyId: strategy.id });
+      }
       if (!strategy.fillIds.includes(fillId)) strategy.fillIds.push(fillId);
     }
     next.audit.push(summary);
@@ -294,6 +309,19 @@
     const strategy = strategyFor(next, input.strategyId);
     strategy.snapshots.push(clone(input.snapshot));
     next.audit.push({ type: "SNAPSHOT_ACCEPTED", strategyId: strategy.id });
+    return next;
+  }
+
+  function recordHistoryGap(ledger, input) {
+    const next = nextLedger(ledger);
+    if (!input || typeof input.strategyId !== "string" || !validExpiry(input.from) || !validExpiry(input.to) ||
+      input.from > input.to || typeof input.reason !== "string" || !input.reason) {
+      throw new Error("history gap requires strategy, date range, and reason");
+    }
+    strategyFor(next, input.strategyId);
+    const gap = clone(input);
+    next.historyGaps.push(gap);
+    next.audit.push({ type: "HISTORY_GAP_RECORDED", ...gap });
     return next;
   }
 
@@ -319,13 +347,32 @@
     if (!fills.length || !Array.isArray(ledger.importBatches) || !Array.isArray(ledger.historyGaps)) return false;
     if (ledger.historyGaps.some((gap) => !gap.strategyId || gap.strategyId === strategy.id)) return false;
     const batches = new Map(ledger.importBatches.map((batch) => [batch.fingerprint, batch]));
-    return fills.every((fill) => {
+    const validBatches = fills.map((fill) => batches.get(fill.importBatchFingerprint));
+    const fillsCovered = fills.every((fill, index) => {
       const batch = batches.get(fill.importBatchFingerprint);
-      return fill.strategyId === strategy.id && fill.underlying === "NIFTY" && fill.expiry === strategy.expiry &&
-        batch && batch.strategyId === strategy.id && batch.sourceType === "ZERODHA_TRADEBOOK_CSV" &&
+      return ownerFor(ledger, fill.id) === strategy.id && fill.underlying === "NIFTY" && fill.expiry === strategy.expiry &&
+        batch && batch.sourceKind === "ZERODHA_TRADEBOOK_CSV" &&
         typeof batch.acceptedAt === "string" && batch.acceptedAt && typeof batch.confirmedAt === "string" && batch.confirmedAt &&
         batch.coverage && dateInCoverage(fill.timestamp, batch.coverage);
     });
+    if (!fillsCovered || validBatches.some((batch) => !batch)) return false;
+    const snapshotDates = strategy.snapshots.map((snapshot) => typeof snapshot.at === "string" ? snapshot.at.slice(0, 10) : "").filter(validExpiry);
+    if (!snapshotDates.length) return false;
+    const fillDates = fills.map((fill) => fill.timestamp.slice(0, 10)).filter(validExpiry);
+    const earliest = fillDates.slice().sort()[0];
+    const target = fillDates.concat(snapshotDates).sort().at(-1);
+    const intervals = Array.from(new Map(validBatches.map((batch) => [batch.fingerprint, batch.coverage])).values())
+      .sort((left, right) => left.from.localeCompare(right.from));
+    if (!intervals.length || intervals[0].from > earliest) return false;
+    let coveredTo = intervals[0].to;
+    for (let index = 1; index < intervals.length; index += 1) {
+      const nextStart = new Date(`${coveredTo}T00:00:00Z`);
+      nextStart.setUTCDate(nextStart.getUTCDate() + 1);
+      const contiguousThrough = nextStart.toISOString().slice(0, 10);
+      if (intervals[index].from > contiguousThrough) return false;
+      if (intervals[index].to > coveredTo) coveredTo = intervals[index].to;
+    }
+    return coveredTo >= target;
   }
 
   function strategyRiskInput(ledger, strategyId) {
@@ -349,7 +396,7 @@
       const exactPrice = entryPriceFor(contractFills, allocation.signedLots, position.lotSize);
       if (split && exactPrice === null) entryComplete = false;
       if (signedFillQuantity(contractFills) !== allocation.signedLots * position.lotSize) fillsReconcile = false;
-      if (contractFills.some((fill) => !validTrade(fill) || fill.underlying !== "NIFTY" || fill.expiry !== strategy.expiry || fill.strategyId !== strategy.id)) {
+      if (contractFills.some((fill) => !validTrade(fill) || fill.underlying !== "NIFTY" || fill.expiry !== strategy.expiry || ownerFor(ledger, fill.id) !== strategy.id)) {
         provenanceValid = false;
       }
       legState.push({
@@ -362,7 +409,7 @@
       });
     }
     const reconciled = ledger.reviewChanges.length === 0;
-    if (fills.some((fill) => !validTrade(fill) || fill.underlying !== "NIFTY" || fill.expiry !== strategy.expiry || fill.strategyId !== strategy.id)) {
+    if (fills.some((fill) => !validTrade(fill) || fill.underlying !== "NIFTY" || fill.expiry !== strategy.expiry || ownerFor(ledger, fill.id) !== strategy.id)) {
       provenanceValid = false;
     }
     const complete = strategy.allocations.length > 0 && fillsReconcile && provenanceValid && evidenceComplete(strategy, fills, ledger);
@@ -375,7 +422,7 @@
     return { status, openLegs: legState, fills: clone(fills), history };
   }
 
-  const api = { emptyLedger, createStrategy, reconcilePositions, allocateLots, assignFills, acceptSnapshot, strategyRiskInput };
+  const api = { emptyLedger, createStrategy, reconcilePositions, allocateLots, assignFills, acceptSnapshot, recordHistoryGap, strategyRiskInput };
   root.NiftySellerLedger = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

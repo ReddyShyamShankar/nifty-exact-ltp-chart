@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const csv = require("./tradebook-csv.js");
 
 test("parses BOM, mixed-case Zerodha headers, quoted commas, and normalized directions", () => {
-  const result = csv.parseTradebookCsv("\ufeffTrAdE_ID,Order_ID,Exchange,TradingSymbol,TRANSACTION_TYPE,Quantity,Price,Fill_Timestamp,Expiry,Remarks\n" +
+  const result = csv.parseTradebookCsv("\ufeffTrAdE_ID,Order_ID,Exchange,TradingSymbol,TRANSACTION_TYPE,Quantity,Average_Price,Fill_Timestamp,Expiry,Remarks\n" +
     "t-1,o-1,NFO,NIFTY26AUG24100CE,sell,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25,\"weekly, entry\"\n" +
     "t-2,o-2,NFO,NIFTY26AUG24000PE,BUY,65,210.50,2026-08-01T09:16:00+05:30,2026-08-25,\"weekly, hedge\"\n");
 
@@ -15,21 +15,23 @@ test("parses BOM, mixed-case Zerodha headers, quoted commas, and normalized dire
   assert.equal(result.trades[0].tradingsymbol, "NIFTY26AUG24100CE");
   assert.equal(result.trades[0].strike, 24100);
   assert.equal(result.trades[1].optionType, "PE");
+  assert.equal(result.sourceKind, "ZERODHA_TRADEBOOK_CSV");
+  assert.equal(result.batchFingerprint, csv.tradebookBatchFingerprint(result.trades));
 });
 
-test("filters non-NIFTY rows and ignores duplicate trade IDs and content fingerprints", () => {
-  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,price,fill_timestamp,expiry\n" +
+test("ignores duplicate trade IDs and content fingerprints", () => {
+  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
     "t-1,o-1,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n" +
     "t-1,o-1,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n" +
     ",o-2,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:16:00+05:30,2026-08-25\n" +
     ",o-2,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:16:00+05:30,2026-08-25\n" +
-    "bank-1,o-3,NFO,BANKNIFTY26AUG50000CE,SELL,25,100,2026-08-01T09:15:00+05:30,2026-08-25\n");
+    "t-3,o-3,NFO,NIFTY26AUG24200CE,SELL,65,100,2026-08-01T09:17:00+05:30,2026-08-25\n");
 
   assert.deepEqual(result.errors, []);
-  assert.equal(result.trades.length, 2);
+  assert.equal(result.trades.length, 3);
   assert.deepEqual(result.summary, {
-    accepted: 2,
-    ignoredNonNifty: 1,
+    accepted: 3,
+    ignoredNonNifty: 0,
     duplicateIds: 1,
     duplicateFingerprints: 1
   });
@@ -38,7 +40,7 @@ test("filters non-NIFTY rows and ignores duplicate trade IDs and content fingerp
 });
 
 test("returns row-level reasons and no trades when any NIFTY row is malformed", () => {
-  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,price,fill_timestamp,expiry\n" +
+  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
     "t-1,o-1,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n" +
     "t-2,o-2,NFO,NIFTY26AUG24000PE,HOLD,65,210.50,2026-08-01T09:16:00+05:30,2026-08-25\n" +
     "t-3,o-3,NFO,NIFTY26AUG23900PE,BUY,not-a-number,100,2026-08-01T09:17:00+05:30,2026-08-25\n");
@@ -57,15 +59,15 @@ test("returns row-level reasons and no trades when any NIFTY row is malformed", 
 });
 
 test("rejects missing required headers before committing any row", () => {
-  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,quantity,price,fill_timestamp\n" +
+  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,quantity,average_price,fill_timestamp\n" +
     "t-1,o-1,NFO,NIFTY26AUG24100CE,65,358.80,2026-08-01T09:15:00+05:30\n");
 
   assert.deepEqual(result.trades, []);
-  assert.deepEqual(result.errors, [{ row: 1, reason: "missing required header: transaction type" }]);
+  assert.deepEqual(result.errors, [{ row: 1, reason: "untrusted Zerodha tradebook header" }]);
 });
 
 test("rejects blank raw price atomically instead of converting it to zero", () => {
-  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,price,fill_timestamp,expiry\n" +
+  const result = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
     "t-1,o-1,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n" +
     "t-2,o-2,NFO,NIFTY26AUG24000PE,BUY,65,,2026-08-01T09:16:00+05:30,2026-08-25\n");
 
@@ -79,4 +81,19 @@ test("rejects generic lookalike CSV without Zerodha tradebook signature", () => 
 
   assert.deepEqual(result.trades, []);
   assert.deepEqual(result.errors, [{ row: 1, reason: "untrusted Zerodha tradebook header" }]);
+});
+
+test("rejects BSE, NIFTYJUNK, and noncanonical price headers atomically", () => {
+  const wrongExchange = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "t-1,o-1,BSE,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n");
+  const junkSymbol = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,average_price,fill_timestamp,expiry\n" +
+    "t-1,o-1,NFO,NIFTYJUNK26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n");
+  const priceAlias = csv.parseTradebookCsv("trade_id,order_id,exchange,tradingsymbol,transaction_type,quantity,price,fill_timestamp,expiry\n" +
+    "t-1,o-1,NFO,NIFTY26AUG24100CE,SELL,65,358.80,2026-08-01T09:15:00+05:30,2026-08-25\n");
+
+  assert.deepEqual(wrongExchange.trades, []);
+  assert.deepEqual(wrongExchange.errors, [{ row: 2, reason: "exchange must be NFO" }]);
+  assert.deepEqual(junkSymbol.trades, []);
+  assert.deepEqual(junkSymbol.errors, [{ row: 2, reason: "invalid NIFTY option identity" }]);
+  assert.deepEqual(priceAlias.errors, [{ row: 1, reason: "untrusted Zerodha tradebook header" }]);
 });
