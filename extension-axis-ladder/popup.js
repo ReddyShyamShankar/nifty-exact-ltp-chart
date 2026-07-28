@@ -121,6 +121,32 @@ function renderAllocations(view) {
   }));
 }
 
+function renderTradeReviews(view) {
+  const reviews = Array.isArray(view.tradeReviews) ? view.tradeReviews : [];
+  const list = $("#trade-review-list");
+  list.replaceChildren(...reviews.map((review) => {
+    const trade = ledger.importedTrades.find((candidate) => candidate.id === review.fillId);
+    const row = document.createElement("label");
+    row.className = "trade-review-row";
+    const copy = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = `${trade?.transactionType || "TRADE"} ${trade?.quantity || "—"} · ${trade?.tradingsymbol || review.contractId}`;
+    const detail = document.createElement("span");
+    detail.textContent = `${review.fillId} · EXPLICIT OWNER REQUIRED`;
+    copy.append(title, detail);
+    const select = document.createElement("select");
+    select.dataset.tradeReviewId = review.fillId;
+    select.setAttribute("aria-label", `Strategy owner for trade ${review.fillId}`);
+    const eligible = ledger.strategies.filter((strategy) => strategy.expiry === review.expiry &&
+      strategy.allocations.some((allocation) => allocation.contractId === review.contractId));
+    select.replaceChildren(optionNode("", "Select owner"), ...eligible.map((strategy) => optionNode(strategy.id, strategy.name)));
+    select.value = "";
+    row.append(copy, select);
+    return row;
+  }));
+  $("#assign-trades").hidden = reviews.length === 0;
+}
+
 function renderView(view, { pending = false, preserveEvidence = false } = {}) {
   const shown = pending && view.canPublish
     ? {
@@ -165,6 +191,7 @@ function renderView(view, { pending = false, preserveEvidence = false } = {}) {
   if (shown.broker.action) $("#connect-zerodha").textContent = shown.broker.action.label;
   renderStrategies();
   renderAllocations(shown);
+  renderTradeReviews(shown);
   $("#review-panel").hidden = !(pending || shown.reviewChanges.length || shown.tradeReviews?.length);
 }
 
@@ -456,6 +483,29 @@ async function importTradebook(event) {
   }
 }
 
+async function assignReviewedTrades() {
+  try {
+    const choices = Array.from(document.querySelectorAll("[data-trade-review-id]"));
+    if (!choices.length) throw new Error("No current-day trades require ownership review.");
+    if (choices.some((choice) => !choice.value)) throw new Error("Select an owner for every reviewed trade.");
+    const confirmedAt = new Date().toISOString();
+    let reviewed = ledger;
+    for (const choice of choices) {
+      reviewed = NiftySellerLedger.assignReviewedTrade(reviewed, {
+        strategyId: choice.value,
+        fillId: choice.dataset.tradeReviewId,
+        confirmedAt
+      });
+    }
+    ledger = reviewed;
+    await persist({ sellerSafetyLedger: ledger, sellerSafetyPending: pendingReview });
+    renderCurrent({ pending: true });
+    $("#placement-status").textContent = "CURRENT-DAY TRADE OWNERSHIP REVIEWED · ACCEPT SNAPSHOT WHEN READY";
+  } catch (error) {
+    $("#placement-status").textContent = friendlyError(error);
+  }
+}
+
 async function acceptSnapshot() {
   if (!pendingReview) {
     $("#placement-status").textContent = "PRESS REFRESH ALL BEFORE ACCEPTING";
@@ -466,7 +516,7 @@ async function acceptSnapshot() {
     return;
   }
   if (ledger.tradeReviews?.length) {
-    $("#placement-status").textContent = "REVIEW TRADE OWNERSHIP WITH A TRADEBOOK CSV BEFORE ACCEPTING";
+    $("#placement-status").textContent = "SELECT EACH TRADE OWNER AND ASSIGN REVIEWED TRADES BEFORE ACCEPTING";
     return;
   }
   try {
@@ -544,6 +594,7 @@ function bindEvents() {
   $("#create-strategy").addEventListener("click", createStrategy);
   $("#allocate-lots").addEventListener("click", allocateLots);
   $("#tradebook-csv").addEventListener("change", importTradebook);
+  $("#assign-trades").addEventListener("click", assignReviewedTrades);
   $("#accept-snapshot").addEventListener("click", acceptSnapshot);
   $("#selected-strategy").addEventListener("change", async (event) => {
     await persist({

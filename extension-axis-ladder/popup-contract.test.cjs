@@ -73,6 +73,47 @@ function acceptedStorage({ acceptedAt = "2026-08-01T09:00:00+05:30", candidateId
   };
 }
 
+function dailyReviewStorage() {
+  const sellerLedger = require("./seller-ledger.js");
+  let value = sellerLedger.emptyLedger();
+  value = sellerLedger.createStrategy(value, {
+    id: "stored-strategy", name: "Stored seller", underlying: "NIFTY", expiry: "2026-08-25"
+  });
+  value = sellerLedger.reconcilePositions(value, [{
+    contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+    underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+    signedQuantity: -65, lotSize: 65, averagePrice: 358.8, lastPrice: 320, pnl: 2522
+  }]);
+  value = sellerLedger.allocateLots(value, {
+    strategyId: "stored-strategy", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  value = sellerLedger.assignFills(value, {
+    strategyId: "stored-strategy",
+    trades: [{
+      id: "opening", contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
+      underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+      transactionType: "SELL", quantity: 130, price: 358.8, timestamp: "2026-08-01T09:15:00+05:30"
+    }],
+    fillIds: ["opening"],
+    importBatch: {
+      sourceKind: "ZERODHA_TRADEBOOK_CSV", fingerprint: "baseline-once",
+      coverage: { from: "2026-08-01", to: "2026-08-01" },
+      acceptedAt: "2026-08-01T16:00:00+05:30", confirmedAt: "2026-08-01T16:00:00+05:30"
+    }
+  });
+  value = sellerLedger.acceptSnapshot(value, {
+    strategyId: "stored-strategy", snapshot: { at: "2026-08-01T16:00:00+05:30", candidateId: "baseline" }
+  });
+  return {
+    expiry: "2026-08-25",
+    selectedStrategyId: "stored-strategy",
+    sellerSafetyLedger: value,
+    sellerSafetyView: null,
+    sellerSafetyChartView: null,
+    sellerSafetyPending: null
+  };
+}
+
 function popupHarness(initialStorage = {}, options = {}) {
   const listeners = new Map();
   const requests = [];
@@ -103,6 +144,7 @@ function popupHarness(initialStorage = {}, options = {}) {
         const all = [];
         const visit = (candidate) => {
           if (selector === "[data-allocation-contract]" && candidate.dataset?.allocationContract) all.push(candidate);
+          if (selector === "[data-trade-review-id]" && candidate.dataset?.tradeReviewId) all.push(candidate);
           (candidate.children || []).forEach(visit);
         };
         this.children.forEach(visit);
@@ -118,6 +160,7 @@ function popupHarness(initialStorage = {}, options = {}) {
     "risk-summary", "priority-label", "current-lower", "current-upper", "whole-lower", "whole-upper",
     "whole-status", "live-pnl", "max-profit", "max-loss", "why-moved", "warning", "placement-status",
     "review-panel", "strategy-name", "create-strategy", "selected-strategy", "allocation-list", "allocate-lots",
+    "trade-review-list", "assign-trades",
     "tradebook-csv", "import-summary", "accept-snapshot", "legs-toggle", "legs-panel", "legs-list",
     "timeline-toggle", "timeline-panel", "timeline-list", "advanced-toggle", "advanced-panel", "enabled",
     "retry-placement"
@@ -164,7 +207,10 @@ function popupHarness(initialStorage = {}, options = {}) {
     },
     document: {
       querySelector(selector) { return nodes.get(selector.replace(/^#/, "")); },
-      querySelectorAll(selector) { return nodes.get("allocation-list").querySelectorAll(selector); },
+      querySelectorAll(selector) {
+        const container = selector === "[data-trade-review-id]" ? "trade-review-list" : "allocation-list";
+        return nodes.get(container).querySelectorAll(selector);
+      },
       createElement(tagName) { return makeNode("", tagName); }
     },
     fetch: async (url) => {
@@ -308,6 +354,73 @@ test("REFRESH ALL persists and deduplicates current-day trade IDs without silent
   assert.equal(harness.storage.sellerSafetyLedger.strategies.length, 0);
   assert.match(harness.nodes.get("placement-status").textContent, /TRADE OWNERSHIP.*REVIEW/i);
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 2);
+});
+
+test("operator explicitly assigns post-import daily trade once and unknown trades remain review-required", async () => {
+  const daily = {
+    id: "daily-reduction", contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE",
+    underlying: "NIFTY", exchange: "NFO", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+    transactionType: "BUY", quantity: 65, price: 340, timestamp: "2026-08-02T09:15:00+05:30"
+  };
+  const basePayload = {
+    updatedAt: "2026-08-02T03:50:00.000Z",
+    positions: [{
+      contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+      underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+      signedQuantity: -65, lotSize: 65, averagePrice: 358.8, lastPrice: 320, pnl: 2522
+    }],
+    trades: [daily],
+    chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
+  };
+  const first = popupHarness(dailyReviewStorage(), {
+    Date: fixedDate("2026-08-02T10:00:00+05:30"), refreshPayload: basePayload
+  });
+  await settle();
+  await first.listeners.get("refresh-all:click")();
+
+  assert.deepEqual(first.storage.sellerSafetyLedger.strategies[0].fillIds, ["opening"]);
+  assert.deepEqual(first.storage.sellerSafetyLedger.tradeReviews.map((review) => review.fillId), ["daily-reduction"]);
+  assert.equal(first.storage.sellerSafetyLedger.importBatches.length, 1);
+  assert.equal(first.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  const owner = first.nodes.get("trade-review-list").querySelectorAll("[data-trade-review-id]")[0];
+  assert.ok(owner, "daily trade renders an explicit owner control");
+  assert.equal(owner.value, "", "popup cannot preselect or automatically allocate an owner");
+
+  owner.value = "stored-strategy";
+  await first.listeners.get("assign-trades:click")();
+  assert.deepEqual(first.storage.sellerSafetyLedger.tradeReviews, []);
+  assert.deepEqual(first.storage.sellerSafetyLedger.strategies[0].fillIds, ["opening", "daily-reduction"]);
+  assert.equal(first.storage.sellerSafetyLedger.importBatches.length, 1);
+  assert.equal(first.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1,
+    "ownership action is local and makes no request");
+
+  await first.listeners.get("accept-snapshot:click")();
+  assert.equal(first.storage.sellerSafetyView.canPublish, true);
+  assert.equal(first.storage.sellerSafetyView.wholeTrade.status, "EXCLUDING CHARGES");
+  assert.equal(first.storage.sellerSafetyLedger.strategies[0].snapshots.length, 2);
+
+  const unknown = {
+    ...daily,
+    id: "unknown-daily",
+    transactionType: "SELL",
+    timestamp: "2026-08-02T11:00:00+05:30"
+  };
+  const reopened = popupHarness(structuredClone(first.storage), {
+    Date: fixedDate("2026-08-02T11:05:00+05:30"),
+    refreshPayloads: [basePayload, { ...basePayload, updatedAt: "2026-08-02T05:35:00.000Z", trades: [daily, unknown] }]
+  });
+  await settle();
+  await reopened.listeners.get("refresh-all:click")();
+  assert.equal(reopened.storage.sellerSafetyLedger.importedTrades.length, 2);
+  assert.deepEqual(reopened.storage.sellerSafetyLedger.tradeReviews, []);
+  assert.deepEqual(reopened.storage.sellerSafetyLedger.strategies[0].fillIds, ["opening", "daily-reduction"]);
+
+  await reopened.listeners.get("refresh-all:click")();
+  assert.equal(reopened.storage.sellerSafetyLedger.importedTrades.length, 3);
+  assert.deepEqual(reopened.storage.sellerSafetyLedger.tradeReviews.map((review) => review.fillId), ["unknown-daily"]);
+  assert.deepEqual(reopened.storage.sellerSafetyLedger.strategies[0].fillIds, ["opening", "daily-reduction"]);
+  assert.equal(reopened.requests.filter((url) => url.includes("/api/seller-refresh")).length, 2);
+  assert.equal(reopened.requests.filter((url) => url.includes("/api/nifty-chain")).length, 0);
 });
 
 test("malformed refresh clears old candidate and cannot be accepted", async () => {

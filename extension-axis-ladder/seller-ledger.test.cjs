@@ -155,6 +155,63 @@ test("explicit CSV review assigns deduplicated bridge IDs into whole-trade histo
   assert.deepEqual(risk.fills.map((trade) => trade.id), ["bridge-trade-1"]);
 });
 
+test("explicit daily ownership extends one-time CSV coverage without mutating or duplicating fills", () => {
+  let current = oneStrategyLedger();
+  current = ledger.reconcilePositions(current, [position()]);
+  current = ledger.allocateLots(current, {
+    strategyId: "s1", contractId: "NFO:NIFTY26AUG24100CE", signedLots: -1
+  });
+  current = ledger.assignFills(current, {
+    strategyId: "s1",
+    trades: [fill({ id: "opening", quantity: 130 })],
+    fillIds: ["opening"],
+    importBatch: confirmedBatch({ coverage: { from: "2026-08-01", to: "2026-08-01" } })
+  });
+  const daily = fill({
+    id: "daily-reduction",
+    transactionType: "BUY",
+    quantity: 65,
+    price: 340,
+    timestamp: "2026-08-02T09:15:00+05:30"
+  });
+  current = ledger.ingestBrokerTrades(current, {
+    trades: [daily], observedAt: "2026-08-02T03:50:00.000Z"
+  });
+
+  assert.deepEqual(current.tradeReviews.map((review) => review.fillId), ["daily-reduction"]);
+  assert.deepEqual(current.strategies[0].fillIds, ["opening"], "refresh cannot infer daily ownership");
+  assert.equal(current.importBatches.length, 1, "CSV remains a one-time baseline");
+
+  current = ledger.assignReviewedTrade(current, {
+    strategyId: "s1", fillId: "daily-reduction", confirmedAt: "2026-08-02T10:00:00+05:30"
+  });
+  current = acceptBrokerSnapshot(current, "s1", "2026-08-02T16:00:00+05:30");
+
+  assert.deepEqual(current.tradeReviews, []);
+  assert.deepEqual(current.strategies[0].fillIds, ["opening", "daily-reduction"]);
+  assert.equal(current.importedTrades.find((trade) => trade.id === "daily-reduction").price, 340);
+  assert.equal(current.importBatches.length, 1);
+  assert.deepEqual(current.tradeEvidence.filter((evidence) => evidence.fillId === "daily-reduction").map((evidence) => evidence.sourceKind), [
+    "ZERODHA_CURRENT_DAY", "ZERODHA_CURRENT_DAY_CONFIRMED"
+  ]);
+  const risk = ledger.strategyRiskInput(current, "s1");
+  assert.equal(risk.status, "OK");
+  assert.deepEqual(risk.fills.map((trade) => trade.id), ["opening", "daily-reduction"]);
+
+  const repeated = ledger.ingestBrokerTrades(current, {
+    trades: [daily], observedAt: "2026-08-02T03:55:00.000Z"
+  });
+  assert.equal(repeated.importedTrades.length, 2);
+  assert.deepEqual(repeated.tradeReviews, []);
+
+  const unknown = ledger.ingestBrokerTrades(repeated, {
+    trades: [fill({ id: "unknown-daily", timestamp: "2026-08-02T11:00:00+05:30" })],
+    observedAt: "2026-08-02T05:30:00.000Z"
+  });
+  assert.deepEqual(unknown.tradeReviews.map((review) => review.fillId), ["unknown-daily"]);
+  assert.deepEqual(unknown.strategies[0].fillIds, ["opening", "daily-reduction"]);
+});
+
 test("rejects strategy with a non-NIFTY underlying or missing expiry", () => {
   const empty = ledger.emptyLedger();
   assert.throws(() => ledger.createStrategy(empty, {

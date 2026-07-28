@@ -359,6 +359,56 @@
     return next;
   }
 
+  function assignReviewedTrade(ledger, input) {
+    const next = nextLedger(ledger);
+    if (!input || typeof input.strategyId !== "string" || typeof input.fillId !== "string" ||
+      typeof input.confirmedAt !== "string" || !Number.isFinite(Date.parse(input.confirmedAt))) {
+      throw new Error("reviewed trade requires strategy, fill, and confirmation time");
+    }
+    const strategy = strategyFor(next, input.strategyId);
+    const trade = next.importedTrades.find((candidate) => candidate.id === input.fillId);
+    const review = next.tradeReviews.find((candidate) => candidate.fillId === input.fillId);
+    const currentDayEvidence = next.tradeEvidence.find((evidence) =>
+      evidence.fillId === input.fillId && evidence.sourceKind === "ZERODHA_CURRENT_DAY");
+    if (!trade || !review || !currentDayEvidence) throw new Error("trade ownership review is unavailable");
+    assertTradeProvenance(trade, strategy, relatedContracts(strategy, next));
+    const owner = ownerFor(next, trade.id);
+    if (owner && owner !== strategy.id) throw new Error("fill already has another strategy owner");
+
+    const strategyFillIds = new Set(strategy.fillIds);
+    const baselineFingerprints = [];
+    next.importedTrades.filter((fill) => strategyFillIds.has(fill.id)).forEach((fill) => {
+      if (fill.importBatchFingerprint) baselineFingerprints.push(fill.importBatchFingerprint);
+      next.tradeEvidence.filter((evidence) => evidence.fillId === fill.id && evidence.sourceKind === "ZERODHA_TRADEBOOK_CSV")
+        .forEach((evidence) => baselineFingerprints.push(evidence.importBatchFingerprint));
+    });
+    const baseline = baselineFingerprints.map((batchFingerprint) =>
+      next.importBatches.find((batch) => batch.fingerprint === batchFingerprint))
+      .filter(Boolean)
+      .sort((left, right) => left.coverage.to.localeCompare(right.coverage.to)).at(-1);
+    if (!baseline) throw new Error("one-time tradebook CSV baseline is required before daily trade review");
+
+    if (!owner) {
+      next.fillAssignments.push({ fillId: trade.id, strategyId: strategy.id });
+      next.audit.push({ type: "FILL_ASSIGNED", fillId: trade.id, strategyId: strategy.id });
+    }
+    if (!strategy.fillIds.includes(trade.id)) strategy.fillIds.push(trade.id);
+    next.tradeEvidence.push({
+      fillId: trade.id,
+      sourceKind: "ZERODHA_CURRENT_DAY_CONFIRMED",
+      confirmedAt: input.confirmedAt,
+      baselineBatchFingerprint: baseline.fingerprint
+    });
+    next.tradeReviews = next.tradeReviews.filter((candidate) => candidate.fillId !== trade.id);
+    next.audit.push({
+      type: "CURRENT_DAY_TRADE_OWNER_CONFIRMED",
+      fillId: trade.id,
+      strategyId: strategy.id,
+      confirmedAt: input.confirmedAt
+    });
+    return next;
+  }
+
   function acceptSnapshot(ledger, input) {
     const next = nextLedger(ledger);
     if (!input || typeof input.strategyId !== "string" || !input.snapshot || typeof input.snapshot !== "object") {
@@ -411,23 +461,35 @@
       evidence.filter((item) => item.fillId === fill.id && item.sourceKind === "ZERODHA_TRADEBOOK_CSV")
         .forEach((item) => fingerprints.push(item.importBatchFingerprint));
       return fingerprints.map((batchFingerprint) => batches.get(batchFingerprint))
-        .find((batch) => batch?.coverage && dateInCoverage(fill.timestamp, batch.coverage));
+        .find((batch) => batch?.sourceKind === "ZERODHA_TRADEBOOK_CSV" &&
+          typeof batch.acceptedAt === "string" && batch.acceptedAt &&
+          typeof batch.confirmedAt === "string" && batch.confirmedAt &&
+          batch.coverage && dateInCoverage(fill.timestamp, batch.coverage));
     };
-    const validBatches = fills.map(batchForFill);
-    const fillsCovered = fills.every((fill) => {
+    const coverageForFill = (fill) => {
       const batch = batchForFill(fill);
+      if (batch) return { key: `csv:${batch.fingerprint}`, coverage: batch.coverage };
+      const confirmed = evidence.find((item) => item.fillId === fill.id &&
+        item.sourceKind === "ZERODHA_CURRENT_DAY_CONFIRMED" && Number.isFinite(Date.parse(item.confirmedAt || "")));
+      const observed = evidence.some((item) => item.fillId === fill.id && item.sourceKind === "ZERODHA_CURRENT_DAY");
+      const baseline = confirmed && batches.get(confirmed.baselineBatchFingerprint);
+      const date = typeof fill.timestamp === "string" ? fill.timestamp.slice(0, 10) : "";
+      if (!confirmed || !observed || !baseline || baseline.sourceKind !== "ZERODHA_TRADEBOOK_CSV" || !validExpiry(date)) return null;
+      return { key: `daily:${fill.id}`, coverage: { from: date, to: date } };
+    };
+    const validCoverage = fills.map(coverageForFill);
+    const fillsCovered = fills.every((fill) => {
+      const coverage = coverageForFill(fill);
       return ownerFor(ledger, fill.id) === strategy.id && fill.underlying === "NIFTY" && fill.expiry === strategy.expiry &&
-        batch && batch.sourceKind === "ZERODHA_TRADEBOOK_CSV" &&
-        typeof batch.acceptedAt === "string" && batch.acceptedAt && typeof batch.confirmedAt === "string" && batch.confirmedAt &&
-        batch.coverage && dateInCoverage(fill.timestamp, batch.coverage);
+        coverage && dateInCoverage(fill.timestamp, coverage.coverage);
     });
-    if (!fillsCovered || validBatches.some((batch) => !batch)) return false;
+    if (!fillsCovered || validCoverage.some((coverage) => !coverage)) return false;
     const snapshotDates = strategy.snapshots.map((snapshot) => typeof snapshot.at === "string" ? snapshot.at.slice(0, 10) : "").filter(validExpiry);
     if (!snapshotDates.length) return false;
     const fillDates = fills.map((fill) => fill.timestamp.slice(0, 10)).filter(validExpiry);
     const earliest = fillDates.slice().sort()[0];
     const target = fillDates.concat(snapshotDates).sort().at(-1);
-    const intervals = Array.from(new Map(validBatches.map((batch) => [batch.fingerprint, batch.coverage])).values())
+    const intervals = Array.from(new Map(validCoverage.map((item) => [item.key, item.coverage])).values())
       .sort((left, right) => left.from.localeCompare(right.from));
     if (!intervals.length || intervals[0].from > earliest) return false;
     let coveredTo = intervals[0].to;
@@ -488,7 +550,7 @@
     return { status, openLegs: legState, fills: clone(fills), history };
   }
 
-  const api = { emptyLedger, createStrategy, reconcilePositions, ingestBrokerTrades, allocateLots, assignFills, acceptSnapshot, recordHistoryGap, strategyRiskInput };
+  const api = { emptyLedger, createStrategy, reconcilePositions, ingestBrokerTrades, allocateLots, assignFills, assignReviewedTrade, acceptSnapshot, recordHistoryGap, strategyRiskInput };
   root.NiftySellerLedger = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

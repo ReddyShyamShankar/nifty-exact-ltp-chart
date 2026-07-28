@@ -33,16 +33,17 @@ Version 0.4.0 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain
 - **HISTORY GAP** or **HISTORY INCOMPLETE** means imported fill evidence does not fully cover the strategy. The affected whole-trade map is withheld instead of estimated.
 - A stale broker timestamp preserves the last accepted evidence in the popup but hides chart risk layers until a successful reviewed refresh replaces it. The chart checks the 15-minute evidence deadline and Zerodha session expiry locally before every placement, automatically hiding at the earlier deadline without a network call.
 - New or changed positions preserve the last accepted evidence for operator inspection and enter **REVIEW POSITION CHANGES**. A separate withheld chart state hides the old map until the new positions are manually allocated and explicitly accepted.
-- Current-day Zerodha trades are stored as immutable ledger evidence and deduplicated against the one-time CSV history. They remain unassigned under **REVIEW TRADE OWNERSHIP** until the operator explicitly associates them with a strategy; ownership is never inferred from a matching contract.
+- Current-day Zerodha trades are stored as immutable ledger evidence and deduplicated against the one-time CSV history. Each new trade remains unassigned under **REVIEW TRADE OWNERSHIP** until the operator selects its strategy owner and presses **ASSIGN REVIEWED TRADES**; ownership is never inferred from a matching contract. Once confirmed, contiguous daily evidence extends that strategy's historical coverage without another CSV import.
 
 ## Workflow
 
 1. Keep local NIFTY bridge running at `http://127.0.0.1:8787`.
 2. Open a logged-in TradingView NIFTY chart and select the exact expiry.
 3. Daily, press **CONNECT ZERODHA** and finish the Zerodha login, then press **REFRESH ALL** once.
-4. On first use, perform the one-time Zerodha tradebook CSV import for historical fills. Re-imported current-day fills deduplicate while preserving their original bridge trade IDs.
-5. Manually create or select the same-expiry strategy, allocate signed whole lots, review every changed position and trade ownership, and press **ACCEPT REVIEWED SNAPSHOT**.
-6. If needed, expand **ADVANCED · PLACEMENT & HEALTH** and enable the chart ladder.
+4. On first use, perform the one-time Zerodha tradebook CSV import as the historical baseline.
+5. Daily, manually allocate changed whole lots. For each new current-day trade, select its same-expiry strategy owner and press **ASSIGN REVIEWED TRADES**. Confirmed contiguous daily fills extend the baseline without re-importing the CSV; duplicate refreshes preserve the prior assignment.
+6. Review the resulting map and press **ACCEPT REVIEWED SNAPSHOT**.
+7. If needed, expand **ADVANCED · PLACEMENT & HEALTH** and enable the chart ladder.
 
 The popup opens with **REFRESH ALL** beside the extension title. Expiry changes wait for the next manual refresh. Timeframe changes rebuild placement from cached data. Zoom and pan only remap the same strikes and accepted risk evidence to new screen positions.
 

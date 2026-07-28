@@ -105,8 +105,8 @@ select, input { color-scheme: dark; }
 .section-heading { margin-bottom: 11px; color: var(--danger); font-size: 9px; font-weight: 800; letter-spacing: .08em; }
 .field-label { display: block; margin: 10px 0 5px; color: var(--ink-mute); font: 8px "Geist Mono", ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; }
 .inline-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-input, #selected-strategy { min-width: 0; min-height: 38px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 0; outline: 0; background: var(--bg); color: var(--ink); font-size: 10px; }
-input:focus, #selected-strategy:focus { border-color: var(--accent); }
+input, #selected-strategy, .trade-review-row select { min-width: 0; min-height: 38px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 0; outline: 0; background: var(--bg); color: var(--ink); font-size: 10px; }
+input:focus, #selected-strategy:focus, .trade-review-row select:focus { border-color: var(--accent); }
 .secondary-button { min-height: 38px; padding: 0 12px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--ink-dim); font-size: 8px; font-weight: 700; letter-spacing: .07em; }
 .secondary-button:hover { border-color: rgba(52, 211, 153, .45); color: var(--ink); }
 .secondary-button.wide { width: 100%; margin-top: 8px; }
@@ -116,6 +116,12 @@ input:focus, #selected-strategy:focus { border-color: var(--accent); }
 .allocation-row strong { font-size: 10px; }
 .allocation-row span { margin-top: 2px; color: var(--ink-mute); font: 8px "Geist Mono", ui-monospace, monospace; }
 .allocation-row input { width: 74px; text-align: right; }
+.trade-review-list { margin-top: 8px; }
+.trade-review-row { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(248, 113, 113, .16); }
+.trade-review-row strong, .trade-review-row span { display: block; }
+.trade-review-row strong { font-size: 9px; }
+.trade-review-row span { margin-top: 2px; color: var(--ink-mute); font: 8px "Geist Mono", ui-monospace, monospace; }
+.trade-review-row select { width: 132px; }
 .file-field { min-height: 42px; margin-top: 9px; padding: 0 10px; border: 1px dashed var(--line-2); display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-dim); font: 8px "Geist Mono", ui-monospace, monospace; letter-spacing: .06em; }
 .file-field input { width: 168px; min-height: auto; padding: 0; border: 0; background: transparent; font-size: 8px; }
 .import-summary { margin-top: 7px; color: var(--ink-mute); font-size: 8px; }

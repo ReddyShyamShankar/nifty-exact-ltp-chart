@@ -48,7 +48,7 @@
       </section>
 
       <section class="review-panel" id="review-panel" hidden>
-        <div class="section-heading mono">REVIEW POSITION CHANGES</div>
+        <div class="section-heading mono">REVIEW POSITION &amp; TRADE EVIDENCE</div>
         <label class="field-label" for="strategy-name">Create one-expiry strategy</label>
         <div class="inline-form">
           <input id="strategy-name" type="text" maxlength="48" autocomplete="off" placeholder="Strategy name" />
@@ -58,6 +58,8 @@
         <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
         <div class="allocation-list" id="allocation-list"></div>
         <button class="secondary-button wide mono" id="allocate-lots" type="button">ALLOCATE LOTS</button>
+        <div class="trade-review-list" id="trade-review-list"></div>
+        <button class="secondary-button wide mono" id="assign-trades" type="button" hidden>ASSIGN REVIEWED TRADES</button>
         <label class="file-field" for="tradebook-csv">
           <span>ZERODHA TRADEBOOK CSV</span>
           <input id="tradebook-csv" type="file" accept=".csv,text/csv" />

@@ -226,6 +226,7 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
       return true;
     }
   });
+  t.after(() => controller.invalidate());
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
   assert.equal(renderedRows.length, 13);
   assert.equal(extraChainRequests, 0);
