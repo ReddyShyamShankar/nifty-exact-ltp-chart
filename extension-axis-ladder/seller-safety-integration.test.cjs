@@ -731,10 +731,16 @@ test("operator docs define setup, daily review, map semantics, stale behavior, a
   assert.match(extensionReadme, /weekly[\s\S]*exact expiry/i);
   assert.match(extensionReadme, /REFRESH FAILED[\s\S]*immediately[\s\S]*hides/i);
   assert.match(extensionReadme, /strategy selector[\s\S]*without another refresh/i);
-  assert.match(extensionReadme, /side panel[\s\S]*TradingView-only/i);
-  assert.match(extensionReadme, /switching tabs[\s\S]*closes/i);
-  assert.match(extensionReadme, /click[\s\S]*NIFTY[\s\S]*extension icon/i);
-  assert.match(extensionReadme, /full[- ]height[\s\S]*same (UI|design)/i);
+  for (const readme of [rootReadme, extensionReadme]) {
+    assert.match(readme, /click[\s\S]*NIFTY[\s\S]*extension icon/i);
+    assert.match(readme, /full[- ]height[\s\S]*side panel/i);
+    assert.match(readme, /side panel[\s\S]*TradingView-only/i);
+    assert.match(readme, /same seller-safety UI[\s\S]*version 0\.4\.0/i);
+    assert.match(readme, /switching tabs[\s\S]*closes/i);
+    assert.match(readme, /opening,[\s\S]*closing,[\s\S]*resizing[\s\S]*no seller-refresh,[\s\S]*positions,[\s\S]*trades,[\s\S]*option-chain requests/i);
+    assert.match(readme, /bridge-health,[\s\S]*expiry-list,[\s\S]*Zerodha-status[\s\S]*checks/i);
+    assert.match(readme, /daily,[\s\S]*CONNECT ZERODHA,[\s\S]*REFRESH ALL manually/i);
+  }
   assert.doesNotMatch(`${rootReadme}\n${extensionReadme}`, /popup opens|popup open/i);
   assert.match(extensionReadme, /manual[\s\S]*strategy[\s\S]*allocation[\s\S]*review/i);
   assert.match(extensionReadme, /current[\s\S]*solid/i);

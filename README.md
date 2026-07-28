@@ -18,7 +18,7 @@ One press of **REFRESH ALL** makes at most one positions request, one trades req
 - Click the pinned NIFTY extension icon on a TradingView tab to open the full-height side panel.
 - The side panel is TradingView-only and uses the same seller-safety UI as version 0.4.0.
 - Switching tabs closes the panel. Click the NIFTY icon again when returning to a chart.
-- Opening, closing, or resizing the panel makes no broker or option-chain request.
+- Opening, closing, or resizing the panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains the existing bridge-health, expiry-list, and Zerodha-status checks.
 - Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
 
 ## Setup
