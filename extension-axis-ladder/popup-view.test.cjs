@@ -19,6 +19,7 @@ function acceptedLedger() {
       ],
       fillIds: ["fill-call", "fill-put"],
       snapshots: [{
+        candidateId: "candidate-accepted",
         at: "2026-08-01T08:45:00+05:30",
         currentMap: { breakevens: [23850, 24350], maxProfit: 15000, maxLoss: "UNBOUNDED", upsideUnbounded: true },
         wholeTradeMap: { breakevens: [23825, 24375], maxProfit: 17000, maxLoss: "UNBOUNDED", upsideUnbounded: true }
@@ -74,7 +75,10 @@ function build(ledger = acceptedLedger(), overrides = {}) {
     ledger,
     selectedStrategyId: "aug-seller",
     brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" },
-    chain: { expiry: "2026-08-25", daysToExpiry: 24, spot: 24120, updatedAt: "2026-08-01T09:20:00+05:30" },
+    chain: {
+      candidateId: "candidate-accepted", expiry: "2026-08-25", daysToExpiry: 24,
+      spot: 24120, updatedAt: "2026-08-01T09:20:00+05:30"
+    },
     now: "2026-08-01T09:25:00+05:30",
     ...overrides
   });
@@ -134,17 +138,45 @@ test("shows incomplete history without inventing whole-trade risk", () => {
   assert.match(view.warning, /history incomplete/i);
 });
 
+test("withholds publication until candidate ID matches an accepted ledger snapshot", () => {
+  const ledger = acceptedLedger();
+  const missingId = acceptedLedger();
+  delete missingId.strategies[0].snapshots[0].candidateId;
+
+  const mismatch = build(ledger, {
+    chain: {
+      candidateId: "candidate-pending", expiry: "2026-08-25", daysToExpiry: 24,
+      spot: 24120, updatedAt: "2026-08-01T09:20:00+05:30"
+    }
+  });
+  const absent = build(missingId);
+
+  for (const view of [mismatch, absent]) {
+    assert.equal(view.canPublish, false);
+    assert.equal(view.priority.label, "REVIEW POSITION CHANGES");
+    assert.deepEqual(view.currentRisk, { lower: "—", upper: "—" });
+  }
+});
+
 test("surfaces stale broker timestamp and disconnected auth action", () => {
   const stale = build(acceptedLedger(), {
-    chain: { expiry: "2026-08-25", daysToExpiry: 24, spot: 24120, updatedAt: "2026-08-01T09:00:00+05:30" },
+    chain: {
+      candidateId: "candidate-accepted", expiry: "2026-08-25", daysToExpiry: 24,
+      spot: 24120, updatedAt: "2026-08-01T09:00:00+05:30"
+    },
     now: "2026-08-01T09:31:00+05:30"
   });
   const disconnected = build(acceptedLedger(), {
     brokerStatus: { configured: true, connected: false, expiresAt: null }
+  });
+  const expired = build(acceptedLedger(), {
+    brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-01T03:00:00.000Z" }
   });
 
   assert.equal(stale.broker.kind, "stale");
   assert.match(stale.broker.label, /ZERODHA STALE/);
   assert.match(stale.broker.label, /09:00/);
   assert.deepEqual(disconnected.broker.action, { label: "CONNECT ZERODHA", kind: "connect" });
+  assert.equal(expired.broker.kind, "auth");
+  assert.match(expired.broker.label, /EXPIRED/);
 });

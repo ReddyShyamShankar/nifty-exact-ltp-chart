@@ -54,6 +54,14 @@
     }
     const updated = Date.parse(updatedAt || "");
     const current = Date.parse(now || "");
+    const expires = Date.parse(status.expiresAt || "");
+    if (Number.isFinite(current) && Number.isFinite(expires) && expires <= current) {
+      return {
+        kind: "auth",
+        label: "ZERODHA SESSION EXPIRED",
+        action: { label: "CONNECT ZERODHA", kind: "connect" }
+      };
+    }
     if (Number.isFinite(updated) && Number.isFinite(current) && current - updated > STALE_AFTER_MS) {
       return { kind: "stale", label: `ZERODHA STALE · ${dateTime(updatedAt)}`, action: null };
     }
@@ -85,6 +93,13 @@
       if (snapshots[index]?.currentMap) return restoreMap(snapshots[index].currentMap);
     }
     return null;
+  }
+
+  function latestAcceptedCandidateId(strategy) {
+    const snapshots = Array.isArray(strategy?.snapshots) ? strategy.snapshots : [];
+    return snapshots.length && typeof snapshots.at(-1)?.candidateId === "string"
+      ? snapshots.at(-1).candidateId
+      : "";
   }
 
   function allocatedPnl(sourceLedger, strategy) {
@@ -147,9 +162,12 @@
     const strategy = sourceLedger?.strategies?.find((candidate) => candidate.id === selectedStrategyId) || null;
     const reviewChanges = reviewRows(sourceLedger || { reviewChanges: [] });
     const broker = brokerView(brokerStatus, chain?.updatedAt, now);
+    const candidateId = typeof chain?.candidateId === "string" ? chain.candidateId : "";
     const base = {
       version: 1,
+      candidateId,
       acceptedAt: now,
+      brokerUpdatedAt: chain?.updatedAt || null,
       strategyId: strategy?.id || "",
       strategyName: strategy?.name || "NO STRATEGY SELECTED",
       expiry: strategy?.expiry || chain?.expiry || "",
@@ -184,6 +202,19 @@
         maxLoss: "—",
         whyMoved: [],
         warning: "NO ACCEPTED STRATEGY ALLOCATION.",
+        maps: null
+      };
+    }
+    if (!candidateId || latestAcceptedCandidateId(strategy) !== candidateId) {
+      return {
+        ...base,
+        ...emptyRisk(),
+        canPublish: false,
+        priority: { kind: "review", label: "REVIEW POSITION CHANGES" },
+        maxProfit: "—",
+        maxLoss: "—",
+        whyMoved: [],
+        warning: "PENDING SNAPSHOT REQUIRES EXPLICIT ACCEPTANCE. RISK MAP WITHHELD.",
         maps: null
       };
     }

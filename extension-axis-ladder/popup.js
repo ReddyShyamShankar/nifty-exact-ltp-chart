@@ -6,15 +6,16 @@ const DEFAULTS = {
   expiry: "current_month",
   sellerSafetyLedger: null,
   selectedStrategyId: "",
-  sellerSafetyView: null
+  sellerSafetyView: null,
+  sellerSafetyPending: null
 };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
 let ledger = null;
 let brokerStatus = { configured: false, connected: false, expiresAt: null };
 let expiries = [];
-let pendingRefresh = null;
-let pendingChain = null;
+let pendingReview = null;
+let candidateSequence = 0;
 
 function friendlyError(error) {
   const message = String(error?.message || error || "Unknown error");
@@ -44,9 +45,16 @@ function disclosure(buttonSelector, panelSelector) {
 }
 
 async function persist(next) {
+  await chrome.storage.local.set(next);
   state = { ...state, ...next };
   if (Object.prototype.hasOwnProperty.call(next, "sellerSafetyLedger")) ledger = next.sellerSafetyLedger;
-  await chrome.storage.local.set(next);
+  if (Object.prototype.hasOwnProperty.call(next, "sellerSafetyPending")) pendingReview = next.sellerSafetyPending;
+}
+
+async function clearPendingCandidate() {
+  pendingReview = null;
+  state = { ...state, sellerSafetyPending: null };
+  await chrome.storage.local.set({ sellerSafetyPending: null });
 }
 
 function appendTextRows(container, values, emptyLabel) {
@@ -152,7 +160,7 @@ function renderView(view, { pending = false } = {}) {
   $("#review-panel").hidden = !(pending || shown.reviewChanges.length);
 }
 
-function currentView(chain = pendingChain) {
+function currentView(chain = pendingReview?.chain) {
   return NiftySellerPopupView.buildView({
     ledger,
     selectedStrategyId: state.selectedStrategyId,
@@ -162,13 +170,32 @@ function currentView(chain = pendingChain) {
   });
 }
 
-function renderCurrent({ pending = Boolean(pendingRefresh) } = {}) {
+function latestAcceptedCandidateId() {
+  const strategy = ledger.strategies.find((candidate) => candidate.id === state.selectedStrategyId);
+  return typeof strategy?.snapshots?.at(-1)?.candidateId === "string" ? strategy.snapshots.at(-1).candidateId : "";
+}
+
+function renderCurrent({ pending = Boolean(pendingReview) } = {}) {
   const stored = state.sellerSafetyView;
   const validStoredView = stored?.canPublish === true && stored.priority && stored.currentRisk &&
     stored.wholeTrade && stored.broker && Array.isArray(stored.whyMoved) &&
-    Array.isArray(stored.legs) && Array.isArray(stored.timeline);
+    Array.isArray(stored.legs) && Array.isArray(stored.timeline) &&
+    typeof stored.candidateId === "string" && stored.candidateId &&
+    latestAcceptedCandidateId() === stored.candidateId;
   if (!pending && validStoredView) {
-    renderView(stored);
+    const liveStatus = NiftySellerPopupView.buildView({
+      ledger,
+      selectedStrategyId: state.selectedStrategyId,
+      brokerStatus,
+      chain: {
+        candidateId: stored.candidateId,
+        expiry: stored.expiry,
+        daysToExpiry: stored.daysToExpiry,
+        updatedAt: stored.brokerUpdatedAt || stored.acceptedAt
+      },
+      now: new Date().toISOString()
+    });
+    renderView({ ...stored, broker: liveStatus.broker });
     return;
   }
   renderView(currentView(), { pending });
@@ -195,7 +222,12 @@ async function loadExpiries() {
     expiries = data.expiries || [];
     $("#expiry").replaceChildren(...expiries.map(({ expiry, daysToExpiry }) => optionNode(expiry, `${expiry} · ${daysToExpiry} DTE`)));
     if (!expiries.some((entry) => entry.expiry === state.expiry)) {
-      await persist({ expiry: expiries[0]?.expiry || "current_month", selectedStrategyId: "", sellerSafetyView: null });
+      await persist({
+        expiry: expiries[0]?.expiry || "current_month",
+        selectedStrategyId: "",
+        sellerSafetyView: null,
+        sellerSafetyPending: null
+      });
     }
     const selected = expiries.find((entry) => entry.expiry === state.expiry);
     $("#expiry-hint").textContent = selected ? `${selected.daysToExpiry} DTE` : "NO EXPIRY";
@@ -213,6 +245,53 @@ async function loadBrokerStatus() {
   }
 }
 
+function validRefreshTrade(trade, expiry) {
+  return trade && typeof trade.id === "string" && trade.id &&
+    typeof trade.contractId === "string" && trade.contractId &&
+    typeof trade.tradingsymbol === "string" && trade.tradingsymbol &&
+    trade.underlying === "NIFTY" && trade.exchange === "NFO" && trade.expiry === expiry &&
+    Number.isFinite(trade.strike) && (trade.optionType === "CE" || trade.optionType === "PE") &&
+    (trade.transactionType === "BUY" || trade.transactionType === "SELL") &&
+    Number.isInteger(trade.quantity) && trade.quantity > 0 &&
+    Number.isFinite(trade.price) && trade.price >= 0 &&
+    typeof trade.timestamp === "string" && Number.isFinite(Date.parse(trade.timestamp));
+}
+
+function nextCandidateId() {
+  candidateSequence += 1;
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ? `seller-${uuid}` : `seller-${Date.now()}-${candidateSequence}`;
+}
+
+function validateRefreshPayload(data) {
+  if (!data || typeof data.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt)) ||
+    !Array.isArray(data.positions) || !Array.isArray(data.trades) ||
+    !data.chain || data.chain.expiry !== state.expiry || !Number.isFinite(data.chain.spot) ||
+    !Array.isArray(data.chain.rows) || !data.trades.every((trade) => validRefreshTrade(trade, state.expiry))) {
+    throw new Error("Bridge returned an invalid seller refresh snapshot.");
+  }
+  const nextLedger = NiftySellerLedger.reconcilePositions(ledger, data.positions);
+  const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
+  const candidateId = nextCandidateId();
+  return {
+    nextLedger,
+    pending: {
+      version: 1,
+      candidateId,
+      updatedAt: data.updatedAt,
+      positionCount: data.positions.length,
+      tradeCount: data.trades.length,
+      chain: {
+        candidateId,
+        expiry: data.chain.expiry,
+        spot: data.chain.spot,
+        updatedAt: data.updatedAt,
+        daysToExpiry: expiryData?.daysToExpiry ?? null
+      }
+    }
+  };
+}
+
 async function refreshAll() {
   const button = $("#refresh-all");
   const label = $("#refresh-label");
@@ -221,21 +300,20 @@ async function refreshAll() {
   label.textContent = "REFRESHING…";
   $("#placement-status").textContent = "READING BROKER + MARKET SNAPSHOT…";
   try {
+    await clearPendingCandidate();
     const data = await responseData(await fetch(`${API}/api/seller-refresh?expiry=${encodeURIComponent(state.expiry)}`, { cache: "no-store" }));
-    pendingRefresh = data;
-    const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
-    pendingChain = {
-      ...data.chain,
-      updatedAt: data.updatedAt,
-      daysToExpiry: expiryData?.daysToExpiry
-    };
-    ledger = NiftySellerLedger.reconcilePositions(ledger, data.positions);
-    await persist({ sellerSafetyLedger: ledger, sellerSafetyView: null });
+    const candidate = validateRefreshPayload(data);
+    await persist({
+      sellerSafetyLedger: candidate.nextLedger,
+      sellerSafetyView: null,
+      sellerSafetyPending: candidate.pending
+    });
     renderCurrent({ pending: true });
     $("#placement-status").textContent = ledger.reviewChanges.length
       ? `${ledger.reviewChanges.length} POSITION CHANGE${ledger.reviewChanges.length === 1 ? "" : "S"} NEED REVIEW`
       : "SNAPSHOT READY FOR EXPLICIT ACCEPTANCE";
   } catch (error) {
+    try { await clearPendingCandidate(); } catch (_clearError) { /* in-memory candidate already cleared */ }
     $("#placement-status").textContent = friendlyError(error);
   } finally {
     button.disabled = false;
@@ -253,7 +331,12 @@ async function createStrategy() {
   try {
     const id = `strategy-${Date.now()}`;
     ledger = NiftySellerLedger.createStrategy(ledger, { id, name, underlying: "NIFTY", expiry: state.expiry });
-    await persist({ sellerSafetyLedger: ledger, selectedStrategyId: id, sellerSafetyView: null });
+    await persist({
+      sellerSafetyLedger: ledger,
+      selectedStrategyId: id,
+      sellerSafetyView: null,
+      sellerSafetyPending: pendingReview
+    });
     $("#strategy-name").value = "";
     renderCurrent({ pending: true });
     $("#placement-status").textContent = "STRATEGY CREATED · ALLOCATE SIGNED WHOLE LOTS";
@@ -279,7 +362,7 @@ async function allocateLots() {
         signedLots
       });
     }
-    await persist({ sellerSafetyLedger: ledger, sellerSafetyView: null });
+    await persist({ sellerSafetyLedger: ledger, sellerSafetyView: null, sellerSafetyPending: pendingReview });
     renderCurrent({ pending: true });
     $("#placement-status").textContent = ledger.reviewChanges.length
       ? `${ledger.reviewChanges.length} POSITION CHANGE${ledger.reviewChanges.length === 1 ? "" : "S"} STILL UNALLOCATED`
@@ -319,7 +402,7 @@ async function importTradebook(event) {
         confirmedAt: acceptedAt
       }
     });
-    await persist({ sellerSafetyLedger: ledger, sellerSafetyView: null });
+    await persist({ sellerSafetyLedger: ledger, sellerSafetyView: null, sellerSafetyPending: pendingReview });
     $("#import-summary").textContent = `${parsed.trades.length} FILL${parsed.trades.length === 1 ? "" : "S"} IMPORTED · ${file.name}`;
     renderCurrent({ pending: true });
   } catch (error) {
@@ -328,7 +411,7 @@ async function importTradebook(event) {
 }
 
 async function acceptSnapshot() {
-  if (!pendingRefresh) {
+  if (!pendingReview) {
     $("#placement-status").textContent = "PRESS REFRESH ALL BEFORE ACCEPTING";
     return;
   }
@@ -341,12 +424,12 @@ async function acceptSnapshot() {
     const acceptedLedger = JSON.parse(JSON.stringify(ledger));
     const acceptedStrategy = acceptedLedger.strategies.find((strategy) => strategy.id === state.selectedStrategyId);
     if (!acceptedStrategy) throw new Error("Select the reviewed strategy before accepting.");
-    acceptedStrategy.snapshots.push({ at: acceptedAt });
+    acceptedStrategy.snapshots.push({ at: acceptedAt, candidateId: pendingReview.candidateId });
     const view = NiftySellerPopupView.buildView({
       ledger: acceptedLedger,
       selectedStrategyId: state.selectedStrategyId,
       brokerStatus,
-      chain: pendingChain,
+      chain: pendingReview.chain,
       now: acceptedAt
     });
     if (!view.canPublish || !view.maps) throw new Error("Reviewed allocation is not safe to publish.");
@@ -354,6 +437,7 @@ async function acceptSnapshot() {
       strategyId: state.selectedStrategyId,
       snapshot: {
         at: acceptedAt,
+        candidateId: pendingReview.candidateId,
         currentMap: view.maps.current,
         wholeTradeMap: view.maps.wholeTrade
       }
@@ -362,9 +446,9 @@ async function acceptSnapshot() {
     await persist({
       sellerSafetyLedger: ledger,
       selectedStrategyId: state.selectedStrategyId,
-      sellerSafetyView: view
+      sellerSafetyView: view,
+      sellerSafetyPending: null
     });
-    pendingRefresh = null;
     renderView(view);
     $("#review-panel").hidden = true;
     $("#placement-status").textContent = "REVIEWED SNAPSHOT ACCEPTED · RISK MAP PUBLISHED";
@@ -411,14 +495,21 @@ function bindEvents() {
   $("#tradebook-csv").addEventListener("change", importTradebook);
   $("#accept-snapshot").addEventListener("click", acceptSnapshot);
   $("#selected-strategy").addEventListener("change", async (event) => {
-    await persist({ selectedStrategyId: event.target.value, sellerSafetyView: null });
+    await persist({
+      selectedStrategyId: event.target.value,
+      sellerSafetyView: null,
+      sellerSafetyPending: pendingReview
+    });
     renderCurrent({ pending: true });
   });
   $("#expiry").addEventListener("change", async (event) => {
-    pendingRefresh = null;
-    pendingChain = null;
     const matching = ledger.strategies.find((strategy) => strategy.expiry === event.target.value);
-    await persist({ expiry: event.target.value, selectedStrategyId: matching?.id || "", sellerSafetyView: null });
+    await persist({
+      expiry: event.target.value,
+      selectedStrategyId: matching?.id || "",
+      sellerSafetyView: null,
+      sellerSafetyPending: null
+    });
     const expiryData = expiries.find((entry) => entry.expiry === state.expiry);
     $("#expiry-hint").textContent = expiryData ? `${expiryData.daysToExpiry} DTE` : "NO EXPIRY";
     renderCurrent({ pending: false });
@@ -437,14 +528,15 @@ function bindEvents() {
 async function init() {
   state = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
   ledger = state.sellerSafetyLedger || NiftySellerLedger.emptyLedger();
+  pendingReview = state.sellerSafetyPending;
   bindEvents();
   renderSettings();
-  renderCurrent({ pending: false });
+  renderCurrent();
   await loadHealth();
   await loadExpiries();
   await loadBrokerStatus();
   renderSettings();
-  renderCurrent({ pending: false });
+  renderCurrent();
 }
 
 init();

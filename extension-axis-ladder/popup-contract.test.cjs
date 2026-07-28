@@ -37,7 +37,43 @@ test("content still accepts exact-axis placement retry", () => {
   assert.match(source, /controller\.place\(\)/);
 });
 
-function popupHarness(initialStorage = {}) {
+function fixedDate(iso) {
+  const timestamp = Date.parse(iso);
+  return class FixedDate extends Date {
+    constructor(value) { super(typeof value === "undefined" ? timestamp : value); }
+    static now() { return timestamp; }
+  };
+}
+
+function acceptedStorage({ acceptedAt = "2026-08-01T09:00:00+05:30", candidateId = "candidate-stored" } = {}) {
+  return {
+    expiry: "2026-08-25",
+    selectedStrategyId: "stored-strategy",
+    sellerSafetyLedger: {
+      version: 1,
+      strategies: [{
+        id: "stored-strategy", name: "Stored seller", underlying: "NIFTY", expiry: "2026-08-25",
+        allocations: [], fillIds: [], historyComplete: false,
+        snapshots: [{ at: acceptedAt, candidateId, currentMap: { breakevens: [23900, 24300] } }]
+      }],
+      brokerPositions: [], importedTrades: [], fillAssignments: [], importBatches: [], historyGaps: [],
+      allocationRevisions: [], reviewChanges: [], audit: []
+    },
+    sellerSafetyPending: null,
+    sellerSafetyView: {
+      version: 1, candidateId, acceptedAt, canPublish: true,
+      priority: { kind: "risk", label: "CURRENT RISK" },
+      currentRisk: { lower: "23,900.00", upper: "24,300.00" },
+      wholeTrade: { lower: "23,875.00", upper: "24,325.00", status: "EXCLUDING CHARGES" },
+      livePnl: "+₹750.00", maxProfit: "+₹14,300.00", maxLoss: "UNBOUNDED",
+      whyMoved: [], warning: "MAXIMUM LOSS IS UNBOUNDED", legs: [], timeline: [], reviewChanges: [],
+      broker: { kind: "connected", label: "ZERODHA CONNECTED · TODAY", action: null },
+      expiry: "2026-08-25", daysToExpiry: 24, spot: "24,120.00"
+    }
+  };
+}
+
+function popupHarness(initialStorage = {}, options = {}) {
   const listeners = new Map();
   const requests = [];
   const writes = [];
@@ -94,9 +130,10 @@ function popupHarness(initialStorage = {}) {
     sellerSafetyLedger: null,
     selectedStrategyId: "",
     sellerSafetyView: null,
+    sellerSafetyPending: null,
     ...initialStorage
   };
-  const refreshPayload = {
+  const defaultRefreshPayload = {
     updatedAt: "2026-08-01T03:50:00.000Z",
     positions: [{
       contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
@@ -106,6 +143,8 @@ function popupHarness(initialStorage = {}) {
     trades: [],
     chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
   };
+  const refreshPayloads = options.refreshPayloads || [options.refreshPayload || defaultRefreshPayload];
+  let refreshIndex = 0;
   const sandbox = {
     AbortController,
     NiftySellerRisk: require("./seller-risk.js"),
@@ -132,14 +171,20 @@ function popupHarness(initialStorage = {}) {
       requests.push(String(url));
       if (String(url).includes("/api/health")) return response({ status: "ok" });
       if (String(url).includes("/api/nifty-expiries")) return response({ expiries: [{ expiry: "2026-08-25", daysToExpiry: 24 }] });
-      if (String(url).includes("/api/zerodha/status")) return response({ configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z" });
-      if (String(url).includes("/api/seller-refresh")) return response(refreshPayload);
+      if (String(url).includes("/api/zerodha/status")) return response(options.brokerStatus || {
+        configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z"
+      });
+      if (String(url).includes("/api/seller-refresh")) {
+        const payload = refreshPayloads[Math.min(refreshIndex, refreshPayloads.length - 1)];
+        refreshIndex += 1;
+        return response(payload);
+      }
       if (String(url).includes("/api/zerodha/login-url")) return response({ loginUrl: "https://kite.zerodha.com/connect/login?v=3&api_key=public-key" });
       return response({ error: "unexpected request" }, false, 404);
     },
     Intl,
     console,
-    Date,
+    Date: options.Date || Date,
     URL,
     setTimeout,
     clearTimeout,
@@ -175,8 +220,62 @@ test("one primary press requests one coordinated refresh and withholds changed m
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh?expiry=2026-08-25")).length, 1);
   assert.equal(harness.requests.filter((url) => /upstox|zerodha\/positions|zerodha\/trades/.test(url)).length, 0);
   assert.equal(harness.storage.sellerSafetyView, null);
+  assert.ok(harness.storage.sellerSafetyPending, "validated refresh persists pending candidate");
+  assert.equal(typeof harness.storage.sellerSafetyPending.candidateId, "string");
+  assert.equal(harness.storage.sellerSafetyPending.chain.expiry, "2026-08-25");
   assert.equal(harness.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
   assert.equal(harness.nodes.get("review-panel").hidden, false);
+});
+
+test("malformed refresh clears old candidate and cannot be accepted", async () => {
+  const valid = {
+    updatedAt: "2026-08-01T03:50:00.000Z",
+    positions: [{
+      contractId: "NFO:NIFTY26AUG24100CE", tradingsymbol: "NIFTY26AUG24100CE", exchange: "NFO",
+      underlying: "NIFTY", expiry: "2026-08-25", strike: 24100, optionType: "CE",
+      signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
+    }],
+    trades: [],
+    chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
+  };
+  const malformed = { ...valid, trades: { not: "an array" } };
+  const harness = popupHarness({}, { refreshPayloads: [valid, malformed] });
+  await settle();
+  await harness.listeners.get("refresh-all:click")();
+  harness.nodes.get("strategy-name").value = "August seller";
+  await harness.listeners.get("create-strategy:click")();
+  const input = harness.nodes.get("allocation-list").querySelectorAll("[data-allocation-contract]")[0];
+  input.value = "-1";
+  await harness.listeners.get("allocate-lots:click")();
+
+  await harness.listeners.get("refresh-all:click")();
+  await harness.listeners.get("accept-snapshot:click")();
+
+  assert.equal(harness.storage.sellerSafetyPending, null);
+  assert.equal(harness.storage.sellerSafetyLedger.strategies[0].snapshots.length, 0);
+  assert.match(harness.nodes.get("placement-status").textContent, /PRESS REFRESH ALL/);
+});
+
+test("allocated pending review survives popup close and still withholds publication", async () => {
+  const first = popupHarness();
+  await settle();
+  await first.listeners.get("refresh-all:click")();
+  first.nodes.get("strategy-name").value = "August seller";
+  await first.listeners.get("create-strategy:click")();
+  const input = first.nodes.get("allocation-list").querySelectorAll("[data-allocation-contract]")[0];
+  input.value = "-1";
+  await first.listeners.get("allocate-lots:click")();
+  assert.ok(first.storage.sellerSafetyPending, "allocation keeps pending candidate persisted");
+  const candidateId = first.storage.sellerSafetyPending.candidateId;
+
+  const reopened = popupHarness(structuredClone(first.storage));
+  await settle();
+
+  assert.equal(reopened.storage.sellerSafetyPending.candidateId, candidateId);
+  assert.equal(reopened.storage.sellerSafetyView, null);
+  assert.equal(reopened.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
+  assert.equal(reopened.nodes.get("review-panel").hidden, false);
+  assert.equal(reopened.nodes.get("current-lower").textContent, "—");
 });
 
 test("explicit strategy, whole-lot allocation, CSV import, and acceptance publish one reviewed snapshot", async () => {
@@ -203,10 +302,39 @@ test("explicit strategy, whole-lot allocation, CSV import, and acceptance publis
   assert.equal(harness.storage.sellerSafetyLedger.strategies[0].snapshots.length, 1);
   assert.equal(harness.storage.selectedStrategyId, harness.storage.sellerSafetyLedger.strategies[0].id);
   assert.equal(harness.storage.sellerSafetyView.canPublish, true);
+  assert.equal(harness.storage.sellerSafetyPending, null);
+  assert.equal(typeof harness.storage.sellerSafetyView.candidateId, "string");
+  assert.equal(typeof harness.storage.sellerSafetyLedger.strategies[0].snapshots[0].candidateId, "string");
+  assert.equal(harness.storage.sellerSafetyView.candidateId, harness.storage.sellerSafetyLedger.strategies[0].snapshots[0].candidateId);
   assert.equal(harness.storage.sellerSafetyView.currentRisk.lower, "24,200.00");
   assert.equal(harness.storage.sellerSafetyView.wholeTrade.lower, "24,210.00");
   assert.equal(harness.storage.sellerSafetyView.wholeTrade.status, "EXCLUDING CHARGES");
   assert.match(harness.nodes.get("import-summary").textContent, /1 fill imported/i);
+});
+
+test("stored accepted numbers survive while stale broker label is rebuilt", async () => {
+  const harness = popupHarness(acceptedStorage(), {
+    Date: fixedDate("2026-08-01T09:31:00+05:30"),
+    brokerStatus: { configured: true, connected: true, expiresAt: "2026-08-01T06:00:00.000Z" }
+  });
+  await settle();
+
+  assert.equal(harness.nodes.get("current-lower").textContent, "23,900.00");
+  assert.match(harness.nodes.get("broker-line").textContent, /ZERODHA STALE/);
+  assert.doesNotMatch(harness.nodes.get("broker-line").textContent, /CONNECTED · TODAY/);
+});
+
+test("stored accepted numbers survive while disconnected broker action is rebuilt", async () => {
+  const storage = acceptedStorage({ acceptedAt: "2026-08-01T09:25:00+05:30" });
+  const harness = popupHarness(storage, {
+    Date: fixedDate("2026-08-01T09:30:00+05:30"),
+    brokerStatus: { configured: true, connected: false, expiresAt: null }
+  });
+  await settle();
+
+  assert.equal(harness.nodes.get("current-lower").textContent, "23,900.00");
+  assert.match(harness.nodes.get("broker-line").textContent, /DISCONNECTED/);
+  assert.equal(harness.nodes.get("connect-zerodha").hidden, false);
 });
 
 test("connect action opens only bridge-provided official login URL", async () => {
