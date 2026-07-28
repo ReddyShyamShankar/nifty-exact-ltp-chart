@@ -10,6 +10,9 @@
     "INVALID INPUT",
     "RISK INPUT INVALID"
   ]);
+  const LANE_ZERO_TOKEN_WIDTH_PX = 220;
+  const RISK_LABEL_GAP_PX = 12;
+  const LABEL_CLEARANCE_PX = LANE_ZERO_TOKEN_WIDTH_PX + RISK_LABEL_GAP_PX;
 
   function empty(status) {
     return { status, lines: [], bands: [] };
@@ -60,6 +63,18 @@
     return Math.sign(second - first);
   }
 
+  function decodeBandEndpoint(endpoint) {
+    if (typeof endpoint === "number" && Number.isFinite(endpoint)) return { ok: true, value: endpoint };
+    if (endpoint
+      && typeof endpoint === "object"
+      && !Array.isArray(endpoint)
+      && Object.keys(endpoint).length === 1
+      && endpoint.unbounded === "right") {
+      return { ok: true, value: Infinity };
+    }
+    return { ok: false, value: null };
+  }
+
   function boundaryY(value, toY, rect, direction) {
     if (value === Infinity) return direction > 0 ? rect.bottom : rect.top;
     if (value === -Infinity) return direction > 0 ? rect.top : rect.bottom;
@@ -68,11 +83,13 @@
   }
 
   function buildBand(layer, band, toY, rect, direction) {
-    const from = Number(band?.from);
-    const to = Number(band?.to);
+    const decodedFrom = decodeBandEndpoint(band?.from);
+    const decodedTo = decodeBandEndpoint(band?.to);
+    const from = decodedFrom.value;
+    const to = decodedTo.value;
     if (!["profit", "loss", "flat"].includes(band?.kind)
-      || Number.isNaN(from)
-      || Number.isNaN(to)
+      || !decodedFrom.ok
+      || !decodedTo.ok
       || from >= to) return null;
     const firstY = boundaryY(from, toY, rect, direction);
     const secondY = boundaryY(to, toY, rect, direction);
@@ -96,23 +113,27 @@
     const lineStyle = layer === "current"
       ? { stroke: "mint", dash: "solid", prefix: "CURRENT" }
       : { stroke: "graphite", dash: "dashed", prefix: "WHOLE" };
-    const labelX = Math.max(rect.left + 6, rect.right - 248);
+    const labelRight = rect.right - LABEL_CLEARANCE_PX;
     const lines = roots.map((price, index) => ({
       layer,
       price,
       y: yValues[index],
       left: rect.left,
       right: rect.right,
-      labelX,
+      labelAnchor: "right",
+      labelClearance: LABEL_CLEARANCE_PX,
+      labelRight,
       label: `${lineStyle.prefix} BE ${index + 1} · ${formatPrice(price)}`,
       stroke: lineStyle.stroke,
       dash: lineStyle.dash
     })).filter((line) => line.y >= rect.top && line.y <= rect.bottom);
 
-    const sourceBands = typeof map.bands === "undefined" ? [] : map.bands;
-    if (!Array.isArray(sourceBands)) return { blocked: true, lines: [], bands: [] };
-    const direction = axisDirection(toY, roots.concat(sourceBands.flatMap((band) => [Number(band?.from), Number(band?.to)])));
-    if (sourceBands.length && direction === null) return { blocked: true, lines: [], bands: [] };
+    const sourceBands = map.bands;
+    if (!Array.isArray(sourceBands) || !sourceBands.length) return { blocked: true, lines: [], bands: [] };
+    const decodedBoundaries = sourceBands.flatMap((band) => [decodeBandEndpoint(band?.from), decodeBandEndpoint(band?.to)]);
+    if (decodedBoundaries.some((boundary) => !boundary.ok)) return { blocked: true, lines: [], bands: [] };
+    const direction = axisDirection(toY, roots.concat(decodedBoundaries.map((boundary) => boundary.value)));
+    if (direction === null) return { blocked: true, lines: [], bands: [] };
     const builtBands = sourceBands.map((band) => buildBand(layer, band, toY, rect, direction));
     if (builtBands.some((band) => band === null)) return { blocked: true, lines: [], bands: [] };
     return { blocked: false, lines, bands: builtBands.filter(Boolean) };
@@ -121,6 +142,7 @@
   function buildRiskLayers(view, toY, plotRect) {
     const rect = finiteRect(plotRect);
     if (!view || typeof toY !== "function" || !rect) return empty("PLACEMENT_UNAVAILABLE");
+    if (rect.right - LABEL_CLEARANCE_PX <= rect.left) return empty("LABEL_SPACE_UNAVAILABLE");
     const viewState = view?.broker?.kind === "stale"
       ? "STALE"
       : normalizedState(view.state || view.priority?.label);

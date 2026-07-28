@@ -6,7 +6,9 @@ const overlay = require("./risk-overlay.js");
 const PLOT = { left: 100, top: 20, right: 900, bottom: 620 };
 const EXPIRY = "2026-08-25";
 
-function riskMap({ status = "OK", breakevens = [], bands = [] } = {}) {
+const RIGHT_TAIL = Object.freeze({ unbounded: "right" });
+
+function riskMap({ status = "OK", breakevens = [], bands = [{ kind: "profit", from: 0, to: RIGHT_TAIL }] } = {}) {
   return { status, breakevens, bands };
 }
 
@@ -23,7 +25,7 @@ function acceptedView(overrides = {}) {
       bands: [
         { kind: "profit", from: 0, to: 23100 },
         { kind: "loss", from: 23100, to: 23200 },
-        { kind: "profit", from: 23200, to: Infinity }
+        { kind: "profit", from: 23200, to: RIGHT_TAIL }
       ]
     }),
     wholeTradeRisk: riskMap({ breakevens: [23080, 23220] }),
@@ -44,7 +46,7 @@ test("current roots use supplied exact-axis y and solid mint presentation", () =
   assert.deepEqual(current.map((line) => line.label), ["CURRENT BE 1 · 23,100.00", "CURRENT BE 2 · 23,200.00"]);
 });
 
-test("whole-trade roots are dashed graphite and every root receives a compact label", () => {
+test("whole-trade roots are dashed graphite and every label right edge clears lane-zero token", () => {
   const view = acceptedView({
     wholeTradeRisk: riskMap({ breakevens: [23050, 23150, 23250] })
   });
@@ -61,7 +63,9 @@ test("whole-trade roots are dashed graphite and every root receives a compact la
     "WHOLE BE 2 · 23,150.00",
     "WHOLE BE 3 · 23,250.00"
   ]);
-  assert.ok(whole.every((line) => line.labelX <= PLOT.right - 236));
+  assert.ok(whole.every((line) => line.labelAnchor === "right"));
+  assert.ok(whole.every((line) => line.labelRight + line.labelClearance === PLOT.right));
+  assert.ok(whole.every((line) => line.labelRight <= PLOT.right - 220));
 });
 
 test("multiple profitable intervals become clipped plot bands", () => {
@@ -139,7 +143,7 @@ test("non-finite roots fail closed by affected layer", () => {
   assert.equal(result.bands.some((band) => band.layer === "current"), false);
 });
 
-test("accepted Task 4 persisted view maps render without trusting formatted display numbers", () => {
+test("missing persisted bands fail closed instead of blessing zero bands", () => {
   const task4View = {
     strategyId: "aug-seller",
     activeStrategyId: "aug-seller",
@@ -151,14 +155,56 @@ test("accepted Task 4 persisted view maps render without trusting formatted disp
     currentRisk: { lower: "23,100.00", upper: "23,200.00" },
     wholeTrade: { lower: "23,080.00", upper: "23,220.00", status: "OK" },
     maps: {
-      current: riskMap({ breakevens: [23100, 23200] }),
-      wholeTrade: riskMap({ breakevens: [23080, 23220] })
+      current: { status: "OK", breakevens: [23100, 23200] },
+      wholeTrade: { status: "OK", breakevens: [23080, 23220] }
     }
   };
   const result = overlay.buildRiskLayers(task4View, (price) => price - 23000, PLOT);
 
-  assert.equal(result.status, "OK");
-  assert.deepEqual(result.lines.map((line) => line.price), [23100, 23200, 23080, 23220]);
+  assert.deepEqual(result.lines, []);
+  assert.deepEqual(result.bands, []);
+});
+
+test("band endpoints reject coercible and unsupported values by affected layer", () => {
+  const malformed = [
+    null,
+    "",
+    "23100",
+    NaN,
+    Infinity,
+    -Infinity,
+    false,
+    true,
+    [],
+    {},
+    { unbounded: "left" },
+    { unbounded: "right", extra: true }
+  ];
+
+  for (const endpoint of malformed) {
+    for (const field of ["from", "to"]) {
+      const band = { kind: "profit", from: 23000, to: 23100, [field]: endpoint };
+      const result = overlay.buildRiskLayers(acceptedView({
+        currentRisk: riskMap({ breakevens: [23100], bands: [band] })
+      }), (price) => price - 23000, PLOT);
+      assert.equal(result.status, "PARTIAL", `${field}=${JSON.stringify(endpoint)}`);
+      assert.deepEqual([...new Set(result.lines.map((line) => line.layer))], ["whole-trade"]);
+      assert.equal(result.bands.some((candidate) => candidate.layer === "current"), false);
+    }
+  }
+});
+
+test("band endpoints require both explicit boundaries", () => {
+  for (const band of [
+    { kind: "profit", to: 23100 },
+    { kind: "profit", from: 23000 }
+  ]) {
+    const result = overlay.buildRiskLayers(acceptedView({
+      currentRisk: riskMap({ breakevens: [23100], bands: [band] })
+    }), (price) => price - 23000, PLOT);
+    assert.equal(result.status, "PARTIAL");
+    assert.deepEqual([...new Set(result.lines.map((line) => line.layer))], ["whole-trade"]);
+  }
 });
 
 test("redraw is pure and performs no network request", () => {

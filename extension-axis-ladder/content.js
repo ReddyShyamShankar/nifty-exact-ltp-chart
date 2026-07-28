@@ -742,7 +742,7 @@
       element.style.width = `${line.right - line.left}px`;
       const label = document.createElement("span");
       label.className = "nifty-seller-risk__label";
-      label.style.left = `${line.labelX - line.left}px`;
+      label.style.left = `${line.labelRight - line.left}px`;
       label.textContent = line.label;
       element.append(label);
       node.append(element);

@@ -149,13 +149,25 @@
 
   function snapshotMap(map) {
     if (!map) return null;
+    const bands = Array.isArray(map.bands) ? map.bands.map((band) => ({
+      kind: band.kind,
+      from: snapshotBandEndpoint(band.from),
+      to: snapshotBandEndpoint(band.to)
+    })) : [];
     return {
       status: map.status,
       breakevens: Array.isArray(map.breakevens) ? map.breakevens.slice() : [],
+      bands,
       maxProfit: map.maxProfit === Infinity ? "UNBOUNDED" : map.maxProfit,
       maxLoss: map.maxLoss === -Infinity ? "UNBOUNDED" : map.maxLoss,
       upsideUnbounded: Boolean(map.upsideUnbounded)
     };
+  }
+
+  function snapshotBandEndpoint(value) {
+    if (finite(value)) return value;
+    if (value === Infinity) return { unbounded: "right" };
+    throw new Error("Risk band endpoint is not storage-safe.");
   }
 
   function buildView({ ledger: sourceLedger, selectedStrategyId, brokerStatus, chain, now }) {

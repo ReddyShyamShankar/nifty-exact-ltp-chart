@@ -1444,6 +1444,14 @@ test("chart ladder uses popup design tokens with compact centered labels", () =>
   assert.doesNotMatch(css, /#ff9f0a|rgba\(66,\s*71,\s*82/);
 });
 
+test("risk labels wire the cleared right edge and translate their full width left", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(source, /label\.style\.left = `\$\{line\.labelRight - line\.left\}px`/);
+  assert.doesNotMatch(source, /line\.labelX/);
+  assert.match(css, /\.nifty-seller-risk__label\s*\{[\s\S]*?transform:\s*translateX\(-100%\)/);
+});
+
 test("every non-axis lane draws a full connector back to the exact right-axis anchor", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");

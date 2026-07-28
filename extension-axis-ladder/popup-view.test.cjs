@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const popupView = require("./popup-view.js");
+const riskOverlay = require("./risk-overlay.js");
 
 function acceptedLedger() {
   return {
@@ -102,6 +103,29 @@ test("builds display-ready accepted current and whole-trade risk summary", () =>
   assert.match(view.warning, /unbounded/i);
   assert.deepEqual(view.legs.map((leg) => leg.label), ["-1 × 24,100 CE", "-1 × 24,100 PE"]);
   assert.equal(view.timeline.length, 1);
+});
+
+test("accepted popup map survives JSON storage and renders current and whole-trade bands", () => {
+  const stored = JSON.parse(JSON.stringify(build()));
+
+  assert.deepEqual(stored.maps.current.bands.map((band) => band.kind), ["loss", "profit", "loss"]);
+  assert.deepEqual(stored.maps.wholeTrade.bands.map((band) => band.kind), ["loss", "profit", "loss"]);
+  assert.deepEqual(stored.maps.current.bands.at(-1).to, { unbounded: "right" });
+  assert.deepEqual(stored.maps.wholeTrade.bands.at(-1).to, { unbounded: "right" });
+
+  const layers = riskOverlay.buildRiskLayers({
+    ...stored,
+    activeStrategyId: "aug-seller",
+    activeExpiry: "2026-08-25"
+  }, (price) => 700 - (price - 23800), { left: 100, top: 20, right: 900, bottom: 700 });
+
+  assert.equal(layers.status, "OK");
+  assert.deepEqual(layers.bands.filter((band) => band.layer === "current").map((band) => band.kind), ["loss", "profit", "loss"]);
+  assert.deepEqual(layers.bands.filter((band) => band.layer === "whole-trade").map((band) => band.kind), ["loss", "profit", "loss"]);
+  const currentRightTail = layers.bands.filter((band) => band.layer === "current").at(-1);
+  assert.equal(currentRightTail.to, Infinity);
+  assert.equal(currentRightTail.top, 20);
+  assert.equal(currentRightTail.bottom, 180);
 });
 
 test("fails closed while any broker position still needs reviewed allocation", () => {
