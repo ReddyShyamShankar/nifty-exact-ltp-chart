@@ -718,6 +718,7 @@ test("release artifacts preserve the workflow in the side panel at version 0.4.1
 
 test("operator docs define setup, daily review, map semantics, stale behavior, and no-order limits", () => {
   const extensionReadme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+  const rootReadme = fs.readFileSync(path.join(__dirname, "../README.md"), "utf8");
   const bridgeReadme = fs.readFileSync(path.join(__dirname, "../data-bridge/README.md"), "utf8");
 
   assert.match(bridgeReadme, /http:\/\/127\.0\.0\.1:8787\/api\/zerodha\/callback/);
@@ -730,6 +731,11 @@ test("operator docs define setup, daily review, map semantics, stale behavior, a
   assert.match(extensionReadme, /weekly[\s\S]*exact expiry/i);
   assert.match(extensionReadme, /REFRESH FAILED[\s\S]*immediately[\s\S]*hides/i);
   assert.match(extensionReadme, /strategy selector[\s\S]*without another refresh/i);
+  assert.match(extensionReadme, /side panel[\s\S]*TradingView-only/i);
+  assert.match(extensionReadme, /switching tabs[\s\S]*closes/i);
+  assert.match(extensionReadme, /click[\s\S]*NIFTY[\s\S]*extension icon/i);
+  assert.match(extensionReadme, /full[- ]height[\s\S]*same (UI|design)/i);
+  assert.doesNotMatch(`${rootReadme}\n${extensionReadme}`, /popup opens|popup open/i);
   assert.match(extensionReadme, /manual[\s\S]*strategy[\s\S]*allocation[\s\S]*review/i);
   assert.match(extensionReadme, /current[\s\S]*solid/i);
   assert.match(extensionReadme, /whole-trade[\s\S]*dashed/i);

@@ -11,7 +11,15 @@ Upstox exact-expiry option chain ──────┘
 Zerodha tradebook CSV ─ staged historical evidence ─ explicit quantity ownership
 ```
 
-One press of **REFRESH ALL** makes at most one positions request, one trades request, and one option-chain request. Popup open, strategy switching, timeframe changes, zoom, and pan make no account or market request. A failed refresh immediately hides chart risk while keeping the last accepted evidence available in the popup.
+One press of **REFRESH ALL** makes at most one positions request, one trades request, and one option-chain request. Side-panel open, strategy switching, timeframe changes, zoom, and pan make no account or market request. A failed refresh immediately hides chart risk while keeping the last accepted evidence available in the side panel.
+
+## Side-panel workflow
+
+- Click the pinned NIFTY extension icon on a TradingView tab to open the full-height side panel.
+- The side panel is TradingView-only and uses the same seller-safety UI as version 0.4.0.
+- Switching tabs closes the panel. Click the NIFTY icon again when returning to a chart.
+- Opening, closing, or resizing the panel makes no broker or option-chain request.
+- Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
 
 ## Setup
 
