@@ -3,13 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NIFTY Options</title>
+    <title>Options Ladder</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
-        <div class="brand"><span class="mark" aria-hidden="true"></span><span>NIFTY OPTIONS</span></div>
+        <div class="quick-toggle">
+          <div><strong>Show ladder on chart</strong><span class="mono">13 exact contracts</span></div>
+          <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show ladder on chart"><i></i></button>
+        </div>
         <button class="header-refresh mono" id="refresh-all" type="button">
           <span class="refresh-glyph" aria-hidden="true"></span><span id="refresh-label">REFRESH ALL</span>
         </button>
@@ -26,7 +29,7 @@
         </label>
       </section>
 
-      <section class="strategy-bar" aria-label="Accepted strategy view">
+      <section class="strategy-bar" id="strategy-bar" aria-label="Accepted strategy view" hidden>
         <label class="field-label" for="selected-strategy">Selected strategy</label>
         <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
       </section>
@@ -92,10 +95,6 @@
         <span>ADVANCED · PLACEMENT &amp; HEALTH</span><span aria-hidden="true">›</span>
       </button>
       <section class="advanced-panel" id="advanced-panel" hidden>
-        <div class="advanced-row">
-          <div><strong>Show ladder on chart</strong><span>13 strikes · exact axis</span></div>
-          <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show on chart"><i></i></button>
-        </div>
         <button class="secondary-button wide mono" id="retry-placement" type="button">RETRY PLACEMENT</button>
       </section>
 

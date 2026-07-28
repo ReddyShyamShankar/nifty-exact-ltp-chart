@@ -5,14 +5,15 @@ const path = require("node:path");
 const manifest = require("./manifest.json");
 
 test("new extension has independent identity", () => {
-  assert.equal(manifest.name, "NIFTY Axis LTP Ladder");
-  assert.equal(manifest.version, "0.4.1");
+  assert.equal(manifest.name, "Options Ladder");
+  assert.equal(manifest.version, "0.4.2");
   assert.equal(manifest.minimum_chrome_version, "141");
   assert.equal(manifest.permissions.includes("debugger"), true);
   assert.equal(manifest.permissions.includes("sidePanel"), true);
   assert.deepEqual(manifest.side_panel, { default_path: "popup.html" });
   assert.equal(Object.hasOwn(manifest.action, "default_popup"), false);
   assert.equal(Object.hasOwn(manifest.action, "default_state"), false);
+  assert.equal(manifest.action.default_title, "Options Ladder");
 });
 
 test("extension card and toolbar use popup-matching green status mark", () => {

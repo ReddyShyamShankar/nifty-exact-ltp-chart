@@ -1,18 +1,18 @@
 :root {
-  --bg: #0a0a0a;
-  --panel: #111315;
-  --panel-2: #15181b;
-  --line: #202428;
-  --line-2: #2c3238;
-  --ink: #f4f4f5;
-  --ink-dim: #a1a1aa;
-  --ink-mute: #71717a;
+  --bg: #f6f7f8;
+  --panel: #ffffff;
+  --panel-2: #f0f2f4;
+  --line: #e5e7eb;
+  --line-2: #cfd4da;
+  --ink: #15191e;
+  --ink-dim: #4b5563;
+  --ink-mute: #6b7280;
   --accent: #34d399;
   --accent-dark: #063d2d;
   --accent-soft: rgba(52, 211, 153, 0.11);
-  --danger: #f87171;
-  --danger-soft: rgba(248, 113, 113, 0.09);
-  --warn: #fbbf24;
+  --danger: #c24141;
+  --danger-soft: #fff4f4;
+  --warn: #a65f00;
   --radius: 4px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -33,7 +33,7 @@ body {
 button, select, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: wait; opacity: .55; }
-select, input { color-scheme: dark; }
+select, input { color-scheme: light; }
 .mono, select { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-feature-settings: "tnum", "zero"; }
 .shell { min-height: 100%; padding-bottom: 1px; }
 
@@ -41,22 +41,22 @@ select, input { color-scheme: dark; }
   position: sticky;
   z-index: 10;
   top: 0;
-  min-height: 58px;
-  padding: 8px 10px 8px 16px;
+  padding: 10px 14px;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   border-bottom: 1px solid var(--line);
-  background: rgba(10, 10, 10, .97);
+  background: rgba(255, 255, 255, .96);
   backdrop-filter: blur(12px);
 }
-.brand { display: flex; align-items: center; gap: 9px; font-size: 11px; font-weight: 700; letter-spacing: .05em; white-space: nowrap; }
-.mark { width: 18px; height: 18px; border: 1px solid rgba(52, 211, 153, .35); border-radius: var(--radius); background: var(--accent-soft); display: grid; place-items: center; }
-.mark::after { content: ""; width: 7px; height: 7px; background: var(--accent); border-radius: 2px; box-shadow: 0 0 10px rgba(52, 211, 153, .6); }
+.quick-toggle { width: 100%; min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.quick-toggle strong, .quick-toggle span { display: block; }
+.quick-toggle strong { font-size: 10px; }
+.quick-toggle span { margin-top: 1px; color: var(--ink-mute); font-size: 8px; }
 .header-refresh {
-  width: 154px;
-  min-height: 42px;
+  width: 100%;
+  min-height: 38px;
   padding: 0 14px;
   border: 0;
   border-radius: var(--radius);
@@ -109,7 +109,7 @@ select, input { color-scheme: dark; }
 .section-heading { margin-bottom: 11px; color: var(--danger); font-size: 9px; font-weight: 800; letter-spacing: .08em; }
 .field-label { display: block; margin: 10px 0 5px; color: var(--ink-mute); font: 8px "Geist Mono", ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; }
 .inline-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-input, #selected-strategy, .trade-review-row select { min-width: 0; min-height: 38px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 0; outline: 0; background: var(--bg); color: var(--ink); font-size: 10px; }
+input, #selected-strategy, .trade-review-row select { min-width: 0; min-height: 38px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 0; outline: 0; background: var(--panel); color: var(--ink); font-size: 10px; }
 input:focus, #selected-strategy:focus, .trade-review-row select:focus { border-color: var(--accent); }
 .secondary-button { min-height: 38px; padding: 0 12px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--ink-dim); font-size: 8px; font-weight: 700; letter-spacing: .07em; }
 .secondary-button:hover { border-color: rgba(52, 211, 153, .45); color: var(--ink); }

@@ -9,16 +9,17 @@ const content = require("./content.js");
 
 const read = (name) => fs.readFileSync(path.join(__dirname, name), "utf8");
 
-test("popup keeps refresh immediate, preserves approved glyph, and removes full-chain UI", () => {
+test("popup keeps chart toggle and refresh immediate, preserves approved glyph, and removes redundant branding", () => {
   const html = read("popup.html");
   const js = read("popup.js");
 
+  assert.ok(html.indexOf('id="enabled"') < html.indexOf('id="refresh-all"'), "chart toggle precedes REFRESH ALL");
   assert.ok(html.indexOf('id="refresh-all"') < html.indexOf('id="risk-summary"'), "REFRESH ALL precedes risk content");
   assert.match(html, /class="header-refresh mono" id="refresh-all"/);
   assert.match(html, /class="refresh-glyph"/);
   assert.doesNotMatch(html, /class="refresh-icon"/);
   assert.match(html, />REFRESH ALL</);
-  assert.ok(html.indexOf('id="selected-strategy"') < html.indexOf('id="review-panel"'), "strategy selector stays visible outside review panel");
+  assert.doesNotMatch(html, />NIFTY OPTIONS</);
   assert.match(html, /id="coverage-from"/);
   assert.match(html, /id="coverage-to"/);
   assert.match(html, /id="confirm-coverage"/);
@@ -34,6 +35,14 @@ test("popup loads pure seller scripts before browser orchestration", () => {
   const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map((match) => match[1]);
 
   assert.deepEqual(scripts, ["seller-view-identity.js", "seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js", "popup.js"]);
+});
+
+test("side panel uses light controls without forcing dark native fields", () => {
+  const css = read("popup.css");
+
+  assert.match(css, /--bg:\s*#f6f7f8/);
+  assert.match(css, /--panel:\s*#ffffff/);
+  assert.doesNotMatch(css, /color-scheme:\s*dark/);
 });
 
 test("content still accepts exact-axis placement retry", () => {
@@ -255,7 +264,7 @@ function popupHarness(initialStorage = {}, options = {}) {
     "refresh-all", "refresh-label", "expiry", "expiry-hint", "broker-line", "connect-zerodha",
     "risk-summary", "priority-label", "current-lower", "current-upper", "whole-lower", "whole-upper",
     "whole-status", "live-pnl", "max-profit", "max-loss", "why-moved", "warning", "placement-status",
-    "review-panel", "strategy-name", "create-strategy", "selected-strategy", "allocation-list", "allocate-lots",
+    "review-panel", "strategy-name", "create-strategy", "strategy-bar", "selected-strategy", "allocation-list", "allocate-lots",
     "trade-review-list", "assign-trades",
     "tradebook-csv", "import-summary", "coverage-from", "coverage-to", "confirm-coverage", "accept-snapshot", "legs-toggle", "legs-panel", "legs-list",
     "timeline-toggle", "timeline-panel", "timeline-list", "advanced-toggle", "advanced-panel", "enabled",
@@ -356,6 +365,26 @@ test("initialization reads health, expiries, and Zerodha status without seller r
   assert.equal(harness.requests.filter((url) => url.includes("/api/nifty-expiries")).length, 1);
   assert.equal(harness.requests.filter((url) => url.includes("/api/zerodha/status")).length, 1);
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 0);
+});
+
+test("strategy selector stays hidden until at least one strategy exists", async () => {
+  const empty = popupHarness();
+  await settle();
+  assert.equal(empty.nodes.get("strategy-bar").hidden, true);
+
+  const populated = popupHarness(acceptedStorage());
+  await settle();
+  assert.equal(populated.nodes.get("strategy-bar").hidden, false);
+});
+
+test("blank risk card stays hidden until a strategy exists", async () => {
+  const empty = popupHarness();
+  await settle();
+  assert.equal(empty.nodes.get("risk-summary").hidden, true);
+
+  const populated = popupHarness(acceptedStorage());
+  await settle();
+  assert.equal(populated.nodes.get("risk-summary").hidden, false);
 });
 
 test("one primary press requests one coordinated refresh and withholds changed map", async () => {

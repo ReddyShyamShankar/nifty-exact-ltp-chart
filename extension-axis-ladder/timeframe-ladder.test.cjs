@@ -126,3 +126,20 @@ test("exact 13-strike selection fails closed when no complete symmetric range ex
   const rows = Array.from({ length: 12 }, (_, index) => ({ strike: 23500 + index * 50 }));
   assert.equal(api.selectExactThirteen(rows, 23767.45, 500), null);
 });
+
+test("far expiry falls back to thirteen nearest exact contracts when strikes are sparse", () => {
+  const strikes = [
+    16000, 16500, 18000, 19000, 19500, 20000, 21000, 22000, 22500, 23000,
+    24000, 25000, 25500, 26000, 27000, 28000, 28500, 29000, 30000, 31500
+  ];
+  const rows = strikes.map((strike) => ({ strike, call: strike / 100, put: strike / 200 }));
+
+  const selection = api.selectExactThirteen(rows, 23985.35, 50);
+
+  assert.equal(selection.center, 24000);
+  assert.equal(selection.interval, 500);
+  assert.deepEqual(selection.rows.map((row) => Number(row.strike)), [
+    19500, 20000, 21000, 22000, 22500, 23000, 24000,
+    25000, 25500, 26000, 27000, 28000, 28500
+  ]);
+});

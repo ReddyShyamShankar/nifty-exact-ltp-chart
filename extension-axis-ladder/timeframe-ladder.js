@@ -88,6 +88,34 @@
     return Array.from({ length: 13 }, (_, index) => strike + (index - 6) * step);
   }
 
+  function greatestCommonDivisor(left, right) {
+    let a = Math.abs(Math.round(Number(left)));
+    let b = Math.abs(Math.round(Number(right)));
+    while (b) [a, b] = [b, a % b];
+    return a;
+  }
+
+  function nearestExactThirteen(byStrike, center, atmStep) {
+    const strikes = Array.from(byStrike.keys()).sort((left, right) => left - right);
+    if (strikes.length < 13) return null;
+    const centerIndex = strikes.indexOf(center);
+    if (centerIndex < 0) return null;
+    const start = Math.max(0, Math.min(centerIndex - 6, strikes.length - 13));
+    const selected = strikes.slice(start, start + 13);
+    const interval = selected.reduce(
+      (value, strike) => greatestCommonDivisor(value, Math.abs(strike - center)),
+      0
+    );
+    const exactInterval = maxStrikeInterval(interval);
+    if (!exactInterval || !selected.includes(center)) return null;
+    return {
+      interval: exactInterval,
+      center,
+      atmStep,
+      rows: selected.map((strike) => byStrike.get(strike))
+    };
+  }
+
   function selectExactThirteen(rows, spot, preferredInterval, tieDirection = "up") {
     if (!Array.isArray(rows)) return null;
     const widestInterval = maxStrikeInterval(preferredInterval);
@@ -110,7 +138,7 @@
         rows: strikes.map((strike) => byStrike.get(strike))
       };
     }
-    return null;
+    return nearestExactThirteen(byStrike, center, atmStep);
   }
 
   const api = {

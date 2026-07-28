@@ -115,6 +115,7 @@ function renderDetailRows(container, rows, emptyLabel) {
 
 function renderStrategies() {
   const select = $("#selected-strategy");
+  $("#strategy-bar").hidden = ledger.strategies.length === 0;
   const options = [optionNode("", "Select strategy")].concat(ledger.strategies
     .map((strategy) => optionNode(strategy.id, `${strategy.name} · ${strategy.expiry}`)));
   select.replaceChildren(...options);
@@ -228,6 +229,7 @@ function renderView(view, { pending = false, preserveEvidence = false } = {}) {
   $("#connect-zerodha").hidden = !shown.broker.action;
   if (shown.broker.action) $("#connect-zerodha").textContent = shown.broker.action.label;
   renderStrategies();
+  $("#risk-summary").hidden = ledger.strategies.length === 0;
   renderAllocations(shown);
   renderTradeReviews(shown);
   $("#review-panel").hidden = !(pending || shown.reviewChanges.length || shown.tradeReviews?.length);

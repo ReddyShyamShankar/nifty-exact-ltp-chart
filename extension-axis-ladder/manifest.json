@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "minimum_chrome_version": "141",
-  "name": "NIFTY Axis LTP Ladder",
-  "version": "0.4.1",
+  "name": "Options Ladder",
+  "version": "0.4.2",
   "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
   "permissions": ["storage", "activeTab", "debugger", "sidePanel"],
   "host_permissions": [
@@ -20,7 +20,7 @@
     "128": "icons/nifty-mark-128.png"
   },
   "action": {
-    "default_title": "NIFTY Options",
+    "default_title": "Options Ladder",
     "default_icon": {
       "16": "icons/nifty-mark-16.png",
       "32": "icons/nifty-mark-32.png",
