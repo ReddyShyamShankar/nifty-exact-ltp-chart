@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 const TOKEN_URL = "https://api.kite.trade/session/token";
 const LOGIN_URL = "https://kite.zerodha.com/connect/login";
+export const ZERODHA_CALLBACK_FAILURE_MESSAGE = "Zerodha connection failed. Return to the extension and try again.";
 
 function nextSixIst(now) {
   const instant = now instanceof Date ? now : new Date(now);
@@ -111,7 +112,7 @@ export function createZerodhaSessionStore({
     }
     const body = await response.json().catch(() => ({}));
     if (!response.ok || typeof body.data?.access_token !== "string" || !body.data.access_token) {
-      throw sessionError(body.message || "Zerodha token exchange failed.", response.status || 502,
+      throw sessionError(ZERODHA_CALLBACK_FAILURE_MESSAGE, response.status || 502,
         response.status === 401 || response.status === 403 ? "auth" : "upstream");
     }
     const expiresAt = nextSixIst(now());

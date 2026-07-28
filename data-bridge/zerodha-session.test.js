@@ -77,6 +77,28 @@ test("exchanges request token with literal SHA-256 checksum and stores token unt
   });
 });
 
+test("token exchange failure preserves status and kind without carrying upstream secret text", async () => {
+  const secrets = memorySecrets({
+    [services.apiKey]: "public-key",
+    [services.apiSecret]: "private-secret"
+  });
+  const upstreamSecret = "request_token=request-secret checksum=checksum-secret access_token=token-secret api_secret=body-secret";
+  const store = createZerodhaSessionStore({
+    ...secrets,
+    services,
+    fetchImpl: async () => jsonResponse(403, { status: "error", message: upstreamSecret })
+  });
+
+  await assert.rejects(store.exchangeRequestToken("request-secret"), (error) => {
+    assert.equal(error.message, "Zerodha connection failed. Return to the extension and try again.");
+    assert.equal(error.status, 403);
+    assert.equal(error.kind, "auth");
+    assert.doesNotMatch(`${error.message} ${error.stack} ${Object.values(error).join(" ")}`, /request-secret|checksum-secret|token-secret|body-secret/);
+    assert.equal(Object.hasOwn(error, "body"), false);
+    return true;
+  });
+});
+
 test("expired credentials fail closed and unauthorized callback deletes only access token", async () => {
   const secrets = memorySecrets({
     [services.apiKey]: "public-key",

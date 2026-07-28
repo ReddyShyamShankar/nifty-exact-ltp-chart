@@ -76,6 +76,40 @@ test("serves Zerodha status, login URL, and callback without returning any token
   assert.doesNotMatch(JSON.stringify({ status, login, callback }), /one-time-token|daily-token|access.?token|api.?secret/i);
 });
 
+test("callback exposes one fixed failure while preserving status and kind without logging secrets", async (t) => {
+  const upstreamSecret = "request_token=request-secret checksum=checksum-secret access_token=token-secret api_secret=body-secret";
+  const error = Object.assign(new Error(upstreamSecret), {
+    status: 403,
+    kind: "auth",
+    body: { message: upstreamSecret },
+    requestToken: "request-secret",
+    checksum: "checksum-secret",
+    accessToken: "token-secret"
+  });
+  const logs = [];
+  t.mock.method(console, "error", (...values) => logs.push(values.join(" ")));
+  const server = await runningServer({
+    sessionStore: {
+      status: async () => ({}),
+      loginUrl: async () => "",
+      exchangeRequestToken: async () => { throw error; },
+      credentials: async () => ({})
+    }
+  });
+  t.after(() => close(server));
+
+  const response = await fetch(`${baseUrl(server)}/api/zerodha/callback?request_token=request-secret`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(payload, {
+    error: "Zerodha connection failed. Return to the extension and try again.",
+    kind: "auth"
+  });
+  assert.doesNotMatch(JSON.stringify(payload), /request-secret|checksum-secret|token-secret|body-secret|request_token|checksum|access_token|api_secret/);
+  assert.deepEqual(logs, []);
+});
+
 test("one seller refresh coordinates positions, trades, and chain exactly once", async (t) => {
   const calls = { positions: 0, trades: 0, chain: 0 };
   const server = await runningServer({

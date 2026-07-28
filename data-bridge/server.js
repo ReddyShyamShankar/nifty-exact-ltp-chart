@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAsyncCache } from "./chain-cache.js";
 import { createZerodhaClient } from "./zerodha-client.js";
-import { createZerodhaSessionStore } from "./zerodha-session.js";
+import { createZerodhaSessionStore, ZERODHA_CALLBACK_FAILURE_MESSAGE } from "./zerodha-session.js";
 import { normalizeNiftyPositions, normalizeNiftyTrades } from "./zerodha-normalize.js";
 
 const PORT = Number(process.env.NIFTY_BRIDGE_PORT || 8787);
@@ -329,7 +329,7 @@ export function createRequestHandler({
     try {
       respondJson(response, 200, await sessionStore.exchangeRequestToken(requestToken), null);
     } catch (error) {
-      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, null);
+      respondJson(response, error.status || 502, { error: ZERODHA_CALLBACK_FAILURE_MESSAGE, kind: error.kind || "upstream" }, null);
     }
     return;
   }
