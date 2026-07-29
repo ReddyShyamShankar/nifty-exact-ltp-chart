@@ -116,7 +116,7 @@
   }
 
   function rowModel({ liveRow, isAtm, entries = [], activeEntryId = null } = {}) {
-    const list = Array.isArray(entries) ? entries : [];
+    const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.strike === liveRow?.strike);
     const active = list.find((entry) => entry.id === activeEntryId) || null;
     if (!active) return {
       columns: [`C ${money(liveRow?.call)}`, `P ${money(liveRow?.put)}`, strikeLabel(liveRow?.strike)],

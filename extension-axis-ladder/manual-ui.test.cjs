@@ -73,15 +73,29 @@ test("editing keeps creation time and preview replaces only matching entry", () 
 
 test("row model shows one face and exact compact copy", () => {
   const model = ui.rowModel({ liveRow: row, isAtm: false,
-    entries: [{ id: "e1", direction: "SELL", optionType: "CALL", lots: 2, callSnapshot: 358, putSnapshot: 414.6 }], activeEntryId: "e1" });
+    entries: [{ id: "e1", strike: 24450, direction: "SELL", optionType: "CALL", lots: 2, callSnapshot: 358, putSnapshot: 414.6 }], activeEntryId: "e1" });
   assert.deepEqual(model.columns, ["C 358.00 ×2", "P 414.60", "24,450"]);
   assert.equal(model.className, "is-manual-entry is-sell");
   assert.equal(model.count, 1);
   assert.equal(model.visibleFaceCount, 1);
 });
 
+test("row model ignores mixed-strike entries for active face and count", () => {
+  const entries = [
+    { id: "same", strike: 24450, direction: "BUY", optionType: "PUT", lots: 2, callSnapshot: 223.4, putSnapshot: 409.8 },
+    { id: "other", strike: 24500, direction: "SELL", optionType: "CALL", lots: 9, callSnapshot: 999, putSnapshot: 1 }
+  ];
+  const unrelatedActive = ui.rowModel({ liveRow: row, isAtm: false, entries, activeEntryId: "other" });
+  const relatedActive = ui.rowModel({ liveRow: row, isAtm: false, entries, activeEntryId: "same" });
+  assert.deepEqual(unrelatedActive.columns, ["C 223.40", "P 409.80", "24,450"]);
+  assert.equal(unrelatedActive.className, "");
+  assert.equal(unrelatedActive.count, 1);
+  assert.deepEqual(relatedActive.columns, ["C 223.40", "P 409.80 ×2", "24,450"]);
+  assert.equal(relatedActive.count, 1);
+});
+
 test("live row remains one black or ATM face while count shows saved entries", () => {
-  const model = ui.rowModel({ liveRow: row, isAtm: true, entries: [{ id: "e1" }], activeEntryId: null });
+  const model = ui.rowModel({ liveRow: row, isAtm: true, entries: [{ id: "e1", strike: 24450 }], activeEntryId: null });
   assert.deepEqual(model.columns, ["C 223.40", "P 409.80", "24,450"]);
   assert.equal(model.className, "is-atm");
   assert.equal(model.count, 1);
@@ -102,7 +116,7 @@ test("renderRow replaces children with safe cells and optional count dot", () =>
   const document = fakeDocument();
   const element = document.createElement("div");
   element.append(document.createElement("i"));
-  ui.renderRow(document, element, { liveRow: row, isAtm: false, entries: [{ id: "e1" }], activeEntryId: null });
+  ui.renderRow(document, element, { liveRow: row, isAtm: false, entries: [{ id: "e1", strike: 24450 }], activeEntryId: null });
   assert.equal(element.children.length, 4);
   assert.deepEqual(element.children.slice(0, 3).map((child) => [child.className, child.textContent]), [
     ["nifty-axis-ladder__cell", "C 223.40"],

@@ -38,3 +38,22 @@ Implemented and self-reviewed. Commit contains only Task 4 UI module, tests, and
 ## Concerns
 
 None. Full suite passed with loopback listener permission.
+
+## Round 1/5 Fix
+
+`rowModel` now filters entries by exact `liveRow.strike` before selecting active face and count. Foreign-strike entries cannot render a snapshot face or count dot on another row.
+
+Added mixed-strike regression plus exact-strike fields to existing normalized-entry fixtures.
+
+Commands/output:
+
+```text
+$ node --test extension-axis-ladder/manual-ui.test.cjs
+# tests 9
+# pass 9
+# fail 0
+
+$ node --check extension-axis-ladder/manual-ui.js
+$ node --check extension-axis-ladder/manual-ui.test.cjs
+$ git diff --check
+```
