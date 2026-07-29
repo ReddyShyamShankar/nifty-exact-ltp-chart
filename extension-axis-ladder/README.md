@@ -1,87 +1,66 @@
-# NIFTY Seller Safety Map + Exact Axis Ladder
+# Options Ladder — Manual Strategy Builder
 
-Version 0.4.3 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain LTP Overlay v0.14.0 remains unchanged.
+Version 0.5.0 is a chart-first, manual NIFTY options planning candidate for TradingView. It builds same-expiry plans from explicit user entries and keeps entry snapshots separate from changing live option values.
 
-## Side-panel workflow
+## Manual strategy workflow
 
-- Click the pinned NIFTY extension icon on a TradingView tab to open the full-height side panel.
-- The side panel is TradingView-only and uses the same seller-safety UI as the version 0.4.0 baseline.
-- Switching tabs closes the panel. Click the NIFTY icon again when returning to a chart.
-- Opening, closing, or resizing the panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains the existing bridge-health, expiry-list, and Zerodha-status checks.
-- Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
+- Double-click any visible ladder row to add a manual Call or Put entry at that exact strike.
+- Use `CALL ▾` or `PUT ▾`, then choose Buy or Sell from that staged menu.
+- Set positive whole-number lots and an editable premium; the chosen live premium is only the starting value.
+- The count dot reports saved entries at that strike, not lots.
+- Live rows are black `#111315`, ATM live is orange `#ff9f0a`, Buy snapshots are green `#34d399`, and Sell snapshots are red `#f87171`.
+- With saved entries, single-click cycles newest-first through one snapshot at a time, then returns to live.
+- `PLAN BE` marks every exact price where the combined same-expiry payoff is zero after all saved Buy/Sell legs, premiums, strikes, and lots are combined. `PREVIEW BE` uses the valid unsaved draft before Add or Save.
+- A manual refresh changes live values only; saved snapshots remain unchanged.
+- Keyboard: `Shift+Enter` opens the focused row editor; `Enter` or `Space` keeps single-click behavior; `Escape` closes the editor or returns the row to live.
+- The manual-only builder does not import broker positions or tradebooks and cannot place, modify, or cancel orders.
 
-The full-height side panel retains the version 0.4.0 baseline UI design.
+Add or Save writes the exact-expiry plan to local extension storage. Remove deletes only the selected entry. Close, outside click, or `Escape` cancels an unsaved draft. Reload, timeframe changes, zoom, and pan rebuild saved plan rails from local snapshots and TradingView's validated native price axis.
 
-## What it does
+## Ladder and quick break-evens
 
-- Shows 13 exact contracts: six below ATM, ATM, six above ATM.
-- Row format: `C 266.60 | P 388.70 | 26,000`.
-- Anchors every row to its exact TradingView right-axis price coordinate.
-- Supports 1m, 5m, 15m, 1h, 4h, D, W, M, 3M, and 6M.
-- 1m uses stronger bounded price-scale fitting so all thirteen exact strikes remain visible.
-- Uses fixed timeframe spacing: 1m/5m/15m/1h = 50, 4h/D = 100, W = 250, M = 500, 3M = 1000, 6M = 2000.
-- Reads TradingView's native right-axis ticks only to map exact strike prices to screen coordinates.
-- Supports normal and inverted linear price scales. Nonlinear scales fail closed.
-- Chooses requested timeframe spacing when 13 exact contracts exist. Otherwise falls down in 50-point steps to widest complete exact range.
-- Uses only contracts at the requested strikes. Missing strikes never receive nearest-contract substitutions.
-- Fetches no positions, current-day trades, or option-chain data until **REFRESH ALL** is pressed.
-- Header **REFRESH ALL** stays immediately accessible when the side panel opens. One manual press makes at most one Zerodha positions call, one Zerodha current-day trades call, and one Upstox chain call.
-- The validated chain rows from that coordinated response are saved locally and sent to the chart ladder; the chart does not make a second chain request.
-- The side panel contains no full option-chain table. Option numbers remain on the chart ladder.
-- Manual refresh updates LTP values and recenters ATM when spot crosses the exact midpoint.
-- Side-panel open, timeframe changes, zoom, and pan reuse accepted local evidence and request no positions, trades, or chain data.
-- Upstream failures are not retried automatically.
-- Any positions, trades, chain, session, rate-limit, or malformed-response failure becomes **STALE · REFRESH FAILED** immediately and hides every chart risk layer. The side panel retains the last accepted operator evidence; there is no 15-minute grace period after a known failure.
-- Runs only on the NIFTY underlying chart; other TradingView tabs stay inert.
-- Preserves contract membership while zooming or panning; only screen positions change.
+The ladder shows 13 exact contracts: six below ATM, ATM, and six above. Row order stays `C <Call> | P <Put> | <strike>`, and every row stays anchored to its exact TradingView right-axis coordinate.
 
-## Seller Safety Map
+Click one ladder strike without saved entries to show independent single-leg expiry break-evens. CALL BE is strike plus displayed Call premium. PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both break-even rails. Manual refresh removes both break-even rails; click a strike again to calculate from refreshed numbers. These are independent single-leg expiry break-evens, not combined short-straddle break-evens.
 
-- Current-risk breakevens use the currently reviewed open positions and appear as solid mint lines.
-- Whole-trade breakevens include explicitly assigned imported fill history and appear as dashed graphite lines.
-- Profit and loss bands shade the payoff intervals between breakevens. Current-risk bands use solid shading; whole-trade profit and loss use visibly different directional hatch treatments. Bands are factual payoff regions, not recommendations.
-- **EXCLUDING CHARGES** means broker charges were unavailable and were not deducted.
-- **HISTORY GAP** or **HISTORY INCOMPLETE** means imported fill evidence does not fully cover the strategy. The affected whole-trade map is withheld instead of estimated.
-- A stale broker timestamp preserves the last accepted evidence in the side panel but hides chart risk layers until a successful reviewed refresh replaces it. The chart checks the 15-minute evidence deadline and Zerodha session expiry locally before every placement, automatically hiding at the earlier deadline without a network call. **REFRESH FAILED** immediately hides chart output as soon as a manual refresh fails.
-- New or changed positions preserve the last accepted evidence for operator inspection and enter **REVIEW POSITION CHANGES**. A separate withheld chart state hides the old map until the new positions are manually allocated and explicitly accepted.
-- A Zerodha tradebook CSV is staged as evidence only. Each per-fill quantity stays under **REVIEW TRADE OWNERSHIP** until the operator chooses a same-expiry strategy or explicitly leaves it unassigned. One fill can be split across multiple strategies by assigning part of its remaining quantity at a time. Import never assigns all rows to the selected strategy and never invents coverage through today.
-- Explicitly reviewed closed rolls, same-day round trips, opened/closed adjustments, and protection fills remain valid same-expiry history even when that contract is no longer open. Unrelated same-contract fills left unassigned cannot cancel owned history or change whole-trade payoff.
-- The operator confirms exact historical coverage bounds after every staged batch. Immutable successful daily checkpoints—including `trades=[]` days—extend only contiguous coverage. A missed interval becomes **HISTORY GAP**; no missing date is inferred.
-- Current-day Zerodha trades are immutable and deduplicated against imported history. Every new quantity still needs an explicit disposition before acceptance.
-- The always-visible strategy selector restores the accepted side-panel and chart view for each strategy without another refresh. Same-expiry and different-expiry strategies remain isolated; switching views does not delete another strategy’s accepted evidence.
-- Weekly contracts keep their exact expiry date in canonical identity. Same strike/right contracts such as 04 Aug and 11 Aug never collide or merge with a monthly contract.
-- **WHY IT MOVED** compares immutable accepted normalized inputs and reports factual lot, premium/debit, breakeven, band, protection, short-exposure, and per-leg contribution changes. It gives no advice.
+## Data and failure boundaries
 
-## Clicked-strike break-evens
-
-Click one ladder strike to show its independent single-leg Call and Put expiry break-evens on chart. Selected strike receives a solid yellow fill with dark text; it never uses an outline-only selection state. Each break-even label starts a dashed rail that runs right toward the price axis, without crossing the chart to the label's left. CALL BE is strike plus displayed Call premium; PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both break-even rails. Manual refresh removes both break-even rails; click a strike again to calculate from refreshed numbers. These are independent single-leg expiry break-evens, not combined short-straddle break-evens.
+- Plans are NIFTY-only and keyed by one exact expiry.
+- Live numbers change only after existing explicit manual refresh.
+- Saved premiums and captured Call/Put snapshots never update from refresh, side-panel activity, timeframe changes, zoom, pan, or reload.
+- Missing quotes, malformed local storage, unsupported timeframes, nonlinear scales, incomplete strike ranges, and invalid native-axis observations fail closed.
+- No automatic option refresh, bottom tray, full option-chain table, Greeks, probability, margin, or recommendation engine is added.
+- Chrome 141 or newer is required.
 
 ## TradingView status badge
 
-The TradingView-owned compact status badge is a cosmetic enhancement: LIVE receives a full green fill, while OFFLINE or disconnected receives a full red fill; both use white text. If TradingView changes or removes the exact badge DOM, the decorator leaves the page unchanged. Badge styling cannot block the ladder, manual refresh, or break-even rails.
+The TradingView-owned compact status badge is cosmetic. LIVE uses green; OFFLINE uses red; disconnected also uses red; both use white text. If TradingView changes or removes the badge DOM, styling leaves the page unchanged. Badge styling cannot block the ladder, manual refresh, or break-even rails.
 
-## Workflow
+## Load candidate
 
-1. Keep local NIFTY bridge running at `http://127.0.0.1:8787`.
-2. Open a logged-in TradingView NIFTY chart and select the exact expiry.
-3. Daily, press **CONNECT ZERODHA** and finish the Zerodha login, then press **REFRESH ALL** once.
-4. Import the relevant Zerodha tradebook CSV. Review the import summary: proven rows from another account, index, exchange, or expiry are counted as ignored; ambiguous rows reject the batch.
-5. For every staged or current-day fill, enter an explicit quantity and choose a same-expiry strategy or **Leave unassigned**. Repeat to split one fill across strategies.
-6. Enter and confirm the operator-reviewed **coverage bounds**. Daily successful checkpoints can extend that baseline; a missing checkpoint creates **HISTORY GAP**.
-7. Manually allocate changed whole lots, review the resulting map, and press **ACCEPT REVIEWED SNAPSHOT**.
-8. Use the strategy selector to restore any accepted strategy without another refresh. If needed, expand **ADVANCED · PLACEMENT & HEALTH** and enable the chart ladder.
+1. Open `chrome://extensions`.
+2. Enable Developer mode.
+3. Choose **Load unpacked** and select this `extension-axis-ladder` directory.
+4. Open a logged-in TradingView NIFTY chart, select one exact expiry, and use the existing explicit refresh to load option values.
 
-The side panel opens with **REFRESH ALL** beside the extension title. Expiry changes wait for the next manual refresh. Timeframe changes rebuild placement from cached data. Zoom and pan only remap the same strikes and accepted risk evidence to new screen positions.
+Existing Pine-sync extension v0.14.0 remains a separate untouched backup.
 
-No Pine symbol injection, Pine calibrator, manual center strike, screenshot capture, or accessibility-tree read is required. A short Chrome debugger gesture auto-fits price scale when exact rows are outside viewport, then detaches immediately. Use **RETRY PLACEMENT** only when TradingView finishes a slow layout change and automatic placement did not recover.
+## Existing read-only seller-safety baseline
 
-## Security and limits
+Click the pinned NIFTY extension icon on a TradingView tab to open the full-height side panel. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes it.
 
-- Extension never stores Upstox token.
-- Zerodha API secret and daily access token stay in the local bridge Keychain. They are never returned to or stored by the extension.
-- Tradebook rows, manual allocations, reviewed snapshots, and timeline remain in `chrome.storage.local`; no cloud upload occurs.
-- Seller Safety Map accepts only exact-expiry NFO NIFTY options. Old month-only stored identities fail closed for manual review and weekly identities are never merged.
-- Chrome debugger permission is used only for bounded trusted price-scale auto-fit; session detaches after every gesture.
-- Unsupported timeframes, nonlinear scales, incomplete 13-strike ranges, or unobservable native ticks fail closed and hide rows.
-- Broker integration is read-only. It can read positions and trades only: no-order placement, modification, cancellation, conversion, or exit is available.
-- Existing v0.14.0 backup remains untouched.
+Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
+
+The seller-safety baseline remains independent from manual plans:
+
+- A Zerodha tradebook CSV is staged as evidence. Every per-fill quantity stays under review, can be split across same-expiry strategies, or left explicitly unassigned.
+- Manual strategy allocation requires operator review before accepted seller-risk evidence can appear.
+- Confirmed coverage bounds advance only through successful daily checkpoints. A missing checkpoint creates **HISTORY GAP**.
+- Weekly contracts retain exact expiry identity and never merge with monthly contracts.
+- **REFRESH FAILED** immediately hides chart risk while preserving the last accepted evidence for review.
+- The strategy selector restores an accepted strategy without another refresh.
+- Current-risk boundaries use solid lines; whole-trade boundaries use dashed lines; profit and loss bands describe factual payoff regions.
+- **EXCLUDING CHARGES** means unavailable broker charges were not deducted.
+- Stale data preserves the last accepted evidence in the side panel but withholds chart risk until a successful refresh.
+
+This baseline is read-only with no-order placement, modification, cancellation, conversion, or exit capability. It does not own, import into, or modify manual strategy-builder entries.

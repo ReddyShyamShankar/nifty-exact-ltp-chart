@@ -6,7 +6,7 @@ const manifest = require("./manifest.json");
 
 test("new extension has independent identity", () => {
   assert.equal(manifest.name, "Options Ladder");
-  assert.equal(manifest.version, "0.4.3");
+  assert.equal(manifest.version, "0.5.0");
   assert.equal(manifest.minimum_chrome_version, "141");
   assert.equal(manifest.permissions.includes("debugger"), true);
   assert.equal(manifest.permissions.includes("sidePanel"), true);
@@ -32,7 +32,11 @@ test("extension card and toolbar use popup-matching green status mark", () => {
 
 test("manual modules load before content in dependency order", () => {
   const scripts = manifest.content_scripts.find((entry) => entry.js.includes("content.js")).js;
-  for (const file of ["manual-plan.js", "manual-payoff.js", "manual-interaction.js", "manual-ui.js"]) {
-    assert.ok(scripts.indexOf(file) < scripts.indexOf("content.js"), `${file} must load before content.js`);
-  }
+  assert.deepEqual(scripts.slice(-5), [
+    "manual-plan.js",
+    "manual-payoff.js",
+    "manual-interaction.js",
+    "manual-ui.js",
+    "content.js"
+  ]);
 });

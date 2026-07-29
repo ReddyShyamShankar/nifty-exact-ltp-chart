@@ -25,6 +25,15 @@
     return parsed === null ? "—" : parsed.toLocaleString("en-IN");
   }
 
+  function word(value) {
+    const text = String(value || "").toLowerCase();
+    return text ? `${text[0].toUpperCase()}${text.slice(1)}` : "Unknown";
+  }
+
+  function savedCountLabel(count) {
+    return `${count} saved ${count === 1 ? "entry" : "entries"}`;
+  }
+
   function createDraft({ expiry, row, entry } = {}) {
     const liveCall = snapshot(row?.call);
     const livePut = snapshot(row?.put);
@@ -122,14 +131,19 @@
       columns: [`C ${money(liveRow?.call)}`, `P ${money(liveRow?.put)}`, strikeLabel(liveRow?.strike)],
       className: isAtm ? "is-atm" : "",
       count: list.length,
+      tradedCellIndex: null,
+      accessibleName: `Call ${money(liveRow?.call)}, Put ${money(liveRow?.put)}, strike ${strikeLabel(liveRow?.strike)}, ${savedCountLabel(list.length)}`,
       visibleFaceCount: 1
     };
     const call = `C ${money(active.callSnapshot)}${active.optionType === "CALL" ? ` ×${active.lots}` : ""}`;
     const put = `P ${money(active.putSnapshot)}${active.optionType === "PUT" ? ` ×${active.lots}` : ""}`;
+    const activeIndex = list.findIndex((entry) => entry.id === active.id);
     return {
       columns: [call, put, strikeLabel(active.strike ?? liveRow?.strike)],
       className: `is-manual-entry is-${String(active.direction || "").toLowerCase()}`,
       count: list.length,
+      tradedCellIndex: active.optionType === "CALL" ? 0 : active.optionType === "PUT" ? 1 : null,
+      accessibleName: `${word(active.direction)} ${word(active.optionType)}, ${active.lots} ${active.lots === 1 ? "lot" : "lots"}, Call snapshot ${money(active.callSnapshot)}, Put snapshot ${money(active.putSnapshot)}, strike ${strikeLabel(active.strike ?? liveRow?.strike)}, saved entry ${activeIndex + 1} of ${list.length}`,
       visibleFaceCount: 1
     };
   }
@@ -151,9 +165,10 @@
     const model = rowModel(view);
     element.classList.remove("is-atm", "is-manual-entry", "is-buy", "is-sell");
     model.className.split(/\s+/).filter(Boolean).forEach((name) => element.classList.add(name));
-    const cells = model.columns.map((value) => {
+    const cells = model.columns.map((value, index) => {
       const cell = document.createElement("span");
       cell.className = "nifty-axis-ladder__cell";
+      if (index === model.tradedCellIndex) cell.classList.add("is-traded");
       cell.textContent = value;
       return cell;
     });
@@ -164,6 +179,7 @@
       cells.push(count);
     }
     element.replaceChildren(...cells);
+    element.setAttribute("aria-label", model.accessibleName);
     return element;
   }
 
@@ -219,11 +235,14 @@
     premium.className = "nifty-manual-editor__premium";
     premium.size = 6;
     premium.value = model.premium === "—" ? "" : model.premium;
+    premium.setAttribute("aria-label", "Premium");
     premium.addEventListener("change", () => invoke(handlers, ["setPremium", "onSetPremium", "premium"], number(premium.value)));
     const commit = button(model.commitLabel, "nifty-manual-editor__commit", () => invoke(handlers, ["save", "onSave", "commit"]));
     const controls = [call, put, decrement, lots, increment, premium, commit];
     if (model.canRemove) controls.push(button("REMOVE", "nifty-manual-editor__remove", () => invoke(handlers, ["remove", "onRemove"])));
-    controls.push(button("×", "nifty-manual-editor__close", () => invoke(handlers, ["close", "onClose"])));
+    const close = button("×", "nifty-manual-editor__close", () => invoke(handlers, ["close", "onClose"]));
+    close.setAttribute("aria-label", "Close editor");
+    controls.push(close);
     editor.append(...controls);
     return editor;
   }

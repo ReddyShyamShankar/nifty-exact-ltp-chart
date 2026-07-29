@@ -2,8 +2,12 @@
   --ladder-surface: #111315;
   --ladder-line: #2c3238;
   --ladder-ink: #f4f4f5;
-  --ladder-accent: #34d399;
-  --ladder-accent-dark: #063d2d;
+  --ladder-atm: #ff9f0a;
+  --ladder-atm-ink: #1b1d22;
+  --ladder-buy: #34d399;
+  --ladder-buy-ink: #063d2d;
+  --ladder-sell: #f87171;
+  --ladder-sell-ink: #1b1d22;
   --ladder-selected: #facc15;
   --ladder-selected-ink: #111315;
   position: fixed;
@@ -194,14 +198,59 @@
 }
 
 .nifty-axis-ladder__row.is-atm {
-  border-color: var(--ladder-accent);
-  background: var(--ladder-accent);
-  color: var(--ladder-accent-dark);
+  border-color: var(--ladder-atm);
+  background: var(--ladder-atm);
+  color: var(--ladder-atm-ink);
   font-weight: 800;
 }
 
 .nifty-axis-ladder__row.is-atm::after {
-  border-left-color: var(--ladder-accent);
+  border-left-color: var(--ladder-atm);
+}
+
+.nifty-axis-ladder__row.is-manual-entry.is-buy {
+  border-color: var(--ladder-buy);
+  background: var(--ladder-buy);
+  color: var(--ladder-buy-ink);
+}
+
+.nifty-axis-ladder__row.is-manual-entry.is-buy::after {
+  border-left-color: var(--ladder-buy);
+}
+
+.nifty-axis-ladder__row.is-manual-entry.is-sell {
+  border-color: var(--ladder-sell);
+  background: var(--ladder-sell);
+  color: var(--ladder-sell-ink);
+}
+
+.nifty-axis-ladder__row.is-manual-entry.is-sell::after {
+  border-left-color: var(--ladder-sell);
+}
+
+.nifty-axis-ladder__cell + .nifty-axis-ladder__cell::before {
+  content: " | ";
+  font-weight: 400;
+}
+
+.nifty-axis-ladder__cell.is-traded {
+  font-weight: 800;
+}
+
+.nifty-axis-ladder__count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border: 1px solid var(--ladder-ink);
+  border-radius: 50%;
+  background: var(--ladder-surface);
+  color: var(--ladder-ink);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .nifty-axis-ladder__row.is-selected {
@@ -214,6 +263,93 @@
 
 .nifty-axis-ladder__row.is-selected::after {
   border-left-color: var(--ladder-selected);
+}
+
+.nifty-axis-ladder__row:has(> .nifty-manual-editor) {
+  border-color: var(--ladder-selected);
+  background: var(--ladder-selected);
+  color: var(--ladder-selected-ink);
+}
+
+.nifty-axis-ladder__row:has(> .nifty-manual-editor)::after {
+  border-left-color: var(--ladder-selected);
+}
+
+.nifty-axis-ladder__row:has(> .nifty-manual-editor) > .nifty-axis-ladder__cell,
+.nifty-axis-ladder__row:has(> .nifty-manual-editor) > .nifty-axis-ladder__count {
+  visibility: hidden;
+}
+
+.nifty-manual-editor {
+  position: absolute;
+  z-index: 1;
+  right: -1px;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: max-content;
+  padding: 2px 3px;
+  border: 1px solid var(--ladder-selected);
+  border-radius: 4px 2px 2px 4px;
+  background: var(--ladder-selected);
+  color: var(--ladder-selected-ink);
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.nifty-manual-editor button,
+.nifty-manual-editor input {
+  box-sizing: border-box;
+  height: 20px;
+  border: 1px solid var(--ladder-surface);
+  border-radius: 2px;
+  background: var(--ladder-surface);
+  color: var(--ladder-ink);
+  font: inherit;
+  line-height: 1;
+}
+
+.nifty-manual-editor button {
+  padding: 2px 5px;
+  cursor: pointer;
+}
+
+.nifty-manual-editor button:focus-visible,
+.nifty-manual-editor input:focus-visible {
+  outline: 2px solid var(--ladder-surface);
+  outline-offset: 1px;
+}
+
+.nifty-manual-editor__lots {
+  min-width: 2ch;
+  color: var(--ladder-selected-ink);
+  font-weight: 800;
+  text-align: center;
+}
+
+.nifty-manual-editor__premium {
+  width: 58px;
+  padding: 2px 4px;
+}
+
+.nifty-manual-editor__actions {
+  position: absolute;
+  top: calc(100% + 2px);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--ladder-selected);
+  border-radius: 2px;
+  background: var(--ladder-selected);
+}
+
+.nifty-manual-editor__actions[data-option-type="CALL"] {
+  left: 3px;
+}
+
+.nifty-manual-editor__actions[data-option-type="PUT"] {
+  left: 57px;
 }
 
 .nifty-axis-ladder__status {

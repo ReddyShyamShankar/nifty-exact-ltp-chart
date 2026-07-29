@@ -12,7 +12,7 @@ const RISK_EXPIRY = "2026-08-25";
 
 test("operator guide documents click-only single-leg break-even rails", () => {
   const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
-  assert.match(readme, /^Version 0\.4\.3\b/m);
+  assert.match(readme, /^Version 0\.5\.0\b/m);
   readme.split("\n").filter((line) => /0\.4\.0/.test(line)).forEach((line) => {
     assert.match(line, /baseline/i, `0.4.0 reference must be explicit baseline wording: ${line}`);
   });
@@ -23,6 +23,30 @@ test("operator guide documents click-only single-leg break-even rails", () => {
   assert.match(readme, /outside click removes both break-even rails/i);
   assert.match(readme, /Manual refresh removes both break-even rails; click a strike again/i);
   assert.match(readme, /independent single-leg expiry break-evens, not combined short-straddle break-evens/i);
+});
+
+test("0.5.0 guides document exact manual-only strategy workflow and keyboard parity", () => {
+  const guides = [
+    ["extension", fs.readFileSync(path.join(__dirname, "README.md"), "utf8")],
+    ["root", fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8")]
+  ];
+  for (const [name, guide] of guides) {
+    assert.match(guide, /^Version 0\.5\.0\b/m, `${name}: candidate version`);
+    assert.match(guide, /Double-click[^.\n]*row[^.\n]*add/i, `${name}: add gesture`);
+    assert.match(guide, /CALL ▾[^.\n]*PUT ▾[^.\n]*Buy[^.\n]*Sell/i, `${name}: staged menus`);
+    assert.match(guide, /positive whole-number lots[^.\n]*editable premium/i, `${name}: lot and premium controls`);
+    assert.match(guide, /count dot[^.\n]*saved entries[^.\n]*not lots/i, `${name}: count meaning`);
+    assert.match(guide, /black `#111315`[^.\n]*orange `#ff9f0a`[^.\n]*green `#34d399`[^.\n]*red `#f87171`/i,
+      `${name}: exact row tokens`);
+    assert.match(guide, /single-click[^.\n]*newest-first[^.\n]*live/i, `${name}: entry cycle`);
+    assert.match(guide, /PLAN BE[^.\n]*combined[^.\n]*expiry payoff[^.\n]*zero/i, `${name}: combined break-even meaning`);
+    assert.match(guide, /manual refresh[^.\n]*live values[^.\n]*saved snapshots[^.\n]*unchanged/i,
+      `${name}: refresh boundary`);
+    assert.match(guide, /Shift\+Enter[^.\n]*editor[^.\n]*Enter[^.\n]*Space[^.\n]*single-click[^.\n]*Escape[^.\n]*live/i,
+      `${name}: keyboard workflow`);
+    assert.match(guide, /manual-only[^.\n]*does not import broker positions or tradebooks[^.\n]*cannot place, modify, or cancel orders/i,
+      `${name}: broker and order boundary`);
+  }
 });
 
 test("operator guide treats TradingView badge styling as cosmetic and fail-safe", () => {
@@ -1771,16 +1795,42 @@ test("new content has no collision spreading or Pine input synchronization path"
   assert.match(source, /chain:\s*controller\.chain\(\)/);
 });
 
-test("chart ladder uses popup design tokens with compact centered labels", () => {
+test("manual row states use exact markup tokens and no new semantic color", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   assert.match(css, /--ladder-surface:\s*#111315/);
   assert.match(css, /--ladder-line:\s*#2c3238/);
   assert.match(css, /--ladder-ink:\s*#f4f4f5/);
-  assert.match(css, /--ladder-accent:\s*#34d399/);
-  assert.match(css, /--ladder-accent-dark:\s*#063d2d/);
+  assert.match(css, /--ladder-atm:\s*#ff9f0a/);
+  assert.match(css, /--ladder-buy:\s*#34d399/);
+  assert.match(css, /--ladder-sell:\s*#f87171/);
+  assert.match(css, /\.nifty-axis-ladder__row\.is-atm\s*\{[^}]*background:\s*var\(--ladder-atm\)/);
+  assert.match(css, /\.nifty-axis-ladder__row\.is-manual-entry\.is-buy\s*\{[^}]*background:\s*var\(--ladder-buy\)/);
+  assert.match(css, /\.nifty-axis-ladder__row\.is-manual-entry\.is-sell\s*\{[^}]*background:\s*var\(--ladder-sell\)/);
+  assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?background:\s*var\(--ladder-surface\)/);
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?width:\s*max-content/);
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?text-align:\s*center/);
-  assert.doesNotMatch(css, /#ff9f0a|rgba\(66,\s*71,\s*82/);
+  assert.match(css, /--ladder-selected:\s*#facc15/);
+});
+
+test("entry faces contain exact compact copy without redundant trade words or icon", () => {
+  const source = fs.readFileSync(path.join(__dirname, "manual-ui.js"), "utf8");
+  assert.doesNotMatch(source, /SELL C|BUY C|SELL P|BUY P|↻/);
+  assert.match(source, /×\$\{active\.lots\}/);
+});
+
+test("count dot and inline editor use neutral tokens without moving row geometry", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const count = css.match(/\.nifty-axis-ladder__count\s*\{([^}]+)\}/)?.[1] || "";
+  const editor = css.match(/\.nifty-manual-editor\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(count, /background:\s*var\(--ladder-surface\)/);
+  assert.match(count, /color:\s*var\(--ladder-ink\)/);
+  assert.match(editor, /position:\s*absolute/);
+  assert.match(editor, /right:\s*-1px/);
+  assert.match(editor, /top:\s*50%/);
+  assert.match(editor, /width:\s*max-content/);
+  assert.match(editor, /background:\s*var\(--ladder-selected\)/);
+  assert.match(editor, /transform:\s*translateY\(-50%\)/);
+  assert.match(css, /\.nifty-axis-ladder__row:has\(>\s*\.nifty-manual-editor\)[\s\S]*?\.nifty-axis-ladder__cell[\s\S]*?visibility:\s*hidden/);
 });
 
 test("selected strike uses a solid yellow fill without an outline, including ATM", () => {
@@ -2904,6 +2954,98 @@ test("double click opens editor without quick rails or face flash", async () => 
   assert.ok(h.editor(23750));
   assert.equal(h.rails(), null);
   assert.equal(h.row(23750).classList.contains("is-manual-entry"), false);
+});
+
+test("Shift+Enter opens exact-row editor and Escape cancels it with row focus restored", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  const row = h.row(23750);
+  row.focus();
+  let prevented = false;
+
+  h.document.dispatch("keydown", {
+    key: "Enter",
+    shiftKey: true,
+    target: row,
+    preventDefault() { prevented = true; }
+  });
+
+  assert.equal(prevented, true);
+  assert.ok(h.editor(23750));
+  assert.equal(h.rails(), null);
+  const premium = h.editor(23750).querySelector(".nifty-manual-editor__premium");
+  premium.focus();
+  h.document.dispatch("keydown", { key: "Escape", target: premium });
+  await h.settle();
+
+  assert.equal(h.editor(23750), null);
+  assert.equal(h.document.activeElement, row);
+});
+
+test("Enter and Space cycle saved faces newest-first while Escape returns live", async () => {
+  const entries = [
+    savedManualEntry({
+      id: "old-put",
+      optionType: "PUT",
+      direction: "BUY",
+      lots: 3,
+      callSnapshot: 118,
+      putSnapshot: 218,
+      createdAt: "2026-07-29T09:00:00.000Z",
+      updatedAt: "2026-07-29T09:00:00.000Z"
+    }),
+    savedManualEntry({
+      id: "new-call",
+      optionType: "CALL",
+      direction: "SELL",
+      lots: 1,
+      callSnapshot: 119,
+      putSnapshot: 219,
+      createdAt: "2026-07-29T10:00:00.000Z",
+      updatedAt: "2026-07-29T10:00:00.000Z"
+    })
+  ];
+  const h = createBreakEvenLifecycleHarness({ manualEntries: entries });
+  await h.settle();
+  const row = h.row(23750);
+  assert.equal(row.classList.contains("is-atm"), true);
+  assert.equal(row.getAttribute("aria-label"),
+    "Call 119.00, Put 219.00, strike 23,750, 2 saved entries");
+
+  h.document.dispatch("keydown", { key: "Enter", shiftKey: false, target: row, preventDefault() {} });
+  h.flushClickTimer();
+  assert.equal(row.classList.contains("is-atm"), false);
+  assert.equal(row.classList.contains("is-manual-entry"), true);
+  assert.equal(row.classList.contains("is-sell"), true);
+  assert.equal(row.getAttribute("aria-label"),
+    "Sell Call, 1 lot, Call snapshot 119.00, Put snapshot 219.00, strike 23,750, saved entry 1 of 2");
+
+  h.document.dispatch("keydown", { key: " ", shiftKey: false, target: row, preventDefault() {} });
+  h.flushClickTimer();
+  assert.equal(row.classList.contains("is-buy"), true);
+  assert.equal(row.getAttribute("aria-label"),
+    "Buy Put, 3 lots, Call snapshot 118.00, Put snapshot 218.00, strike 23,750, saved entry 2 of 2");
+
+  h.document.dispatch("keydown", { key: "Escape", target: row });
+  assert.equal(row.classList.contains("is-atm"), true);
+  assert.equal(row.classList.contains("is-manual-entry"), false);
+  assert.equal(row.getAttribute("aria-label"),
+    "Call 119.00, Put 219.00, strike 23,750, 2 saved entries");
+});
+
+test("editor close control cancels draft and restores exact-row focus", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  const row = h.row(23750);
+  h.doubleClick(23750);
+  const editor = h.editor(23750);
+  editor.querySelector(".nifty-manual-editor__premium").focus();
+
+  editor.querySelector(".nifty-manual-editor__close").dispatch("click", {});
+  await h.settle();
+
+  assert.equal(h.editor(23750), null);
+  assert.equal(h.document.activeElement, row);
 });
 
 test("editor controls never schedule a delayed row interaction", async () => {

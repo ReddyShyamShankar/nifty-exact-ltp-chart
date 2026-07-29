@@ -1475,6 +1475,7 @@
         },
         close() {
           closeManualEditor();
+          focusManualRow(strike);
           void controller?.place();
         }
       });
@@ -1876,16 +1877,25 @@
 
   function handleDocumentKeyDown(event) {
     if (event.key === "Escape") {
+      const editorStrike = manualEditor?.strike;
       clearBreakEvenSelection();
       clearManualTransientState({ restorePlanRails: true });
+      if (Number.isFinite(editorStrike)) focusManualRow(editorStrike);
+      return;
     }
     if (event.target?.closest?.(".nifty-manual-editor")) return;
-    if (!["Enter", " "].includes(event.key)) return;
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
-    if (row) {
+    if (event.key === "Enter" && event.shiftKey && row) {
       event.preventDefault();
-      handleLadderClick(event);
+      const context = manualRowContext(row);
+      if (!context) return;
+      closeManualEditorForOtherRow(context.strike);
+      ensureManualInteraction()?.doubleClick(context);
+      return;
     }
+    if (!["Enter", " "].includes(event.key) || !row) return;
+    event.preventDefault();
+    handleLadderClick(event);
   }
 
   function start() {

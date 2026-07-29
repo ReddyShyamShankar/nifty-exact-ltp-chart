@@ -11,6 +11,7 @@ function fakeDocument() {
   function node(tagName) {
     const listeners = new Map();
     const classes = new Set();
+    const attributes = new Map();
     return {
       tagName: tagName.toUpperCase(),
       children: [],
@@ -30,6 +31,8 @@ function fakeDocument() {
       },
       append(...children) { this.children.push(...children); },
       replaceChildren(...children) { this.children = children; },
+      setAttribute(name, value) { attributes.set(name, String(value)); },
+      getAttribute(name) { return attributes.get(name) || null; },
       addEventListener(type, listener) { listeners.set(type, listener); },
       dispatch(type, event = {}) { listeners.get(type)?.({ preventDefault() {}, target: this, ...event }); }
     };
@@ -78,6 +81,9 @@ test("row model shows one face and exact compact copy", () => {
   assert.equal(model.className, "is-manual-entry is-sell");
   assert.equal(model.count, 1);
   assert.equal(model.visibleFaceCount, 1);
+  assert.equal(model.tradedCellIndex, 0);
+  assert.equal(model.accessibleName,
+    "Sell Call, 2 lots, Call snapshot 358.00, Put snapshot 414.60, strike 24,450, saved entry 1 of 1");
 });
 
 test("row model ignores mixed-strike entries for active face and count", () => {
@@ -100,6 +106,17 @@ test("live row remains one black or ATM face while count shows saved entries", (
   assert.equal(model.className, "is-atm");
   assert.equal(model.count, 1);
   assert.equal(model.visibleFaceCount, 1);
+  assert.equal(model.accessibleName, "Call 223.40, Put 409.80, strike 24,450, 1 saved entry");
+});
+
+test("entry accessible name reports exact position in newest-first cycle", () => {
+  const entries = [
+    { id: "new", strike: 24450, direction: "SELL", optionType: "CALL", lots: 1, callSnapshot: 358, putSnapshot: 414.6 },
+    { id: "old", strike: 24450, direction: "BUY", optionType: "PUT", lots: 3, callSnapshot: 223.4, putSnapshot: 409.8 }
+  ];
+  const model = ui.rowModel({ liveRow: row, isAtm: false, entries, activeEntryId: "old" });
+  assert.equal(model.accessibleName,
+    "Buy Put, 3 lots, Call snapshot 223.40, Put snapshot 409.80, strike 24,450, saved entry 2 of 2");
 });
 
 test("editor model contains two staged menus and no strike or flip icon", () => {
@@ -124,6 +141,25 @@ test("renderRow replaces children with safe cells and optional count dot", () =>
     ["nifty-axis-ladder__cell", "24,450"]
   ]);
   assert.deepEqual([element.children[3].className, element.children[3].textContent], ["nifty-axis-ladder__count", "1"]);
+  assert.equal(element.getAttribute("aria-label"), "Call 223.40, Put 409.80, strike 24,450, 1 saved entry");
+});
+
+test("renderRow emphasizes only traded snapshot cell without visible trade words", () => {
+  const document = fakeDocument();
+  const element = document.createElement("div");
+  ui.renderRow(document, element, {
+    liveRow: row,
+    isAtm: false,
+    entries: [{ id: "e1", strike: 24450, direction: "SELL", optionType: "PUT", lots: 3, callSnapshot: 223.4, putSnapshot: 409.8 }],
+    activeEntryId: "e1"
+  });
+  assert.deepEqual(element.children.slice(0, 3).map((child) => child.className), [
+    "nifty-axis-ladder__cell",
+    "nifty-axis-ladder__cell is-traded",
+    "nifty-axis-ladder__cell"
+  ]);
+  assert.deepEqual(element.children.slice(0, 3).map((child) => child.textContent),
+    ["C 223.40", "P 409.80 ×3", "24,450"]);
 });
 
 test("editor wires staged actions, lot stepper, premium, save, remove, and close", () => {
@@ -140,7 +176,9 @@ test("editor wires staged actions, lot stepper, premium, save, remove, and close
   assert.equal(editor.classList.contains("nifty-manual-editor"), true);
   assert.equal(editor.children.some((child) => child.textContent.includes("24,450")), false);
   assert.equal(editor.children[5].size, 6);
+  assert.equal(editor.children[5].getAttribute("aria-label"), "Premium");
   assert.equal(editor.children.map((child) => child.textContent).includes("REMOVE"), true);
+  assert.equal(editor.children[8].getAttribute("aria-label"), "Close editor");
   editor.children[0].dispatch("click");
   const menu = editor.children.at(-1);
   assert.deepEqual(menu.children.map((child) => child.textContent), ["BUY", "SELL"]);
