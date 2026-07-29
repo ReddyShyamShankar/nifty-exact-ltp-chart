@@ -698,12 +698,12 @@ test("standalone whole-trade bands render without blessing blocked current-risk 
   ]);
 });
 
-test("release artifacts preserve the workflow in the side panel at version 0.4.2", () => {
+test("release artifacts preserve the workflow in the side panel at version 0.4.3", () => {
   const html = fs.readFileSync(path.join(__dirname, "popup.html"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "popup.css"), "utf8");
   const rootReadme = fs.readFileSync(path.join(__dirname, "../README.md"), "utf8");
   const bridgePackage = JSON.parse(fs.readFileSync(path.join(__dirname, "../data-bridge/package.json"), "utf8"));
-  assert.equal(manifest.version, "0.4.2");
+  assert.equal(manifest.version, "0.4.3");
   assert.equal(bridgePackage.version, "0.4.1");
   assert.match(css, /body\s*\{[\s\S]*width:\s*100%/);
   assert.match(css, /body\s*\{[\s\S]*min-height:\s*100vh/);
