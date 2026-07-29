@@ -25,6 +25,8 @@
     || (typeof module !== "undefined" && module.exports ? require("./risk-overlay.js") : null);
   const sellerViewIdentityApi = root.NiftySellerViewIdentity
     || (typeof module !== "undefined" && module.exports ? require("./seller-view-identity.js") : null);
+  const breakEvenApi = root.NiftyBreakEvenRails
+    || (typeof module !== "undefined" && module.exports ? require("./breakeven-rails.js") : null);
 
   function quote(value) {
     if (typeof value === "boolean" || value === null || value === undefined) return null;
@@ -814,6 +816,11 @@
   let scaleFitAttempts = 0;
   let scaleFitInFlight = false;
   let scaleFitTimeframe = null;
+  let breakEvenSelection = breakEvenApi?.createSelectionController(() => renderBreakEvenSelection()) || {
+    clear() {},
+    current() { return null; },
+    select() { return false; }
+  };
 
   function rootNode() {
     let node = document.getElementById(LABELS_ID);
@@ -822,6 +829,7 @@
     node.id = LABELS_ID;
     node.hidden = true;
     document.documentElement.append(node);
+    if (controller) node.addEventListener("click", handleLadderClick);
     return node;
   }
 
@@ -838,6 +846,7 @@
   }
 
   function hideRows(status) {
+    clearBreakEvenSelection();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => row.remove());
     node.hidden = !settings.enabled;
@@ -863,15 +872,44 @@
         element = document.createElement("div");
         element.className = "nifty-axis-ladder__row";
         element.dataset.strike = String(row.strike);
+        element.setAttribute("role", "button");
+        element.setAttribute("tabindex", "0");
+        element.setAttribute("aria-selected", "false");
         node.append(element);
       }
       element.classList.toggle("is-atm", row.strike === membership.atm);
+      const isSelected = breakEvenSelection.current()?.strike === row.strike;
+      element.classList.toggle("is-selected", isSelected);
+      element.setAttribute("aria-selected", String(isSelected));
       element.textContent = formatRow(row);
       element.hidden = false;
       existing.delete(row.strike);
     });
     existing.forEach((row) => row.remove());
     node.hidden = false;
+  }
+
+  function clearBreakEvenRails() {
+    document.getElementById("nifty-break-even-rails")?.remove();
+  }
+
+  function renderBreakEvenSelection() {
+    const selectedStrike = breakEvenSelection.current()?.strike;
+    rootNode().querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
+      const isSelected = Number(row.dataset.strike) === selectedStrike;
+      row.classList.toggle("is-selected", isSelected);
+      row.setAttribute("aria-selected", String(isSelected));
+    });
+    if (!Number.isFinite(selectedStrike)) clearBreakEvenRails();
+  }
+
+  function clearBreakEvenSelection() {
+    breakEvenSelection.clear();
+    clearBreakEvenRails();
+    rootNode().querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
+      row.classList.remove("is-selected");
+      row.setAttribute("aria-selected", "false");
+    });
   }
 
   function riskRoot() {
@@ -1132,6 +1170,7 @@
     currentLabel = label;
     if (!isNiftyChartLabel(label)) {
       clearRetries();
+      clearBreakEvenSelection();
       controller.invalidate();
       document.getElementById(LABELS_ID)?.remove();
       return false;
@@ -1181,6 +1220,29 @@
     if (label !== currentLabel) scheduleTimeframeCheck();
   }
 
+  function handleDocumentPointerDown(event) {
+    const row = event.target?.closest?.(".nifty-axis-ladder__row");
+    if (!row) clearBreakEvenSelection();
+  }
+
+  function handleLadderClick(event) {
+    const rowElement = event.target?.closest?.(".nifty-axis-ladder__row");
+    if (!rowElement) return;
+    const strike = Number(rowElement.dataset.strike);
+    const snapshot = controller?.membership()?.rows.find((row) => row.strike === strike);
+    if (!breakEvenSelection.select(snapshot)) showStatus("OPTION PRICE UNAVAILABLE");
+  }
+
+  function handleDocumentKeyDown(event) {
+    if (event.key === "Escape") clearBreakEvenSelection();
+    if (!["Enter", " "].includes(event.key)) return;
+    const row = event.target?.closest?.(".nifty-axis-ladder__row");
+    if (row) {
+      event.preventDefault();
+      handleLadderClick(event);
+    }
+  }
+
   function start() {
     if (controller) return;
     controller = createLadderController({
@@ -1208,10 +1270,17 @@
       childList: true,
       subtree: true
     });
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+    rootNode().addEventListener("click", handleLadderClick);
+    document.addEventListener("keydown", handleDocumentKeyDown);
     if (controller.hasCachedChain()) void rebuildCurrent(false);
   }
 
   function stop() {
+    clearBreakEvenSelection();
+    document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
+    document.getElementById(LABELS_ID)?.removeEventListener("click", handleLadderClick);
+    document.removeEventListener("keydown", handleDocumentKeyDown);
     clearTimeout(timeframeTimer);
     timeframeTimer = null;
     clearTimeout(axisPlacementTimer);
@@ -1248,6 +1317,7 @@
     }
     if (changes.sellerSafetyChain) settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
     if (changes.expiry) {
+      clearBreakEvenSelection();
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
       if (settings.enabled) {
         controller?.setExpiry(settings.expiry).then((hasCached) => {
@@ -1279,6 +1349,7 @@
       return false;
     }
     if (message.type === "REFRESH_OPTION_NUMBERS") {
+      clearBreakEvenSelection();
       const refresh = controller?.membership() ? controller.refreshLtp() : rebuildCurrent(true, true);
       refresh.then((ok) => sendResponse(ok
         ? { ok: true, chain: controller.chain() }

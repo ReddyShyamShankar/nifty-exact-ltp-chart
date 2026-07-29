@@ -88,6 +88,18 @@
   text-align: center;
   white-space: pre;
   transform: translateY(-50%);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.nifty-axis-ladder__row.is-selected:not(.is-atm) {
+  outline: 2px solid var(--ladder-accent);
+  outline-offset: 1px;
+}
+
+.nifty-axis-ladder__row.is-selected.is-atm {
+  outline: 2px solid var(--ladder-ink);
+  outline-offset: 2px;
 }
 
 .nifty-axis-ladder__row[data-lane]:not([data-lane="0"])::before {

@@ -1620,6 +1620,8 @@ test("browser lifecycle disconnects observers and relies only on fresh axis obse
     hidden: false,
     style: { setProperty() {} },
     classList: { toggle() {} },
+    addEventListener() {},
+    removeEventListener() {},
     append(child) { if (child.id) nodes.set(child.id, child); },
     querySelector() { return null; },
     querySelectorAll() { return []; },
@@ -1646,7 +1648,9 @@ test("browser lifecycle disconnects observers and relies only on fresh axis obse
       documentElement: root,
       createElement: makeNode,
       getElementById(id) { return nodes.get(id); },
-      querySelector() { return null; }
+      querySelector() { return null; },
+      addEventListener() {},
+      removeEventListener() {}
     },
     window: {
       innerWidth: 100,
@@ -1703,9 +1707,11 @@ test("enabled NIFTY tab waits for manual refresh before first chain request", as
     },
     document: {
       documentElement: root,
-      createElement() { return { dataset: {}, style: { setProperty() {} }, classList: { toggle() {} }, append() {}, querySelector() { return null; }, querySelectorAll() { return []; } }; },
+      createElement() { return { dataset: {}, style: { setProperty() {} }, classList: { toggle() {} }, addEventListener() {}, removeEventListener() {}, append() {}, querySelector() { return null; }, querySelectorAll() { return []; } }; },
       getElementById() { return null; },
-      querySelector(selector) { return selector.startsWith("canvas[aria-label") ? canvas : null; }
+      querySelector(selector) { return selector.startsWith("canvas[aria-label") ? canvas : null; },
+      addEventListener() {},
+      removeEventListener() {}
     },
     fetch: async () => {
       chainFetches += 1;
@@ -1842,4 +1848,23 @@ test("trusted scale fit includes active timeframe for calibrated drag strength",
   const body = source.match(/function requestScaleFit\([\s\S]*?\n  \}/)?.[0] || "";
   const request = body.match(/chrome\.runtime\.sendMessage\(\{([\s\S]*?)\}\)\.then/)?.[1] || "";
   assert.match(request, /timeframe/);
+});
+
+test("breakeven module loads before content and selection remains explicit", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"));
+  const scripts = manifest.content_scripts.find((entry) => entry.js.includes("content.js")).js;
+  assert.ok(scripts.indexOf("breakeven-rails.js") < scripts.indexOf("content.js"));
+
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /NiftyBreakEvenRails/);
+  assert.match(source, /role", "button"/);
+  assert.match(source, /aria-selected/);
+  assert.match(source, /clearBreakEvenSelection/);
+  assert.doesNotMatch(source, /autoSelectBreakEven|persistedBreakEven/);
+});
+
+test("rows alone accept input while fullscreen overlay remains pointer-transparent", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(css, /#nifty-axis-ladder\s*\{[\s\S]*?pointer-events:\s*none/);
+  assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?pointer-events:\s*auto/);
 });
