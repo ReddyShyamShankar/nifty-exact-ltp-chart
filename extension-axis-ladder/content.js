@@ -1151,7 +1151,7 @@
 
   function rememberManualStorageEcho(origin, store) {
     const echo = { origin, signature: manualStoreSignature(store) };
-    manualStorageEchoes = [...manualStorageEchoes.slice(-15), echo];
+    manualStorageEchoes = [...manualStorageEchoes, echo];
     return echo;
   }
 

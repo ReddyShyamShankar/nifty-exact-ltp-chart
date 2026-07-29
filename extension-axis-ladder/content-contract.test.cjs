@@ -2005,6 +2005,7 @@ function createBreakEvenLifecycleHarness({
   manualEntries = [],
   storageSetError = null,
   deferStorage = false,
+  deferManualStorageEvents = false,
   spot = 23767.45
 } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
@@ -2020,6 +2021,7 @@ function createBreakEvenLifecycleHarness({
   let activeElement = null;
   const storageWrites = [];
   const pendingStorageWrites = [];
+  const pendingManualStorageEvents = [];
   let renderManualError = null;
   let manualRenderCalls = 0;
   let nextManualEntryId = 1;
@@ -2219,12 +2221,14 @@ function createBreakEvenLifecycleHarness({
             if (value[manualPlanApi.STORAGE_KEY]) {
               const oldValue = storedManualPlans;
               storedManualPlans = value[manualPlanApi.STORAGE_KEY];
-              dispatchStorage({
+              const changes = {
                 [manualPlanApi.STORAGE_KEY]: {
                   oldValue,
                   newValue: storedManualPlans
                 }
-              });
+              };
+              if (deferManualStorageEvents) pendingManualStorageEvents.push(changes);
+              else dispatchStorage(changes);
             }
           }
         },
@@ -2274,11 +2278,18 @@ function createBreakEvenLifecycleHarness({
     editor(strike) { return this.row(strike)?.querySelector(".nifty-manual-editor"); },
     manualEntries() { return manualPlanApi.entriesFor(storedManualPlans, snapshot.expiry); },
     storageSetCalls() { return storageWrites.length; },
+    lastManualPlanWrite() { return storageWrites.at(-1)?.[manualPlanApi.STORAGE_KEY] || null; },
     pendingStorageWriteCount() { return pendingStorageWrites.length; },
+    pendingManualStorageEventCount() { return pendingManualStorageEvents.length; },
     resolveStorageWrite() {
       const pending = pendingStorageWrites.shift();
       assert.ok(pending, "expected a pending storage write");
       pending.resolve();
+    },
+    resolveManualStorageEvent(index = 0) {
+      const [pending] = pendingManualStorageEvents.splice(index, 1);
+      assert.ok(pending, "expected a pending manual storage event");
+      dispatchStorage(pending);
     },
     setRenderManualError(error) { renderManualError = error; },
     manualRenderCalls() { return manualRenderCalls; },
@@ -2473,6 +2484,25 @@ test("storage failure keeps exact editor draft open and old plan intact", async 
   assert.equal(h.status(), "PLAN NOT SAVED");
 });
 
+test("rejected manual write removes its self-echo correlation", async () => {
+  const h = createBreakEvenLifecycleHarness({ storageSetError: new Error("write failed") });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+  const rejectedStore = h.lastManualPlanWrite();
+  assert.ok(rejectedStore);
+
+  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  const rendersBeforeExternalChange = h.manualRenderCalls();
+  h.storage({ manualPlans: { newValue: rejectedStore } });
+  await h.settle();
+
+  assert.ok(h.manualRenderCalls() > rendersBeforeExternalChange);
+});
+
 test("serialized overlapping manual commits preserve both explicit entries", async () => {
   const h = createBreakEvenLifecycleHarness({ deferStorage: true });
   await h.settle();
@@ -2564,6 +2594,39 @@ test("self-originated storage echo cannot rerender after pagehide lifecycle rese
   await h.settle();
 
   assert.equal(h.manualRenderCalls(), rendersBeforeEcho);
+  assert.equal(h.editor(23750) ?? null, null);
+});
+
+test("all unacknowledged self-write echoes survive pagehide past sixteen writes", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: [savedManualEntry()],
+    deferManualStorageEvents: true
+  });
+  await h.settle();
+
+  h.click(23750);
+  for (let write = 0; write < 17; write += 1) {
+    h.doubleClick(23750);
+    h.editor(23750).children[4].dispatch("click", {});
+    commitManualEditor(h, 23750);
+    await h.settle();
+  }
+
+  assert.equal(h.storageSetCalls(), 17);
+  assert.equal(h.pendingManualStorageEventCount(), 17);
+  h.pagehide(true);
+  const rootBeforeEarliestEcho = h.document.getElementById("nifty-axis-ladder");
+  const rowBeforeEarliestEcho = h.row(23750);
+  const rowHiddenBeforeEarliestEcho = rowBeforeEarliestEcho.hidden;
+  const rendersBeforeEarliestEcho = h.manualRenderCalls();
+
+  h.resolveManualStorageEvent();
+  await h.settle();
+
+  assert.equal(h.manualRenderCalls(), rendersBeforeEarliestEcho);
+  assert.equal(h.document.getElementById("nifty-axis-ladder"), rootBeforeEarliestEcho);
+  assert.equal(h.row(23750), rowBeforeEarliestEcho);
+  assert.equal(h.row(23750).hidden, rowHiddenBeforeEarliestEcho);
   assert.equal(h.editor(23750) ?? null, null);
 });
 
