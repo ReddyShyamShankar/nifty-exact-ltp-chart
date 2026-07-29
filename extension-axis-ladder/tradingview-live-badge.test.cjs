@@ -50,6 +50,28 @@ test("decoration replaces only owned state classes and preserves text", () => {
   assert.deepEqual([...target.classList.values].sort(), ["is-offline", "nifty-tv-status-badge"]);
 });
 
+test("decoration clears owned classes when status becomes unsupported", () => {
+  const target = badge("LIVE");
+  target.classList.add("tradingview-owned");
+  const doc = documentWith([control("Publish LIVE", [target])]);
+  assert.equal(api.decorate(doc), "live");
+
+  target.textContent = "CONNECTING";
+  assert.equal(api.decorate(doc), null);
+  assert.deepEqual([...target.classList.values], ["tradingview-owned"]);
+});
+
+test("decoration clears prior owned target when discovery becomes ambiguous", () => {
+  const target = badge("LIVE");
+  const controls = [control("Publish LIVE", [target])];
+  const doc = documentWith(controls);
+  assert.equal(api.decorate(doc), "live");
+
+  controls.push(control("Publish OFFLINE", [badge("OFFLINE")]));
+  assert.equal(api.decorate(doc), null);
+  assert.deepEqual([...target.classList.values], []);
+});
+
 test("install decorates immediately, responds to rerender, and disconnects", () => {
   const target = badge("LIVE");
   const doc = documentWith([control("Publish LIVE", [target])]);
@@ -62,7 +84,14 @@ test("install decorates immediately, responds to rerender, and disconnects", () 
   }
   const stop = api.install(doc, Observer);
   assert.equal(target.classList.values.has("is-live"), true);
+  target.textContent = "OFFLINE";
   callback([]);
+  assert.equal(target.classList.values.has("is-live"), false);
+  assert.equal(target.classList.values.has("is-offline"), true);
   stop();
   assert.equal(disconnected, true);
+  target.textContent = "LIVE";
+  callback([]);
+  assert.equal(target.classList.values.has("is-live"), false);
+  assert.equal(target.classList.values.has("is-offline"), true);
 });

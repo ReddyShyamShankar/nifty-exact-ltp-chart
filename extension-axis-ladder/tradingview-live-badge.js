@@ -2,6 +2,7 @@
   "use strict";
 
   const OWNED = ["nifty-tv-status-badge", "is-live", "is-offline"];
+  let lastOwnedTarget = null;
 
   function stateFor(text) {
     const value = String(text || "").trim().toUpperCase();
@@ -23,25 +24,35 @@
   }
 
   function decorate(documentRef) {
+    if (lastOwnedTarget) lastOwnedTarget.classList.remove(...OWNED);
+    lastOwnedTarget = null;
+
     const target = findBadge(documentRef);
     if (!target) return null;
     const state = stateFor(target.textContent);
     if (!state) return null;
     target.classList.remove(...OWNED);
     target.classList.add("nifty-tv-status-badge", `is-${state}`);
+    lastOwnedTarget = target;
     return state;
   }
 
   function install(documentRef, Observer = root.MutationObserver) {
     decorate(documentRef);
     if (typeof Observer !== "function") return () => {};
-    const observer = new Observer(() => decorate(documentRef));
+    let active = true;
+    const observer = new Observer(() => {
+      if (active) decorate(documentRef);
+    });
     observer.observe(documentRef.documentElement || documentRef, {
       childList: true,
       subtree: true,
       characterData: true,
     });
-    return () => observer.disconnect();
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
   }
 
   const api = { decorate, findBadge, install, stateFor };
