@@ -1868,3 +1868,227 @@ test("rows alone accept input while fullscreen overlay remains pointer-transpare
   assert.match(css, /#nifty-axis-ladder\s*\{[\s\S]*?pointer-events:\s*none/);
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?pointer-events:\s*auto/);
 });
+
+function createBreakEvenLifecycleHarness() {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  const nodesById = new Map();
+  const roots = [];
+  const storageListeners = [];
+  const runtimeListeners = [];
+
+  function eventTarget() {
+    const listeners = new Map();
+    return {
+      addEventListener(type, listener) {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type).add(listener);
+      },
+      removeEventListener(type, listener) { listeners.get(type)?.delete(listener); },
+      dispatch(type, event) { listeners.get(type)?.forEach((listener) => listener(event)); },
+      listenerCount(type) { return listeners.get(type)?.size || 0; }
+    };
+  }
+
+  function makeNode(tagName = "div") {
+    const events = eventTarget();
+    const classes = new Set();
+    const attributes = new Map();
+    const node = {
+      ...events,
+      tagName,
+      children: [],
+      dataset: {},
+      hidden: false,
+      id: "",
+      parent: null,
+      style: { setProperty() {} },
+      classList: {
+        add(value) { classes.add(value); },
+        contains(value) { return classes.has(value); },
+        remove(value) { classes.delete(value); },
+        toggle(value, force) {
+          const enabled = force === undefined ? !classes.has(value) : Boolean(force);
+          if (enabled) classes.add(value); else classes.delete(value);
+          return enabled;
+        }
+      },
+      append(child) {
+        child.parent = node;
+        node.children.push(child);
+        if (child.id) nodesById.set(child.id, child);
+      },
+      setAttribute(name, value) { attributes.set(name, String(value)); },
+      getAttribute(name) { return attributes.get(name) || null; },
+      closest(selector) {
+        if (selector === ".nifty-axis-ladder__row" && classes.has("nifty-axis-ladder__row")) return node;
+        return node.parent?.closest(selector) || null;
+      },
+      querySelector(selector) { return node.querySelectorAll(selector)[0] || null; },
+      querySelectorAll(selector) {
+        const descendants = node.children.flatMap((child) => [child, ...child.querySelectorAll("*")]);
+        if (selector === "*") return descendants;
+        if (selector === ".nifty-axis-ladder__row") return descendants.filter((child) => child.classList.contains("nifty-axis-ladder__row"));
+        if (selector.startsWith(".nifty-axis-ladder__row[data-strike=\"")) {
+          const strike = selector.match(/data-strike="(\d+)"/)?.[1];
+          return descendants.filter((child) => child.classList.contains("nifty-axis-ladder__row") && child.dataset.strike === strike);
+        }
+        if (selector.startsWith("#")) return descendants.filter((child) => child.id === selector.slice(1));
+        return [];
+      },
+      remove() {
+        if (node.id) nodesById.delete(node.id);
+        if (node.parent) node.parent.children = node.parent.children.filter((child) => child !== node);
+      },
+      getBoundingClientRect() { return { left: 100, top: 20, right: 340, bottom: 40, width: 240, height: 20 }; }
+    };
+    Object.defineProperty(node, "className", {
+      get() { return [...classes].join(" "); },
+      set(value) {
+        classes.clear();
+        String(value).split(/\s+/).filter(Boolean).forEach((name) => classes.add(name));
+      }
+    });
+    return node;
+  }
+
+  const documentEvents = eventTarget();
+  const documentElement = makeNode("html");
+  const canvas = makeNode("canvas");
+  canvas.getAttribute = (name) => name === "aria-label" ? "Chart for NSE_DLY:NIFTY, 1 hour" : null;
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 });
+  const document = {
+    ...documentEvents,
+    documentElement,
+    createElement(tagName) {
+      const node = makeNode(tagName);
+      roots.push(node);
+      return node;
+    },
+    getElementById(id) { return nodesById.get(id) || null; },
+    querySelector(selector) { return selector.startsWith("canvas[aria-label") ? canvas : null; }
+  };
+  const snapshot = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    expiry: "2026-08-25",
+    spot: 23767.45,
+    rows: Array.from({ length: 41 }, (_, index) => ({ strike: 22800 + index * 50, call: 100 + index, put: 200 + index }))
+  };
+  const sandbox = {
+    AbortController,
+    MutationObserver: class { observe() {} disconnect() {} },
+    NiftyBreakEvenRails: require("./breakeven-rails.js"),
+    NiftyRiskOverlay: require("./risk-overlay.js"),
+    NiftySellerViewIdentity: viewIdentity,
+    NiftyTimeframeLadder: require("./timeframe-ladder.js"),
+    chrome: {
+      runtime: {
+        sendMessage: async () => ({
+          ok: true,
+          gridGapPx: 20,
+          axisPairs: [
+            { price: 24000, y: 100 },
+            { price: 23900, y: 120 },
+            { price: 23800, y: 140 },
+            { price: 23700, y: 160 }
+          ]
+        }),
+        onMessage: { addListener(listener) { runtimeListeners.push(listener); } }
+      },
+      storage: {
+        local: {
+          get(_defaults, callback) {
+            callback({
+              enabled: true,
+              expiry: snapshot.expiry,
+              sellerSafetyChain: snapshot,
+              sellerSafetyChainsByExpiry: { [snapshot.expiry]: snapshot }
+            });
+          }
+        },
+        onChanged: { addListener(listener) { storageListeners.push(listener); } }
+      }
+    },
+    document,
+    fetch: async () => ({ ok: true, json: async () => ({ spot: snapshot.spot, rows: snapshot.rows }) }),
+    setTimeout() { return 1; },
+    clearTimeout() {},
+    window: { innerWidth: 1600, innerHeight: 900 },
+    console
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(source, sandbox);
+
+  async function settle() {
+    for (let index = 0; index < 8; index += 1) await new Promise(setImmediate);
+  }
+
+  return {
+    document,
+    roots,
+    runtimeListeners,
+    select(strike = 23750) {
+      const root = document.getElementById("nifty-axis-ladder");
+      const row = root?.querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
+      assert.ok(row, "exact rendered row is available for selection");
+      root.dispatch("click", { target: row });
+      assert.equal(row.classList.contains("is-selected"), true);
+      assert.equal(row.getAttribute("aria-selected"), "true");
+      return row;
+    },
+    storage(change) { storageListeners[0](change, "local"); },
+    settle
+  };
+}
+
+test("selected rows clear through outside input, Escape, refresh, and expiry change", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+
+  let row = harness.select();
+  harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-selected"), "false");
+
+  row = harness.select();
+  harness.document.dispatch("keydown", { key: "Escape", target: row });
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-selected"), "false");
+
+  row = harness.select();
+  const refreshHandledAsync = harness.runtimeListeners[0]({ type: "REFRESH_OPTION_NUMBERS" }, null, () => {});
+  assert.equal(refreshHandledAsync, true);
+  assert.equal(row.classList.contains("is-selected"), false, "refresh clears before async option fetch settles");
+  assert.equal(row.getAttribute("aria-selected"), "false");
+
+  await harness.settle();
+  row = harness.select();
+  harness.storage({ expiry: { newValue: "2026-09-01" } });
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-selected"), "false");
+});
+
+test("stop clears selected rows and re-enable restores one listener set", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  const row = harness.select();
+  const initialRoot = harness.document.getElementById("nifty-axis-ladder");
+  assert.equal(harness.document.listenerCount("pointerdown"), 1);
+  assert.equal(harness.document.listenerCount("keydown"), 1);
+  assert.equal(initialRoot.listenerCount("click"), 1);
+
+  harness.storage({ enabled: { newValue: false } });
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(harness.document.listenerCount("pointerdown"), 0);
+  assert.equal(harness.document.listenerCount("keydown"), 0);
+  assert.equal(initialRoot.listenerCount("click"), 0);
+
+  harness.storage({ enabled: { newValue: true } });
+  await harness.settle();
+  const reenabledRoot = harness.document.getElementById("nifty-axis-ladder");
+  assert.equal(harness.document.listenerCount("pointerdown"), 1);
+  assert.equal(harness.document.listenerCount("keydown"), 1);
+  assert.equal(reenabledRoot.listenerCount("click"), 1);
+  harness.select();
+});
