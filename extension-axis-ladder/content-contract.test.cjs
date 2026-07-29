@@ -1943,6 +1943,9 @@ function createBreakEvenLifecycleHarness({
   const roots = [];
   const storageListeners = [];
   const runtimeListeners = [];
+  const timers = new Map();
+  let nextTimerId = 1;
+  let mutationCallback = null;
   let fetchCalls = 0;
   const railApi = require("./breakeven-rails.js");
   let axisPairs = [
@@ -2032,7 +2035,8 @@ function createBreakEvenLifecycleHarness({
   const documentEvents = eventTarget();
   const documentElement = makeNode("html");
   const canvas = makeNode("canvas");
-  canvas.getAttribute = (name) => name === "aria-label" ? "Chart for NSE_DLY:NIFTY, 1 hour" : null;
+  let chartLabel = "Chart for NSE_DLY:NIFTY, 1 hour";
+  canvas.getAttribute = (name) => name === "aria-label" ? chartLabel : null;
   canvas.getBoundingClientRect = () => ({
     ...plotRect,
     width: plotRect.right - plotRect.left,
@@ -2061,7 +2065,11 @@ function createBreakEvenLifecycleHarness({
   };
   const sandbox = {
     AbortController,
-    MutationObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class {
+      constructor(callback) { mutationCallback = callback; }
+      observe() {}
+      disconnect() {}
+    },
     NiftyBreakEvenRails: {
       calculate: railApi.calculate,
       createSelectionController: railApi.createSelectionController,
@@ -2098,8 +2106,12 @@ function createBreakEvenLifecycleHarness({
       fetchCalls += 1;
       return { ok: true, json: async () => ({ spot: snapshot.spot, rows: snapshot.rows }) };
     },
-    setTimeout() { return 1; },
-    clearTimeout() {},
+    setTimeout(callback, delay) {
+      const id = nextTimerId++;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
     window: { innerWidth: 1600, innerHeight: 900 },
     console
   };
@@ -2119,6 +2131,15 @@ function createBreakEvenLifecycleHarness({
     status() { return document.getElementById("nifty-axis-ladder")?.querySelector(".nifty-axis-ladder__status")?.textContent || null; },
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
     setProject(nextProject) { project = nextProject; },
+    async navigateTo(nextLabel) {
+      chartLabel = nextLabel;
+      mutationCallback?.([{ type: "attributes", attributeName: "aria-label" }]);
+      const timer = [...timers.entries()].reverse().find(([, entry]) => entry.delay === 250);
+      assert.ok(timer, "timeframe navigation schedules its lifecycle check");
+      timers.delete(timer[0]);
+      await timer[1].callback();
+      await settle();
+    },
     click(strike = 23750) {
       const root = document.getElementById("nifty-axis-ladder");
       const row = root?.querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
@@ -2255,6 +2276,38 @@ test("invalid-price row stays selected, draws no rails, and reports unavailable 
   assert.equal(harness.fetchCalls(), fetchesBeforeClick);
 });
 
+test("unavailable status overrides later placement while normal status updates underneath", async () => {
+  const harness = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
+  await harness.settle();
+  const row = harness.select(23750);
+
+  await harness.retryPlacement();
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+  assert.equal(row.classList.contains("is-selected"), true);
+
+  harness.setAxisPairs([]);
+  await harness.retryPlacement();
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+
+  harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  assert.equal(harness.status(), "Native axis map is unavailable.");
+});
+
+test("switching from invalid selection to a valid row clears unavailable override", async () => {
+  const harness = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
+  await harness.settle();
+  harness.select(23750);
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+
+  const validRow = harness.select(23800);
+  assert.equal(validRow.classList.contains("is-selected"), true);
+  assert.equal(harness.status(), "PARTIAL");
+
+  await harness.settle();
+  assert.equal(harness.rails().children.length, 2);
+  assert.equal(harness.status(), "PARTIAL");
+});
+
 test("clearing an unavailable selection restores the normal status", async () => {
   const harness = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
   await harness.settle();
@@ -2280,6 +2333,20 @@ test("clearing an unavailable selection restores the normal status", async () =>
   assert.equal(row.classList.contains("is-selected"), false);
   assert.equal(harness.rails(), null);
   assert.equal(harness.status(), "MANUAL REFRESH REQUIRED");
+});
+
+test("non-NIFTY navigation clears invalid selection, rails, and unavailable feedback", async () => {
+  const harness = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
+  await harness.settle();
+  const row = harness.select(23750);
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+
+  await harness.navigateTo("Chart for TVC:DXY, 1 hour");
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(harness.rails(), null);
+  assert.equal(harness.status(), null);
+  assert.equal(harness.document.getElementById("nifty-axis-ladder"), null);
 });
 
 test("off-screen rails pin top and bottom markers to plot edges before lane-zero rows", async () => {

@@ -820,6 +820,7 @@
   let scaleFitInFlight = false;
   let scaleFitTimeframe = null;
   let normalStatus = "LIVE";
+  let breakEvenStatusOverride = null;
   let stopLiveBadgeDecorator = () => {};
   try {
     stopLiveBadgeDecorator = liveBadgeApi?.install?.(document, MutationObserver) || (() => {});
@@ -858,15 +859,23 @@
 
   function showStatus(status) {
     const node = rootNode();
-    if (status !== "OPTION PRICE UNAVAILABLE") normalStatus = status;
-    node.dataset.status = status;
+    if (status === "OPTION PRICE UNAVAILABLE") breakEvenStatusOverride = status;
+    else normalStatus = status;
+    const visibleStatus = breakEvenStatusOverride || status;
+    node.dataset.status = visibleStatus;
     let statusNode = node.querySelector(".nifty-axis-ladder__status");
     if (!statusNode) {
       statusNode = document.createElement("div");
       statusNode.className = "nifty-axis-ladder__status";
       node.append(statusNode);
     }
-    statusNode.textContent = status;
+    statusNode.textContent = visibleStatus;
+  }
+
+  function clearBreakEvenStatusOverride() {
+    if (!breakEvenStatusOverride) return;
+    breakEvenStatusOverride = null;
+    showStatus(normalStatus);
   }
 
   function hideRows(status) {
@@ -1005,7 +1014,7 @@
       row.classList.remove("is-selected");
       row.setAttribute("aria-selected", "false");
     });
-    if (node.dataset.status === "OPTION PRICE UNAVAILABLE") showStatus(normalStatus);
+    clearBreakEvenStatusOverride();
   }
 
   function riskRoot() {
@@ -1338,6 +1347,7 @@
       showStatus("OPTION PRICE UNAVAILABLE");
       return;
     }
+    clearBreakEvenStatusOverride();
     void controller?.place();
   }
 
