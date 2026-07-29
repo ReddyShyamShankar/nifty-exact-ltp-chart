@@ -1869,12 +1869,20 @@ test("rows alone accept input while fullscreen overlay remains pointer-transpare
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?pointer-events:\s*auto/);
 });
 
-function createBreakEvenLifecycleHarness() {
+function createBreakEvenLifecycleHarness({ plotRect = { left: 0, top: 0, right: 1200, bottom: 800 } } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const nodesById = new Map();
   const roots = [];
   const storageListeners = [];
   const runtimeListeners = [];
+  const railApi = require("./breakeven-rails.js");
+  let axisPairs = [
+    { price: 24000, y: 100 },
+    { price: 23900, y: 120 },
+    { price: 23800, y: 140 },
+    { price: 23700, y: 160 }
+  ];
+  let project = railApi.project;
 
   function eventTarget() {
     const listeners = new Map();
@@ -1955,7 +1963,11 @@ function createBreakEvenLifecycleHarness() {
   const documentElement = makeNode("html");
   const canvas = makeNode("canvas");
   canvas.getAttribute = (name) => name === "aria-label" ? "Chart for NSE_DLY:NIFTY, 1 hour" : null;
-  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 });
+  canvas.getBoundingClientRect = () => ({
+    ...plotRect,
+    width: plotRect.right - plotRect.left,
+    height: plotRect.bottom - plotRect.top
+  });
   const document = {
     ...documentEvents,
     documentElement,
@@ -1977,7 +1989,11 @@ function createBreakEvenLifecycleHarness() {
   const sandbox = {
     AbortController,
     MutationObserver: class { observe() {} disconnect() {} },
-    NiftyBreakEvenRails: require("./breakeven-rails.js"),
+    NiftyBreakEvenRails: {
+      calculate: railApi.calculate,
+      createSelectionController: railApi.createSelectionController,
+      project(...args) { return project(...args); }
+    },
     NiftyRiskOverlay: require("./risk-overlay.js"),
     NiftySellerViewIdentity: viewIdentity,
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
@@ -1986,12 +2002,7 @@ function createBreakEvenLifecycleHarness() {
         sendMessage: async () => ({
           ok: true,
           gridGapPx: 20,
-          axisPairs: [
-            { price: 24000, y: 100 },
-            { price: 23900, y: 120 },
-            { price: 23800, y: 140 },
-            { price: 23700, y: 160 }
-          ]
+          axisPairs
         }),
         onMessage: { addListener(listener) { runtimeListeners.push(listener); } }
       },
@@ -2027,6 +2038,9 @@ function createBreakEvenLifecycleHarness() {
     document,
     roots,
     runtimeListeners,
+    rails() { return document.getElementById("nifty-break-even-rails"); },
+    setAxisPairs(nextPairs) { axisPairs = nextPairs; },
+    setProject(nextProject) { project = nextProject; },
     select(strike = 23750) {
       const root = document.getElementById("nifty-axis-ladder");
       const row = root?.querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
@@ -2035,6 +2049,11 @@ function createBreakEvenLifecycleHarness() {
       assert.equal(row.classList.contains("is-selected"), true);
       assert.equal(row.getAttribute("aria-selected"), "true");
       return row;
+    },
+    retryPlacement() {
+      return new Promise((resolve) => {
+        assert.equal(runtimeListeners[0]({ type: "RETRY_LABEL_PLACEMENT" }, null, resolve), true);
+      });
     },
     storage(change) { storageListeners[0](change, "local"); },
     settle
@@ -2093,15 +2112,88 @@ test("stop clears selected rows and re-enable restores one listener set", async 
   harness.select();
 });
 
-test("clicked strike rails use exact axis map, rounded seller labels, and no safe-zone fill", () => {
-  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
-  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
-  assert.match(source, /placeBreakEvenRails\(toY, rect, labelRight\)/);
-  assert.match(source, /breakEvenApi\.calculate/);
-  assert.match(source, /breakEvenApi\.project/);
-  assert.match(css, /\.nifty-break-even__line\.is-call/);
-  assert.match(css, /\.nifty-break-even__line\.is-put/);
-  assert.match(css, /\.nifty-break-even__marker\.is-top/);
-  assert.match(css, /\.nifty-break-even__marker\.is-bottom/);
-  assert.doesNotMatch(css, /nifty-break-even__safe-zone/);
+test("clicked selection creates exactly two in-plot rails ending at lane-zero clearance", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  harness.select();
+  await harness.settle();
+
+  const rails = harness.rails();
+  assert.ok(rails);
+  assert.equal(rails.children.length, 2);
+  rails.children.forEach((line) => {
+    assert.equal(line.classList.contains("nifty-break-even__line"), true);
+    assert.equal(line.style.width, "88px");
+    assert.equal(line.children.length, 1);
+    assert.equal(line.children[0].style.right, "1512px");
+  });
+});
+
+test("off-screen rails pin top and bottom markers to plot edges before lane-zero rows", async () => {
+  const harness = createBreakEvenLifecycleHarness({ plotRect: { left: 0, top: 80, right: 1200, bottom: 230 } });
+  await harness.settle();
+
+  harness.select(24000);
+  await harness.settle();
+  let rails = harness.rails();
+  let marker = rails.children.find((element) => element.classList.contains("is-top"));
+  assert.ok(marker);
+  assert.equal(marker.style.top, "80px");
+  assert.equal(marker.style.right, "1512px");
+
+  harness.select(23450);
+  await harness.settle();
+  rails = harness.rails();
+  marker = rails.children.find((element) => element.classList.contains("is-bottom"));
+  assert.ok(marker);
+  assert.equal(marker.style.top, "230px");
+  assert.equal(marker.style.right, "1512px");
+});
+
+test("visible rail labels stay within plot bounds near top and bottom", async () => {
+  const harness = createBreakEvenLifecycleHarness({ plotRect: { left: 0, top: 75, right: 1200, bottom: 253 } });
+  await harness.settle();
+
+  for (const strike of [24000, 23450]) {
+    harness.select(strike);
+    await harness.settle();
+    const labels = harness.rails().children
+      .filter((element) => element.classList.contains("nifty-break-even__line"))
+      .map((line) => line.children[0]);
+    assert.ok(labels.length > 0);
+    labels.forEach((label) => {
+      const top = Number(label.style.top.slice(0, -2));
+      assert.ok(top >= 75);
+      assert.ok(top + 15 <= 253);
+    });
+  }
+});
+
+test("invalid axis map or projection conceals rails without clearing selected row", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  const row = harness.select();
+  await harness.settle();
+  assert.equal(harness.rails().children.length, 2);
+
+  harness.setAxisPairs([]);
+  await harness.retryPlacement();
+  assert.equal(harness.rails(), null);
+  assert.equal(row.classList.contains("is-selected"), true);
+
+  harness.setAxisPairs([
+    { price: 24000, y: 100 },
+    { price: 23900, y: 120 },
+    { price: 23800, y: 140 },
+    { price: 23700, y: 160 }
+  ]);
+  harness.setProject(() => null);
+  await harness.retryPlacement();
+  assert.equal(harness.rails(), null);
+  assert.equal(row.classList.contains("is-selected"), true);
+
+  harness.setProject(require("./breakeven-rails.js").project);
+  await harness.retryPlacement();
+  assert.equal(harness.rails().children.length, 2);
+  assert.equal(row.classList.contains("is-selected"), true);
 });

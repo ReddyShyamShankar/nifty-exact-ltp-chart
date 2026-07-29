@@ -18,6 +18,7 @@
   const MAX_LANES = 13;
   const MINIMUM_ROW_GAP = 22;
   const RISK_LABEL_GAP_PX = 12;
+  const BREAK_EVEN_LABEL_HEIGHT = 15;
   const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
   const timeframeApi = root.NiftyTimeframeLadder
     || (typeof module !== "undefined" && module.exports ? require("./timeframe-ladder.js") : null);
@@ -949,10 +950,12 @@
         const label = document.createElement("span");
         label.className = `nifty-break-even__label is-${level.kind}`;
         label.style.right = `${window.innerWidth - railRight}px`;
-        label.style.top = `${projection.y}px`;
+        label.style.top = `${Math.max(plotTop, Math.min(plotBottom - BREAK_EVEN_LABEL_HEIGHT, projection.y - BREAK_EVEN_LABEL_HEIGHT))}px`;
         label.textContent = level.label;
         element.append(label);
       } else {
+        element.style.left = "";
+        element.style.right = `${window.innerWidth - railRight}px`;
         element.classList.add(`is-${projection.edge}`);
         element.textContent = level.label;
       }
