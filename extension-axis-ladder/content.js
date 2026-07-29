@@ -267,7 +267,6 @@
     let cachedRiskLayout = null;
     let cachedRiskGeneration = null;
     let placementRevision = 0;
-    let membershipRevision = 0;
     let committedAxisObservedAt = 0;
     let transitionMinimumObservedAt = 0;
     let lastSpot = null;
@@ -547,7 +546,6 @@
         }
         current = membership;
         lastSpot = Number(chain.spot);
-        membershipRevision += 1;
         cachedAxisToY = axisPriceToY(secondScale.axisPairs);
         renderRows(current.rows, current);
         if (!placeCached(current, visualPlacementRevision)) {
@@ -648,7 +646,6 @@
         acceptedFreshData = true;
         const complete = hasCompleteMembershipRows(current, chain?.rows);
         if (!pendingRecenter) lastSpot = spot;
-        if (membershipChanged) membershipRevision += 1;
         dataStatus = pendingRecenter ? "RECENTER PENDING" : (complete ? "LIVE" : "PARTIAL");
         renderRows(current.rows, current);
         const refreshVisualPlacementRevision = isVisualPlacementCurrent(visualPlacementRevision)
@@ -694,7 +691,6 @@
       clearCachedRiskPlacement();
       const placementGeneration = generation;
       const localPlacementRevision = ++placementRevision;
-      const placementMembershipRevision = membershipRevision;
       try {
         const scale = await captureAxisScale(undefined, {
           minimumObservedAt: committedAxisObservedAt,
@@ -702,7 +698,6 @@
         });
         if (generation !== placementGeneration
           || localPlacementRevision !== placementRevision
-          || membershipRevision !== placementMembershipRevision
           || rebuilding
           || snapshot.expiry !== expiry
           || snapshot.timeframe !== desiredTimeframe
@@ -724,7 +719,6 @@
       } catch (error) {
         if (generation !== placementGeneration
           || localPlacementRevision !== placementRevision
-          || membershipRevision !== placementMembershipRevision
           || rebuilding
           || snapshot.expiry !== expiry
           || snapshot.timeframe !== desiredTimeframe
@@ -783,7 +777,6 @@
       hideRisk();
       dataStatus = "STALE";
       placementRevision += 1;
-      membershipRevision += 1;
     }
 
     armRiskDeadline();

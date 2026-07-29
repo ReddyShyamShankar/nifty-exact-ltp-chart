@@ -2741,6 +2741,45 @@ test("production retry placement keeps accepted refresh quotes and commits its n
   assert.equal(h.manualRails().children[0].style.top, "326.2px");
 });
 
+test("production retry placement applies its newer axis to refresh-recentered membership", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [savedManualEntry()] });
+  await h.settle();
+  assert.equal(h.manualRails().children[0].style.top, "126.2px");
+  h.deferAxisCaptures();
+  h.deferFetches();
+
+  const placement = h.retryPlacement();
+  assert.equal(h.pendingAxisCaptureCount(), 1);
+  const refresh = h.startRefreshOptionNumbers();
+  assert.equal(h.pendingFetchCount(), 1);
+
+  h.resolveFetch(0, {
+    spot: 23775,
+    byStrike: { 23800: { call: 777, put: 888 } }
+  });
+  assert.equal((await refresh).ok, true);
+  assert.equal(h.row(23800).classList.contains("is-atm"), true);
+  assert.match(h.row(23800).textContent, /C 777\.00P 888\.00/);
+  assert.equal(h.row(23450), null);
+  assert.ok(h.row(24100), "recentered upper contract remains rendered");
+
+  h.resolveAxisCapture(0, {
+    ok: true,
+    gridGapPx: 20,
+    axisPairs: [
+      { price: 24000, y: 300 },
+      { price: 23900, y: 320 },
+      { price: 23800, y: 340 },
+      { price: 23700, y: 360 }
+    ]
+  });
+
+  assert.equal((await placement).ok, true);
+  assert.equal(h.row(23800).classList.contains("is-atm"), true);
+  assert.match(h.row(23800).textContent, /C 777\.00P 888\.00/);
+  assert.equal(h.manualRails().children[0].style.top, "326.2px");
+});
+
 test("production refresh finishing after a newer placement retains fresh quotes without moving fresh-axis rails", async () => {
   const h = createBreakEvenLifecycleHarness({ manualEntries: [savedManualEntry()] });
   await h.settle();

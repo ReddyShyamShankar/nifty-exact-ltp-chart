@@ -202,3 +202,113 @@ $ node --test --test-reporter=dot extension-axis-ladder/*.test.cjs
 
 - Visual revision ownership stays with axis/rebuild placement. LTP data ownership stays with refresh revision.
 - Task 5 manual-plan persistence and all shared quick/manual rail layout behavior remain untouched.
+
+## Fix Round 4/5
+
+### Finding resolved
+
+- An accepted refresh crossing the exact 23,775 midpoint now keeps its recentered 23,800 ATM membership while an already-started newer-axis placement finishes.
+- Placement freshness no longer treats membership identity as immutable inside one lifecycle generation. A current placement applies its captured axis to the latest accepted `current` membership.
+- Independent rebuild, timeframe, expiry, lifecycle, newer-placement, and newer-preview invalidation remain enforced by generation, requested identity, placement revision, and visual revision guards.
+- Stale refresh ownership remains independently enforced by refresh revision and abort guards.
+
+### Added production-hook contract
+
+- Newer-axis placement starts, refresh resolves at spot 23,775, ATM recenters from 23,750 to 23,800, and the placement then resolves.
+- The contract verifies fresh 23,800 quotes (`C 777.00`, `P 888.00`), removal of obsolete 23,450 membership, addition of 24,100 membership, retained 23,800 ATM styling, successful placement response, and manual rails at the newer-axis y coordinate (`326.2px`).
+
+### TDD evidence — exact commands and output
+
+```text
+$ node --test --test-reporter=spec --test-name-pattern='production retry placement applies its newer axis to refresh-recentered membership' extension-axis-ladder/content-contract.test.cjs
+✖ production retry placement applies its newer axis to refresh-recentered membership (79.551667ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 389.538375
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+false !== true
+at extension-axis-ladder/content-contract.test.cjs:2777:10
+
+$ node --test --test-reporter=spec --test-name-pattern='production retry placement applies its newer axis to refresh-recentered membership' extension-axis-ladder/content-contract.test.cjs
+✔ production retry placement applies its newer axis to refresh-recentered membership (81.692292ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 411.489083
+```
+
+### Verification — exact commands and output
+
+```text
+$ node --test --test-reporter=spec --test-name-pattern='production retry placement applies|newest placement capture wins|placement started during rebuild|same-timeframe expiry change blocks|a rebuild generation discards|production stale older refresh|older cancelled placement|older failed placement|delayed placement started before' extension-axis-ladder/content-contract.test.cjs
+✔ newest placement capture wins when older capture resolves last
+✔ placement started during rebuild cannot overwrite newly committed axis map
+✔ same-timeframe expiry change blocks stale placement and waits for manual refresh
+✔ a rebuild generation discards a stale in-flight LTP refresh
+✔ delayed placement started before pagehide cannot redraw manual rails after reset
+✔ delayed placement started before same-label SPA navigation cannot redraw manual rails after reset
+✔ older cancelled placement cannot clear newer preview rails after it completes
+✔ older failed placement cannot clear newer preview rails
+✔ production retry placement applies its newer axis to refresh-recentered membership
+✔ production stale older refresh cannot overwrite a newer accepted refresh
+ℹ tests 10
+ℹ pass 10
+ℹ fail 0
+
+$ node --test --test-reporter=spec extension-axis-ladder/manual-payoff.test.cjs extension-axis-ladder/content-contract.test.cjs
+ℹ tests 155
+ℹ pass 155
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 974.742833
+
+$ node --check extension-axis-ladder/content.js
+(exit 0; no output)
+
+$ git diff --check
+(exit 0; no output)
+
+$ node --test --test-reporter=dot extension-axis-ladder/*.test.cjs
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+................
+(exit 0; local 127.0.0.1 test-server bind approved after sandbox-only EPERM)
+```
+
+### Self-review
+
+- Removing membership revision from placement ownership is intentionally narrow: membership changes without a generation change come only from an accepted refresh, and placement already renders `current`.
+- Existing lifecycle guards prevent old membership from surviving timeframe, expiry, rebuild, stop, pagehide, or SPA invalidation.
+- Task 5 persistence, quick/manual shared layout, and prior stale-refresh/newer-preview protections remain unchanged.
+
+### Concerns
+
+None.
