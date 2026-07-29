@@ -6,7 +6,7 @@ const manifest = require("./manifest.json");
 
 test("new extension has independent identity", () => {
   assert.equal(manifest.name, "Options Ladder");
-  assert.equal(manifest.version, "0.4.2");
+  assert.equal(manifest.version, "0.4.3");
   assert.equal(manifest.minimum_chrome_version, "141");
   assert.equal(manifest.permissions.includes("debugger"), true);
   assert.equal(manifest.permissions.includes("sidePanel"), true);

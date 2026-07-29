@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "141",
   "name": "Options Ladder",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
   "permissions": ["storage", "activeTab", "debugger", "sidePanel"],
   "host_permissions": [

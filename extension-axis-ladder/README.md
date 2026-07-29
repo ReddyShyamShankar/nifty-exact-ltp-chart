@@ -56,6 +56,10 @@ The full-height side panel retains the same UI design as version 0.4.0.
 
 Click one ladder strike to show its independent single-leg Call and Put expiry break-evens on chart. CALL BE is strike plus displayed Call premium; PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both break-even rails. Manual refresh removes both break-even rails; click a strike again to calculate from refreshed numbers. These are independent single-leg expiry break-evens, not combined short-straddle break-evens.
 
+## TradingView status badge
+
+The TradingView-owned compact status badge is a cosmetic enhancement: LIVE receives a full green fill, while OFFLINE or disconnected receives a full red fill; both use white text. If TradingView changes or removes the exact badge DOM, the decorator leaves the page unchanged. Badge styling cannot block the ladder, manual refresh, or break-even rails.
+
 ## Workflow
 
 1. Keep local NIFTY bridge running at `http://127.0.0.1:8787`.

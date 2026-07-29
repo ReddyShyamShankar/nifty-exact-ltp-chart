@@ -21,6 +21,13 @@ test("operator guide documents click-only single-leg break-even rails", () => {
   assert.match(readme, /independent single-leg expiry break-evens, not combined short-straddle break-evens/i);
 });
 
+test("operator guide treats TradingView badge styling as cosmetic and fail-safe", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+  assert.match(readme, /LIVE[^\n]*green[^\n]*OFFLINE[^\n]*red/i);
+  assert.match(readme, /TradingView-owned[^\n]*cosmetic/i);
+  assert.match(readme, /badge[^\n]*cannot[^\n]*ladder/i);
+});
+
 function acceptedRiskView(overrides = {}) {
   const view = {
     version: viewIdentity.ACCEPTED_VIEW_VERSION,
