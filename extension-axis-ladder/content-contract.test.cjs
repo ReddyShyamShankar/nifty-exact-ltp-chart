@@ -1781,6 +1781,21 @@ test("chart ladder uses popup design tokens with compact centered labels", () =>
   assert.doesNotMatch(css, /#ff9f0a|rgba\(66,\s*71,\s*82/);
 });
 
+test("selected strike uses a solid yellow fill without an outline, including ATM", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const selected = css.match(/\.nifty-axis-ladder__row\.is-selected\s*\{([^}]+)\}/)?.[1] || "";
+  const selectedArrow = css.match(/\.nifty-axis-ladder__row\.is-selected::after\s*\{([^}]+)\}/)?.[1] || "";
+
+  assert.match(css, /--ladder-selected:\s*#facc15/);
+  assert.match(css, /--ladder-selected-ink:\s*#111315/);
+  assert.match(selected, /background:\s*var\(--ladder-selected\)/);
+  assert.match(selected, /color:\s*var\(--ladder-selected-ink\)/);
+  assert.match(selected, /border-color:\s*var\(--ladder-selected\)/);
+  assert.match(selected, /outline:\s*none/);
+  assert.match(selectedArrow, /border-left-color:\s*var\(--ladder-selected\)/);
+  assert.doesNotMatch(css, /\.nifty-axis-ladder__row\.is-selected[^\{]*\{[^}]*outline:\s*2px/);
+});
+
 test("risk labels wire the cleared right edge and translate their full width left", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
@@ -2278,7 +2293,7 @@ test("stop clears selected rows and re-enable restores one listener set", async 
   harness.select();
 });
 
-test("clicked selection creates exactly two in-plot rails ending at lane-zero clearance", async () => {
+test("clicked selection creates two right-only rails from the label edge to the plot edge", async () => {
   const harness = createBreakEvenLifecycleHarness();
   await harness.settle();
   harness.select();
@@ -2289,7 +2304,8 @@ test("clicked selection creates exactly two in-plot rails ending at lane-zero cl
   assert.equal(rails.children.length, 2);
   rails.children.forEach((line) => {
     assert.equal(line.classList.contains("nifty-break-even__line"), true);
-    assert.equal(line.style.width, "88px");
+    assert.equal(line.style.left, "88px");
+    assert.equal(line.style.width, "1112px");
     assert.equal(line.children.length, 1);
     assert.equal(line.children[0].style.right, "1512px");
   });

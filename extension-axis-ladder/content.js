@@ -981,10 +981,10 @@
       const element = document.createElement("div");
       const className = projection.mode === "line" ? "line" : "marker";
       element.className = `nifty-break-even__${className} is-${level.kind}`;
-      element.style.left = `${plotLeft}px`;
       element.style.top = `${projection.y}px`;
       if (projection.mode === "line") {
-        element.style.width = `${railRight - plotLeft}px`;
+        element.style.left = `${railRight}px`;
+        element.style.width = `${plotRight - railRight}px`;
         const label = document.createElement("span");
         label.className = `nifty-break-even__label is-${level.kind}`;
         label.style.right = `${window.innerWidth - railRight}px`;

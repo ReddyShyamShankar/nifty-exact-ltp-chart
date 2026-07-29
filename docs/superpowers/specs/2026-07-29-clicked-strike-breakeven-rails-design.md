@@ -40,7 +40,7 @@ Default state contains no break-even rail, marker, or selection.
 
 1. Clicking one ladder row selects its exact strike.
 2. Selected non-ATM row keeps existing size and dark fill, adding mint outline.
-3. Selected ATM row keeps existing solid mint fill and adds a visible outer selection ring.
+3. Every selected row, including ATM, uses a solid yellow fill with dark text and no selection outline, ring, or glow. ATM returns to mint when selection clears.
 4. Clicking another row replaces selection and recalculates both rails from that row.
 5. Clicking anywhere outside ladder rows clears selection, both rails, off-screen markers, and missing-price feedback.
 6. Manual option-number refresh also clears selection. User must click a strike again after refresh.
@@ -54,6 +54,7 @@ Each valid break-even uses current TradingView native linear price map, same map
 
 - Call rail: thin blue dashed horizontal line.
 - Put rail: thin amber dashed horizontal line.
+- Each visible rail starts at its label's right edge and runs only right toward the price axis. No rail segment extends left across chart history.
 - Labels use dark ladder surface, white text, tabular monospaced numbers, and matching blue or amber edge.
 - Labels sit inside chart plot, immediately left of ladder's lane-zero edge, avoiding TradingView price scale.
 - Rails do not change ladder row width, height, lane, or strike position.

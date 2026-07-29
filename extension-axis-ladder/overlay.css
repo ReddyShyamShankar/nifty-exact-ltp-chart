@@ -4,6 +4,8 @@
   --ladder-ink: #f4f4f5;
   --ladder-accent: #34d399;
   --ladder-accent-dark: #063d2d;
+  --ladder-selected: #facc15;
+  --ladder-selected-ink: #111315;
   position: fixed;
   z-index: 2147483647;
   inset: 0;
@@ -141,16 +143,6 @@
   cursor: pointer;
 }
 
-.nifty-axis-ladder__row.is-selected:not(.is-atm) {
-  outline: 2px solid var(--ladder-accent);
-  outline-offset: 1px;
-}
-
-.nifty-axis-ladder__row.is-selected.is-atm {
-  outline: 2px solid var(--ladder-ink);
-  outline-offset: 2px;
-}
-
 .nifty-axis-ladder__row[data-lane]:not([data-lane="0"])::before {
   position: absolute;
   left: 100%;
@@ -186,6 +178,18 @@
 
 .nifty-axis-ladder__row.is-atm::after {
   border-left-color: var(--ladder-accent);
+}
+
+.nifty-axis-ladder__row.is-selected {
+  border-color: var(--ladder-selected);
+  outline: none;
+  background: var(--ladder-selected);
+  color: var(--ladder-selected-ink);
+  font-weight: 800;
+}
+
+.nifty-axis-ladder__row.is-selected::after {
+  border-left-color: var(--ladder-selected);
 }
 
 .nifty-axis-ladder__status {
