@@ -831,6 +831,7 @@
   let scaleFitTimeframe = null;
   let normalStatus = "LIVE";
   let breakEvenStatusOverride = null;
+  let manualPayoffStatusOverride = null;
   let stopLiveBadgeDecorator = () => {};
   try {
     stopLiveBadgeDecorator = liveBadgeApi?.install?.(document, MutationObserver) || (() => {});
@@ -945,8 +946,9 @@
   function showStatus(status) {
     const node = rootNode();
     if (status === "OPTION PRICE UNAVAILABLE") breakEvenStatusOverride = status;
+    else if (status === "PLAN PAYOFF FLAT") manualPayoffStatusOverride = status;
     else normalStatus = status;
-    const visibleStatus = breakEvenStatusOverride || status;
+    const visibleStatus = breakEvenStatusOverride || manualPayoffStatusOverride || status;
     node.dataset.status = visibleStatus;
     let statusNode = node.querySelector(".nifty-axis-ladder__status");
     if (!statusNode) {
@@ -963,10 +965,17 @@
     showStatus(normalStatus);
   }
 
+  function clearManualPayoffStatusOverride() {
+    if (!manualPayoffStatusOverride) return;
+    manualPayoffStatusOverride = null;
+    showStatus(normalStatus);
+  }
+
   function hideRows(status) {
     manualRowsConcealed = true;
     clearManualTransientState();
     clearBreakEvenRails();
+    clearManualPlanRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => row.remove());
     node.hidden = !settings.enabled;
@@ -978,6 +987,7 @@
     manualRowsConcealed = true;
     clearManualTransientState();
     clearBreakEvenRails();
+    clearManualPlanRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => { row.hidden = true; });
     node.hidden = !settings.enabled;
@@ -1045,6 +1055,15 @@
     document.getElementById("nifty-break-even-rails")?.remove();
   }
 
+  function removeManualPlanRails() {
+    document.getElementById("nifty-manual-plan-rails")?.remove();
+  }
+
+  function clearManualPlanRails() {
+    removeManualPlanRails();
+    clearManualPayoffStatusOverride();
+  }
+
   function breakEvenRoot() {
     let rails = document.getElementById("nifty-break-even-rails");
     if (!rails) {
@@ -1053,6 +1072,97 @@
       rootNode().append(rails);
     }
     return rails;
+  }
+
+  function manualPlanRailsRoot() {
+    let rails = document.getElementById("nifty-manual-plan-rails");
+    if (!rails) {
+      rails = document.createElement("div");
+      rails.id = "nifty-manual-plan-rails";
+      rootNode().append(rails);
+    }
+    return rails;
+  }
+
+  function manualDraftIdentity(draft) {
+    return {
+      id: draft.id || `manual-preview:${draft.expiry}:${draft.strike}`,
+      now: draft.createdAt || "1970-01-01T00:00:00.000Z"
+    };
+  }
+
+  function manualLevels() {
+    const saved = manualEntriesForExpiry();
+    const draft = manualEditor?.draft || null;
+    const validDraft = Boolean(draft && manualUiApi?.validateDraft?.(draft).ok);
+    const entries = validDraft
+      ? manualUiApi.previewEntries(saved, draft, manualDraftIdentity(draft))
+      : saved;
+    return manualPayoffApi?.levels?.(entries, validDraft ? "PREVIEW BE" : "PLAN BE")
+      || { status: "empty", levels: [] };
+  }
+
+  function placeManualPlanRails(toY, rect, labelRight) {
+    const payoff = manualLevels();
+    if (payoff.status === "empty") {
+      clearManualPlanRails();
+      return false;
+    }
+    if (payoff.status === "flat") {
+      removeManualPlanRails();
+      showStatus("PLAN PAYOFF FLAT");
+      return true;
+    }
+    if (!breakEvenApi || typeof toY !== "function") {
+      clearManualPlanRails();
+      return false;
+    }
+    const plotLeft = Number(rect?.left);
+    const plotRight = Number(rect?.right);
+    if (!Number.isFinite(plotLeft) || !Number.isFinite(plotRight) || plotRight <= plotLeft) {
+      clearManualPlanRails();
+      return false;
+    }
+    const placements = payoff.levels.map((level) => ({
+      level,
+      projection: breakEvenApi.project(level, toY, rect)
+    }));
+    if (!placements.length || placements.some(({ projection }) => !projection)) {
+      clearManualPlanRails();
+      return false;
+    }
+    const decorations = breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2);
+    if (!decorations) {
+      clearManualPlanRails();
+      return false;
+    }
+    const railRight = Math.max(plotLeft, Math.min(plotRight, Number.isFinite(labelRight) ? labelRight : plotRight));
+    const rails = manualPlanRailsRoot();
+    rails.replaceChildren();
+    placements.forEach(({ level, projection }, index) => {
+      const element = document.createElement("div");
+      const className = projection.mode === "line" ? "line" : "marker";
+      element.className = `nifty-manual-plan__${className} is-plan`;
+      element.style.top = `${projection.y}px`;
+      if (projection.mode === "line") {
+        element.style.left = `${railRight}px`;
+        element.style.width = `${plotRight - railRight}px`;
+        const label = document.createElement("span");
+        label.className = "nifty-manual-plan__label is-plan";
+        label.style.right = `${window.innerWidth - railRight}px`;
+        label.style.top = `${decorations[index].top}px`;
+        label.textContent = level.label;
+        element.append(label);
+      } else {
+        element.classList.add(`is-${projection.edge}`);
+        element.style.right = `${window.innerWidth - railRight}px`;
+        element.style.top = `${decorations[index].top}px`;
+        element.textContent = level.label;
+      }
+      rails.append(element);
+    });
+    clearManualPayoffStatusOverride();
+    return true;
   }
 
   function placeBreakEvenRails(toY, rect, labelRight) {
@@ -1190,10 +1300,6 @@
     try {
       renderManualRows();
     } catch (_) {}
-    if (!manualEditorOriginIsCurrent(origin)) return;
-    try {
-      await controller?.place();
-    } catch (_) {}
   }
 
   function persistManualPlans(updater, origin) {
@@ -1250,6 +1356,9 @@
         if (!manualEditorOriginIsCurrent(origin)) return;
         closeManualEditor();
         focusManualRow(strike);
+        try {
+          await controller?.place();
+        } catch (_) {}
       } catch (error) {
         if (!manualLifecycleOriginIsCurrent(origin)) return;
         if (manualEditorOriginIsCurrent(origin)) {
@@ -1260,20 +1369,20 @@
       }
     }
 
-    function renderEditor() {
+    function renderEditor(placePreview = false) {
       editor?.remove?.();
       editor = manualUiApi.renderEditor(document, draft, {
         chooseAction(optionType, direction) {
           draft = manualUiApi.chooseAction(draft, optionType, direction);
-          renderEditor();
+          renderEditor(true);
         },
         setLots(lots) {
           draft = manualUiApi.setLots(draft, lots);
-          renderEditor();
+          renderEditor(true);
         },
         setPremium(premium) {
           draft = manualUiApi.setPremium(draft, premium);
-          renderEditor();
+          renderEditor(true);
         },
         async save() {
           if (!manualUiApi.validateDraft(draft).ok) return;
@@ -1287,15 +1396,19 @@
           if (!draft.id) return;
           await commitManualPlan((store) => manualPlanApi.removeEntry(store, draft.expiry, draft.id));
         },
-        close: closeManualEditor
+        close() {
+          closeManualEditor();
+          void controller?.place();
+        }
       });
       rowElement.append(editor);
-      manualEditor = { strike, element: editor, ...origin };
+      manualEditor = { strike, element: editor, draft, ...origin };
       setCommitControlsDisabled(pendingCommit);
+      if (placePreview) void controller?.place();
     }
 
     closeManualEditor();
-    renderEditor();
+    renderEditor(true);
   }
 
   function riskRoot() {
@@ -1529,11 +1642,13 @@
         .map(({ element }) => element);
       const labelRight = riskLabelLayout(laneZeroRows)?.labelRight ?? rect.right;
       placeBreakEvenRails(toY, rect, labelRight);
+      placeManualPlanRails(toY, rect, labelRight);
       scaleFitAttempts = 0;
       scaleFitTimeframe = membership?.timeframe || scaleFitTimeframe;
       return { riskLayout: { labelRight } };
     } catch (error) {
       clearBreakEvenRails();
+      clearManualPlanRails();
       elements.forEach(({ element }) => { element.hidden = true; });
       throw error;
     } finally {
@@ -1561,6 +1676,7 @@
       clearRetries();
       clearBreakEvenSelection();
       clearManualTransientState();
+      clearManualPlanRails();
       controller.invalidate();
       document.getElementById(LABELS_ID)?.remove();
       return false;
@@ -1732,6 +1848,7 @@
   function stop() {
     clearBreakEvenSelection();
     clearManualTransientState();
+    clearManualPlanRails();
     document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
     document.getElementById(LABELS_ID)?.removeEventListener("click", handleLadderClick);
     document.getElementById(LABELS_ID)?.removeEventListener("dblclick", handleLadderDoubleClick);

@@ -2130,6 +2130,11 @@ function createBreakEvenLifecycleHarness({
         String(value).split(/\s+/).filter(Boolean).forEach((name) => classes.add(name));
       }
     });
+    let ownText = "";
+    Object.defineProperty(node, "textContent", {
+      get() { return ownText + node.children.map((child) => child.textContent).join(""); },
+      set(value) { ownText = String(value ?? ""); }
+    });
     return node;
   }
 
@@ -2275,6 +2280,8 @@ function createBreakEvenLifecycleHarness({
     roots,
     runtimeListeners,
     rails() { return document.getElementById("nifty-break-even-rails"); },
+    manualRails() { return document.getElementById("nifty-manual-plan-rails"); },
+    manualRailLabels() { return this.manualRails()?.children.map((node) => node.textContent) || []; },
     editor(strike) { return this.row(strike)?.querySelector(".nifty-manual-editor"); },
     manualEntries() { return manualPlanApi.entriesFor(storedManualPlans, snapshot.expiry); },
     storageSetCalls() { return storageWrites.length; },
@@ -2341,6 +2348,27 @@ function createBreakEvenLifecycleHarness({
       root.dispatch("click", { target: row });
       root.dispatch("dblclick", { target: row });
     },
+    openEdit(entryId) {
+      const entry = this.manualEntries().find((item) => item.id === entryId);
+      assert.ok(entry, "saved manual entry is available for editing");
+      this.click(entry.strike);
+      this.doubleClick(entry.strike);
+    },
+    setEditorLots(lots) {
+      let editor = [...this.roots].find((node) => node.classList.contains("nifty-manual-editor"));
+      assert.ok(editor, "manual editor is open");
+      let current = Number(editor.querySelector(".nifty-manual-editor__lots")?.textContent);
+      while (current !== lots) {
+        editor.children[current < lots ? 4 : 2].dispatch("click", {});
+        editor = [...this.roots].find((node) => node.classList.contains("nifty-manual-editor") && node.parent);
+        current = Number(editor.querySelector(".nifty-manual-editor__lots")?.textContent);
+      }
+    },
+    cancelEditor() {
+      const editor = [...this.roots].find((node) => node.classList.contains("nifty-manual-editor") && node.parent);
+      assert.ok(editor, "manual editor is open");
+      editor.querySelector(".nifty-manual-editor__close").dispatch("click", {});
+    },
     flushClickTimer,
     select(strike = 23750) {
       const row = this.click(strike);
@@ -2394,6 +2422,17 @@ function savedManualEntry(overrides = {}) {
   };
 }
 
+const approvedOneCallThreePuts = [
+  { id: "call-entry", underlying: "NIFTY", expiry: "2026-08-25", strike: 24100,
+    optionType: "CALL", direction: "SELL", lots: 1, premium: 358,
+    callSnapshot: 358, putSnapshot: 315.45,
+    createdAt: "2026-07-29T10:00:00.000Z", updatedAt: "2026-07-29T10:00:00.000Z" },
+  { id: "put-entry", underlying: "NIFTY", expiry: "2026-08-25", strike: 24000,
+    optionType: "PUT", direction: "SELL", lots: 3, premium: 183,
+    callSnapshot: 411.15, putSnapshot: 183,
+    createdAt: "2026-07-29T10:01:00.000Z", updatedAt: "2026-07-29T10:01:00.000Z" }
+];
+
 function commitManualEditor(h, strike = 23750) {
   const commit = h.editor(strike).querySelector(".nifty-manual-editor__commit");
   assert.ok(commit, "manual editor has a commit control");
@@ -2421,6 +2460,85 @@ test("manual refresh preserves saved entry snapshot", async () => {
 
   assert.equal(h.manualEntries()[0].callSnapshot, 358);
   assert.equal(h.manualEntries()[0].putSnapshot, 414.6);
+});
+
+test("saved manual plan draws every neutral break-even through native axis", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+
+  const rails = h.manualRails();
+  assert.ok(rails, "saved manual plan creates its independent rail root");
+  assert.deepEqual(rails.children.map((node) => node.textContent), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+  assert.equal(rails.children.every((node) => node.classList.contains("is-plan")), true);
+  assert.equal(h.rails(), null, "manual plan never creates quick single-leg rails");
+});
+
+test("valid draft previews changed lots without saving", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  const fetchesBeforeDraft = h.fetchCalls();
+
+  h.openEdit("call-entry");
+  h.setEditorLots(2);
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
+  assert.equal(h.storageSetCalls(), 0);
+  assert.equal(h.fetchCalls(), fetchesBeforeDraft);
+
+  h.cancelEditor();
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+});
+
+test("saving a draft replaces preview rails with committed plan rails", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+
+  h.openEdit("call-entry");
+  h.setEditorLots(2);
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
+
+  commitManualEditor(h, 24100);
+  await h.settle();
+  assert.equal(h.storageSetCalls(), 1);
+  assert.equal(h.editor(24100), null);
+  assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,578", "PLAN BE 24,733"]);
+});
+
+test("manual plan keeps both roots visible as truthful edge markers", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  h.setProject((level) => ({ mode: "edge", edge: level.exact < 24000 ? "top" : "bottom", y: 0 }));
+  await h.settle();
+
+  const rails = h.manualRails();
+  assert.ok(rails, "manual plan creates rails for projected roots");
+  assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+  assert.equal(rails.children[0].classList.contains("is-top"), true);
+  assert.equal(rails.children[1].classList.contains("is-bottom"), true);
+});
+
+test("flat manual plan clears rails and reports flat payoff", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [
+    { ...approvedOneCallThreePuts[0], id: "flat-buy", direction: "BUY" },
+    { ...approvedOneCallThreePuts[0], id: "flat-sell" }
+  ] });
+  await h.settle();
+
+  assert.equal(h.manualRails(), null);
+  assert.equal(h.status(), "PLAN PAYOFF FLAT");
+});
+
+test("axis failure conceals manual rails without deleting plan", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  assert.ok(h.manualRails());
+
+  h.setProject(() => null);
+  await h.retryPlacement();
+
+  assert.equal(h.manualRails(), null);
+  assert.equal(h.manualEntries().length, 2);
 });
 
 test("double click opens editor without quick rails or face flash", async () => {

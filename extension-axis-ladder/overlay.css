@@ -29,6 +29,13 @@
   pointer-events: none;
 }
 
+#nifty-manual-plan-rails {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+}
+
 .nifty-tv-status-badge {
   color: #fff !important;
 }
@@ -69,6 +76,23 @@
 .nifty-break-even__label.is-put,
 .nifty-break-even__marker.is-put {
   border-left-color: #f59e0b;
+}
+
+.nifty-manual-plan__line {
+  position: fixed;
+  height: 0;
+  border-top: 1px dashed #a78bfa;
+}
+
+.nifty-manual-plan__label,
+.nifty-manual-plan__marker {
+  position: fixed;
+  padding: 1px 4px;
+  border-left: 2px solid #a78bfa;
+  background: var(--ladder-surface);
+  color: #ddd6fe;
+  font: 10px/1.3 "Geist Mono", ui-monospace, monospace;
+  white-space: nowrap;
 }
 
 .nifty-seller-risk__band,
