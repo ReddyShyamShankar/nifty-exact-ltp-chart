@@ -2092,3 +2092,16 @@ test("stop clears selected rows and re-enable restores one listener set", async 
   assert.equal(reenabledRoot.listenerCount("click"), 1);
   harness.select();
 });
+
+test("clicked strike rails use exact axis map, rounded seller labels, and no safe-zone fill", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(source, /placeBreakEvenRails\(toY, rect, labelRight\)/);
+  assert.match(source, /breakEvenApi\.calculate/);
+  assert.match(source, /breakEvenApi\.project/);
+  assert.match(css, /\.nifty-break-even__line\.is-call/);
+  assert.match(css, /\.nifty-break-even__line\.is-put/);
+  assert.match(css, /\.nifty-break-even__marker\.is-top/);
+  assert.match(css, /\.nifty-break-even__marker\.is-bottom/);
+  assert.doesNotMatch(css, /nifty-break-even__safe-zone/);
+});

@@ -20,6 +20,56 @@
   pointer-events: none;
 }
 
+#nifty-break-even-rails {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+}
+
+.nifty-break-even__line {
+  position: fixed;
+  height: 0;
+  border-top: 1px dashed;
+}
+
+.nifty-break-even__line.is-call {
+  border-color: #3b82f6;
+}
+
+.nifty-break-even__line.is-put {
+  border-color: #f59e0b;
+}
+
+.nifty-break-even__label,
+.nifty-break-even__marker {
+  position: fixed;
+  padding: 1px 4px;
+  border-left: 2px solid;
+  background: var(--ladder-surface);
+  color: var(--ladder-ink);
+  font: 10px/1.3 "Geist Mono", ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+.nifty-break-even__label.is-call,
+.nifty-break-even__marker.is-call {
+  border-left-color: #3b82f6;
+}
+
+.nifty-break-even__label.is-put,
+.nifty-break-even__marker.is-put {
+  border-left-color: #f59e0b;
+}
+
+.nifty-break-even__marker.is-top {
+  transform: translateY(0);
+}
+
+.nifty-break-even__marker.is-bottom {
+  transform: translateY(-100%);
+}
+
 .nifty-seller-risk__band,
 .nifty-seller-risk__line {
   position: fixed;

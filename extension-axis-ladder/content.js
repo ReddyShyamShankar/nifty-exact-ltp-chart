@@ -368,7 +368,7 @@
       const positioned = positionedRows(membership, cachedAxisToY);
       if (!positioned) return false;
       clearCachedRiskPlacement();
-      const rowPlacement = placeRows(positioned, membership);
+      const rowPlacement = placeRows(positioned, membership, cachedAxisToY);
       if (rowPlacement === false) return false;
       cachedRiskLayout = rowPlacement && typeof rowPlacement === "object"
         ? rowPlacement.riskLayout || null
@@ -855,6 +855,7 @@
   }
 
   function concealRows(status) {
+    clearBreakEvenRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => { row.hidden = true; });
     node.hidden = !settings.enabled;
@@ -891,6 +892,73 @@
 
   function clearBreakEvenRails() {
     document.getElementById("nifty-break-even-rails")?.remove();
+  }
+
+  function breakEvenRoot() {
+    let rails = document.getElementById("nifty-break-even-rails");
+    if (!rails) {
+      rails = document.createElement("div");
+      rails.id = "nifty-break-even-rails";
+      rootNode().append(rails);
+    }
+    return rails;
+  }
+
+  function placeBreakEvenRails(toY, rect, labelRight) {
+    const selection = breakEvenSelection.current();
+    if (!selection) {
+      clearBreakEvenRails();
+      return false;
+    }
+    if (!breakEvenApi || typeof toY !== "function") {
+      clearBreakEvenRails();
+      return false;
+    }
+    const breakEvens = breakEvenApi.calculate(selection);
+    if (!breakEvens) {
+      clearBreakEvenRails();
+      return false;
+    }
+    const plotLeft = Number(rect?.left);
+    const plotRight = Number(rect?.right);
+    const plotTop = Number(rect?.top);
+    const plotBottom = Number(rect?.bottom);
+    if (![plotLeft, plotRight, plotTop, plotBottom].every(Number.isFinite) || plotRight <= plotLeft || plotBottom <= plotTop) {
+      clearBreakEvenRails();
+      return false;
+    }
+    const placements = [breakEvens.call, breakEvens.put].map((level) => ({
+      level,
+      projection: breakEvenApi.project(level, toY, rect)
+    }));
+    if (placements.some(({ projection }) => !projection)) {
+      clearBreakEvenRails();
+      return false;
+    }
+    const railRight = Math.max(plotLeft, Math.min(plotRight, Number.isFinite(labelRight) ? labelRight : plotRight));
+    clearBreakEvenRails();
+    const rails = breakEvenRoot();
+    placements.forEach(({ level, projection }) => {
+      const element = document.createElement("div");
+      const className = projection.mode === "line" ? "line" : "marker";
+      element.className = `nifty-break-even__${className} is-${level.kind}`;
+      element.style.left = `${plotLeft}px`;
+      element.style.top = `${projection.y}px`;
+      if (projection.mode === "line") {
+        element.style.width = `${railRight - plotLeft}px`;
+        const label = document.createElement("span");
+        label.className = `nifty-break-even__label is-${level.kind}`;
+        label.style.right = `${window.innerWidth - railRight}px`;
+        label.style.top = `${projection.y}px`;
+        label.textContent = level.label;
+        element.append(label);
+      } else {
+        element.classList.add(`is-${projection.edge}`);
+        element.textContent = level.label;
+      }
+      rails.append(element);
+    });
+    return true;
   }
 
   function renderBreakEvenSelection() {
@@ -1092,7 +1160,7 @@
     return true;
   }
 
-  function placeRows(rows, membership) {
+  function placeRows(rows, membership, toY) {
     const canvas = chartCanvas();
     if (!canvas) {
       concealRows("TRADINGVIEW CHART UNAVAILABLE");
@@ -1141,10 +1209,13 @@
       const laneZeroRows = elements
         .filter((_entry, index) => layout.lanes[index] === 0)
         .map(({ element }) => element);
+      const labelRight = riskLabelLayout(laneZeroRows)?.labelRight ?? rect.right;
+      placeBreakEvenRails(toY, rect, labelRight);
       scaleFitAttempts = 0;
       scaleFitTimeframe = membership?.timeframe || scaleFitTimeframe;
-      return { riskLayout: riskLabelLayout(laneZeroRows) };
+      return { riskLayout: { labelRight } };
     } catch (error) {
+      clearBreakEvenRails();
       elements.forEach(({ element }) => { element.hidden = true; });
       throw error;
     } finally {
@@ -1230,7 +1301,11 @@
     if (!rowElement) return;
     const strike = Number(rowElement.dataset.strike);
     const snapshot = controller?.membership()?.rows.find((row) => row.strike === strike);
-    if (!breakEvenSelection.select(snapshot)) showStatus("OPTION PRICE UNAVAILABLE");
+    if (!breakEvenSelection.select(snapshot)) {
+      showStatus("OPTION PRICE UNAVAILABLE");
+      return;
+    }
+    void controller?.place();
   }
 
   function handleDocumentKeyDown(event) {
