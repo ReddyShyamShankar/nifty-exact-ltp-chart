@@ -1855,6 +1855,35 @@ test("native status badge uses full green or red fill with white text", () => {
   assert.match(css, /\.nifty-tv-status-badge\s*\{[\s\S]*?color:\s*#fff/i);
 });
 
+test("native status badge CSS preserves TradingView box and text metrics", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const declarationsFor = (selector) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const block = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "i"));
+    assert.ok(block, `${selector} declaration block exists`);
+    return block[1].split(";")
+      .map((declaration) => declaration.trim())
+      .filter(Boolean)
+      .map((declaration) => {
+        const separator = declaration.indexOf(":");
+        assert.notEqual(separator, -1, `${selector} declaration is valid`);
+        return {
+          property: declaration.slice(0, separator).trim().toLowerCase(),
+          value: declaration.slice(separator + 1).trim().toLowerCase()
+        };
+      });
+  };
+  const base = declarationsFor(".nifty-tv-status-badge");
+  const live = declarationsFor(".nifty-tv-status-badge.is-live");
+  const offline = declarationsFor(".nifty-tv-status-badge.is-offline");
+  const forbiddenMetric = /^(?:border(?:-.+)?|padding(?:-.+)?|(?:min-|max-)?(?:width|height)|font-weight|font-size|line-height|position|pointer-events)$/;
+
+  assert.equal(base.some(({ property }) => forbiddenMetric.test(property)), false);
+  assert.deepEqual(base, [{ property: "color", value: "#fff !important" }]);
+  assert.deepEqual(live, [{ property: "background", value: "#16a34a !important" }]);
+  assert.deepEqual(offline, [{ property: "background", value: "#dc2626 !important" }]);
+});
+
 test("live badge installs once outside ladder state, isolates failure, and stops on unload", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   let installCalls = 0;
