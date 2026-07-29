@@ -140,3 +140,65 @@ $ node --test --test-reporter=dot extension-axis-ladder/*.test.cjs
 
 - Revision checks cover both manual and quick rail roots while preserving independent DOM semantics.
 - Task 5 serialized manual-plan storage queue remains unchanged.
+
+## Fix Round 3/5
+
+### Findings resolved
+
+- LTP refresh no longer advances the rail visual revision. Accepted quote data is governed only by generation, expiry, membership, and refresh-request ownership.
+- A fresh-axis placement retains ownership of rail coordinates while consuming refreshed quotes if the refresh resolves first.
+- A refresh resolving after a fresh-axis placement reuses that committed visual revision and cached axis without invalidating it.
+- Concurrent refreshes now supersede earlier fetches through the existing refresh revision and abort guard; stale responses return failure without changing current quotes.
+- Lifecycle revision checks remain active: a refresh may repaint only with its current revision or a still-current committed placement revision.
+
+### Added production-hook contracts
+
+- Placement → refresh → newer-axis resolution keeps fresh quote cells and commits rails at the newer y coordinate.
+- Refresh → newer placement → refresh resolution keeps fresh quote cells while rails remain at the newer y coordinate.
+- A delayed older refresh cannot overwrite a newer accepted refresh; older runtime response reports `ok: false`.
+
+### Verification — exact commands and output
+
+```text
+$ node --test --test-reporter=spec extension-axis-ladder/manual-payoff.test.cjs extension-axis-ladder/content-contract.test.cjs
+ℹ tests 154
+ℹ pass 154
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1120.53675
+
+$ node --check extension-axis-ladder/content.js
+(exit 0; no output)
+
+$ git diff --check
+(exit 0; no output)
+
+$ node --test --test-reporter=dot extension-axis-ladder/*.test.cjs
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+...............
+(exit 0)
+```
+
+### Self-review
+
+- Visual revision ownership stays with axis/rebuild placement. LTP data ownership stays with refresh revision.
+- Task 5 manual-plan persistence and all shared quick/manual rail layout behavior remain untouched.

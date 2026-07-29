@@ -2007,6 +2007,7 @@ function createBreakEvenLifecycleHarness({
   deferStorage = false,
   deferManualStorageEvents = false,
   deferAxisCaptures: initiallyDeferAxisCaptures = false,
+  deferFetches: initiallyDeferFetches = false,
   spot = 23767.45
 } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
@@ -2024,7 +2025,9 @@ function createBreakEvenLifecycleHarness({
   const pendingStorageWrites = [];
   const pendingManualStorageEvents = [];
   const pendingAxisCaptures = [];
+  const pendingFetches = [];
   let deferAxisCaptures = initiallyDeferAxisCaptures;
+  let deferFetches = initiallyDeferFetches;
   let renderManualError = null;
   let manualRenderCalls = 0;
   let nextManualEntryId = 1;
@@ -2182,6 +2185,26 @@ function createBreakEvenLifecycleHarness({
     };
   }
 
+  function optionChainResponse(overrides = refreshNumbers) {
+    const byStrike = overrides?.byStrike || {};
+    const hasLegacyQuote = Object.prototype.hasOwnProperty.call(overrides || {}, "call")
+      || Object.prototype.hasOwnProperty.call(overrides || {}, "put");
+    const rows = snapshot.rows.map((row) => ({
+      ...row,
+      ...(byStrike[row.strike] || (row.strike === 24450 && hasLegacyQuote ? {
+        call: overrides.call,
+        put: overrides.put
+      } : {}))
+    }));
+    return {
+      ok: true,
+      json: async () => ({
+        spot: Number.isFinite(Number(overrides?.spot)) ? Number(overrides.spot) : snapshot.spot,
+        rows
+      })
+    };
+  }
+
   const sandbox = {
     AbortController,
     MutationObserver: class {
@@ -2256,10 +2279,8 @@ function createBreakEvenLifecycleHarness({
     document,
     fetch: async () => {
       fetchCalls += 1;
-      const rows = snapshot.rows.map((row) => row.strike === 24450 && refreshNumbers
-        ? { ...row, ...refreshNumbers }
-        : row);
-      return { ok: true, json: async () => ({ spot: snapshot.spot, rows }) };
+      if (deferFetches) return new Promise((resolve) => pendingFetches.push(resolve));
+      return optionChainResponse();
     },
     setTimeout(callback, delay) {
       const id = nextTimerId++;
@@ -2286,6 +2307,13 @@ function createBreakEvenLifecycleHarness({
       timers.delete(timer[0]);
       timer[1].callback();
     }
+  }
+
+  function requestOptionNumberRefresh(values) {
+    refreshNumbers = values;
+    return new Promise((resolve) => {
+      assert.equal(runtimeListeners[0]({ type: "REFRESH_OPTION_NUMBERS" }, null, resolve), true);
+    });
   }
 
   return {
@@ -2318,7 +2346,9 @@ function createBreakEvenLifecycleHarness({
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
     setProject(nextProject) { project = nextProject; },
     deferAxisCaptures() { deferAxisCaptures = true; },
+    deferFetches() { deferFetches = true; },
     pendingAxisCaptureCount() { return pendingAxisCaptures.length; },
+    pendingFetchCount() { return pendingFetches.length; },
     resolveAxisCapture(index = 0, result = axisCaptureResult()) {
       const [resolve] = pendingAxisCaptures.splice(index, 1);
       assert.ok(resolve, "expected a pending axis capture");
@@ -2326,6 +2356,11 @@ function createBreakEvenLifecycleHarness({
     },
     resolveLatestAxisCapture(result = axisCaptureResult()) {
       this.resolveAxisCapture(pendingAxisCaptures.length - 1, result);
+    },
+    resolveFetch(index = 0, overrides) {
+      const [resolve] = pendingFetches.splice(index, 1);
+      assert.ok(resolve, "expected a pending option-number fetch");
+      resolve(optionChainResponse(overrides));
     },
     row(strike = 23750) {
       return document.getElementById("nifty-axis-ladder")
@@ -2406,9 +2441,9 @@ function createBreakEvenLifecycleHarness({
       });
     },
     storage(change) { dispatchStorage(change); },
+    startRefreshOptionNumbers(values) { return requestOptionNumberRefresh(values); },
     async refreshOptionNumbers(values) {
-      refreshNumbers = values;
-      await new Promise((resolve) => runtimeListeners[0]({ type: "REFRESH_OPTION_NUMBERS" }, null, resolve));
+      await requestOptionNumberRefresh(values);
       await settle();
     },
     settle
@@ -2674,6 +2709,81 @@ test("older failed placement cannot clear newer preview rails", async () => {
   await h.settle();
   assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
   assert.equal(h.storageSetCalls(), 0);
+});
+
+test("production retry placement keeps accepted refresh quotes and commits its newer native axis", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [savedManualEntry()] });
+  await h.settle();
+  assert.equal(h.manualRails().children[0].style.top, "126.2px");
+  h.deferAxisCaptures();
+  h.deferFetches();
+
+  const placement = h.retryPlacement();
+  assert.equal(h.pendingAxisCaptureCount(), 1);
+  const refresh = h.startRefreshOptionNumbers();
+  assert.equal(h.pendingFetchCount(), 1);
+
+  h.resolveFetch(0, { byStrike: { 23700: { call: 777, put: 888 } } });
+  assert.equal((await refresh).ok, true);
+  h.resolveAxisCapture(0, {
+    ok: true,
+    gridGapPx: 20,
+    axisPairs: [
+      { price: 24000, y: 300 },
+      { price: 23900, y: 320 },
+      { price: 23800, y: 340 },
+      { price: 23700, y: 360 }
+    ]
+  });
+
+  assert.equal((await placement).ok, true);
+  assert.match(h.row(23700).textContent, /C 777\.00P 888\.00/);
+  assert.equal(h.manualRails().children[0].style.top, "326.2px");
+});
+
+test("production refresh finishing after a newer placement retains fresh quotes without moving fresh-axis rails", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [savedManualEntry()] });
+  await h.settle();
+  h.deferAxisCaptures();
+  h.deferFetches();
+
+  const refresh = h.startRefreshOptionNumbers();
+  assert.equal(h.pendingFetchCount(), 1);
+  const placement = h.retryPlacement();
+  assert.equal(h.pendingAxisCaptureCount(), 1);
+  h.resolveAxisCapture(0, {
+    ok: true,
+    gridGapPx: 20,
+    axisPairs: [
+      { price: 24000, y: 300 },
+      { price: 23900, y: 320 },
+      { price: 23800, y: 340 },
+      { price: 23700, y: 360 }
+    ]
+  });
+  assert.equal((await placement).ok, true);
+
+  h.resolveFetch(0, { byStrike: { 23700: { call: 777, put: 888 } } });
+  assert.equal((await refresh).ok, true);
+  assert.match(h.row(23700).textContent, /C 777\.00P 888\.00/);
+  assert.equal(h.manualRails().children[0].style.top, "326.2px");
+});
+
+test("production stale older refresh cannot overwrite a newer accepted refresh", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.deferFetches();
+
+  const older = h.startRefreshOptionNumbers();
+  assert.equal(h.pendingFetchCount(), 1);
+  const newer = h.startRefreshOptionNumbers();
+  assert.equal(h.pendingFetchCount(), 2);
+
+  h.resolveFetch(1, { byStrike: { 23700: { call: 999, put: 888 } } });
+  assert.equal((await newer).ok, true);
+  h.resolveFetch(0, { byStrike: { 23700: { call: 555, put: 444 } } });
+  assert.equal((await older).ok, false);
+  assert.match(h.row(23700).textContent, /C 999\.00P 888\.00/);
 });
 
 test("quick and manual near-price labels share one collision layout without moving rail y", async () => {

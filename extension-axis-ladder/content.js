@@ -242,6 +242,7 @@
     const axisObservationAt = dependencies.axisObservationAt || (() => 0);
     const activeTimeframe = dependencies.activeTimeframe || (() => desiredTimeframe);
     const beginVisualPlacement = dependencies.beginVisualPlacement || (() => undefined);
+    const currentVisualPlacementRevision = dependencies.currentVisualPlacementRevision || (() => undefined);
     const isVisualPlacementCurrent = dependencies.isVisualPlacementCurrent || (() => true);
     let expiry = dependencies.expiry || DEFAULTS.expiry;
     const scheduleRetry = dependencies.scheduleRetry || ((run, delay) => setTimeout(run, delay));
@@ -261,6 +262,8 @@
     let riskDeadlineTimer = null;
     let retryIndex = 0;
     let cachedAxisToY = null;
+    let committedVisualPlacementRevision = undefined;
+    let hasCommittedVisualPlacement = false;
     let cachedRiskLayout = null;
     let cachedRiskGeneration = null;
     let placementRevision = 0;
@@ -385,6 +388,10 @@
       clearCachedRiskPlacement();
       const rowPlacement = placeRows(positioned, membership, cachedAxisToY, visualPlacementRevision);
       if (!isVisualPlacementCurrent(visualPlacementRevision) || rowPlacement === false) return false;
+      if (visualPlacementRevision !== undefined) {
+        committedVisualPlacementRevision = visualPlacementRevision;
+        hasCommittedVisualPlacement = true;
+      }
       cachedRiskLayout = rowPlacement && typeof rowPlacement === "object"
         ? rowPlacement.riskLayout || null
         : null;
@@ -456,6 +463,8 @@
         || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
       current = null;
       cachedAxisToY = null;
+      committedVisualPlacementRevision = undefined;
+      hasCommittedVisualPlacement = false;
       clearCachedRiskPlacement();
       hideRisk();
       hideRows(message || "AXIS CALIBRATION UNAVAILABLE");
@@ -576,6 +585,8 @@
         transitionMinimumObservedAt = 0;
         current = null;
         cachedAxisToY = null;
+        committedVisualPlacementRevision = undefined;
+        hasCommittedVisualPlacement = false;
         clearCachedRiskPlacement();
         hideRisk();
         hideRows("UNSUPPORTED TIMEFRAME");
@@ -591,8 +602,8 @@
     }
 
     async function refreshLtp() {
-      if (!current || refreshing || rebuilding) return false;
-      const visualPlacementRevision = beginVisualPlacement();
+      if (!current || rebuilding) return false;
+      const visualPlacementRevision = currentVisualPlacementRevision();
       refreshing = true;
       const snapshot = current;
       let refreshOwnedMembership = snapshot;
@@ -607,8 +618,7 @@
         if (generation !== snapshotGeneration
           || localRefreshRevision !== refreshRevision
           || current !== snapshot
-          || snapshot.expiry !== expiry
-          || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
+          || snapshot.expiry !== expiry) return false;
         cachedChain = chain;
         const spot = Number(chain?.spot);
         const lowerMidpoint = snapshot.atm - snapshot.atmStep / 2;
@@ -641,16 +651,22 @@
         if (membershipChanged) membershipRevision += 1;
         dataStatus = pendingRecenter ? "RECENTER PENDING" : (complete ? "LIVE" : "PARTIAL");
         renderRows(current.rows, current);
-        const placed = placeCached(current, visualPlacementRevision);
-        if (!placed) throw new Error("EXACT STRIKE POSITIONS UNAVAILABLE");
-        if (placed) setStatus(dataStatus);
-        return placed;
+        const refreshVisualPlacementRevision = isVisualPlacementCurrent(visualPlacementRevision)
+          ? visualPlacementRevision
+          : (hasCommittedVisualPlacement && isVisualPlacementCurrent(committedVisualPlacementRevision)
+            ? committedVisualPlacementRevision
+            : null);
+        if (refreshVisualPlacementRevision !== null) {
+          const placed = placeCached(current, refreshVisualPlacementRevision);
+          if (!placed) throw new Error("EXACT STRIKE POSITIONS UNAVAILABLE");
+        }
+        setStatus(dataStatus);
+        return true;
       } catch (error) {
         if (generation === snapshotGeneration
           && localRefreshRevision === refreshRevision
           && current === refreshOwnedMembership
           && snapshot.expiry === expiry
-          && isVisualPlacementCurrent(visualPlacementRevision)
           && error?.name !== "AbortError") {
           if (acceptedFreshData) {
             concealRows(error?.message || "EXACT STRIKE POSITIONS UNAVAILABLE");
@@ -737,6 +753,8 @@
       current = null;
       cachedChain = chainSnapshotsByExpiry.get(expiry) || null;
       cachedAxisToY = null;
+      committedVisualPlacementRevision = undefined;
+      hasCommittedVisualPlacement = false;
       clearCachedRiskPlacement();
       hideRisk();
       dataStatus = "STALE";
@@ -759,6 +777,8 @@
       desiredTimeframe = null;
       current = null;
       cachedAxisToY = null;
+      committedVisualPlacementRevision = undefined;
+      hasCommittedVisualPlacement = false;
       clearCachedRiskPlacement();
       hideRisk();
       dataStatus = "STALE";
@@ -1882,6 +1902,7 @@
       activeTimeframe: () => timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || ""),
       axisObservationAt,
       beginVisualPlacement,
+      currentVisualPlacementRevision: () => railVisualRevision,
       isVisualPlacementCurrent: visualPlacementIsCurrent,
       captureAxisScale,
       fetchChain,
