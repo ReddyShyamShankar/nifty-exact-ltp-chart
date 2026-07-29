@@ -1658,6 +1658,7 @@ test("browser lifecycle disconnects observers and relies only on fresh axis obse
   const root = makeNode();
   const sandbox = {
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
+    NiftyManualPlan: require("./manual-plan.js"),
     NiftySellerViewIdentity: viewIdentity,
     AbortController,
     MutationObserver: class {
@@ -1720,6 +1721,7 @@ test("enabled NIFTY tab waits for manual refresh before first chain request", as
   };
   const sandbox = {
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
+    NiftyManualPlan: require("./manual-plan.js"),
     NiftySellerViewIdentity: viewIdentity,
     AbortController,
     MutationObserver: class { observe() {} disconnect() {} },
@@ -1925,6 +1927,7 @@ test("live badge installs once outside ladder state, isolates failure, and stops
     let storageRead = false;
     const sandbox = {
       NiftyTradingViewLiveBadge: liveBadge,
+      NiftyManualPlan: require("./manual-plan.js"),
       NiftySellerViewIdentity: { normalizeStoredRiskViews(value) { return value; } },
       MutationObserver: class {},
       chrome: {
@@ -1998,7 +2001,10 @@ test("rows alone accept input while fullscreen overlay remains pointer-transpare
 
 function createBreakEvenLifecycleHarness({
   plotRect = { left: 0, top: 0, right: 1200, bottom: 800 },
-  invalidRows = {}
+  invalidRows = {},
+  manualEntries = [],
+  storageSetError = null,
+  spot = 23767.45
 } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const nodesById = new Map();
@@ -2009,7 +2015,16 @@ function createBreakEvenLifecycleHarness({
   let nextTimerId = 1;
   let mutationCallback = null;
   let fetchCalls = 0;
+  let refreshNumbers = null;
+  let activeElement = null;
+  const storageWrites = [];
   const railApi = require("./breakeven-rails.js");
+  const manualPlanApi = require("./manual-plan.js");
+  const manualPayoffApi = require("./manual-payoff.js");
+  const manualInteractionApi = require("./manual-interaction.js");
+  const manualUiApi = require("./manual-ui.js");
+  const initialManualPlans = manualEntries.reduce((store, entry) => manualPlanApi.upsertEntry(store, entry), manualPlanApi.emptyStore());
+  let storedManualPlans = initialManualPlans;
   let axisPairs = [
     { price: 24000, y: 100 },
     { price: 23900, y: 120 },
@@ -2048,24 +2063,32 @@ function createBreakEvenLifecycleHarness({
       parent: null,
       style: { setProperty() {} },
       classList: {
-        add(value) { classes.add(value); },
+        add(...values) { values.forEach((value) => classes.add(value)); },
         contains(value) { return classes.has(value); },
-        remove(value) { classes.delete(value); },
+        remove(...values) { values.forEach((value) => classes.delete(value)); },
         toggle(value, force) {
           const enabled = force === undefined ? !classes.has(value) : Boolean(force);
           if (enabled) classes.add(value); else classes.delete(value);
           return enabled;
         }
       },
-      append(child) {
-        child.parent = node;
-        node.children.push(child);
-        if (child.id) nodesById.set(child.id, child);
+      append(...children) {
+        children.forEach((child) => {
+          child.parent = node;
+          node.children.push(child);
+          if (child.id) nodesById.set(child.id, child);
+        });
+      },
+      replaceChildren(...children) {
+        node.children.forEach((child) => { child.parent = null; });
+        node.children = [];
+        node.append(...children);
       },
       setAttribute(name, value) { attributes.set(name, String(value)); },
       getAttribute(name) { return attributes.get(name) || null; },
       closest(selector) {
         if (selector === ".nifty-axis-ladder__row" && classes.has("nifty-axis-ladder__row")) return node;
+        if (selector === ".nifty-manual-editor" && classes.has("nifty-manual-editor")) return node;
         return node.parent?.closest(selector) || null;
       },
       querySelector(selector) { return node.querySelectorAll(selector)[0] || null; },
@@ -2084,7 +2107,9 @@ function createBreakEvenLifecycleHarness({
       remove() {
         if (node.id) nodesById.delete(node.id);
         if (node.parent) node.parent.children = node.parent.children.filter((child) => child !== node);
+        node.parent = null;
       },
+      focus() { activeElement = node; },
       getBoundingClientRect() { return { left: 100, top: 20, right: 340, bottom: 40, width: 240, height: 20 }; }
     };
     Object.defineProperty(node, "className", {
@@ -2110,6 +2135,7 @@ function createBreakEvenLifecycleHarness({
   const document = {
     ...documentEvents,
     documentElement,
+    get activeElement() { return activeElement; },
     createElement(tagName) {
       const node = makeNode(tagName);
       roots.push(node);
@@ -2122,7 +2148,7 @@ function createBreakEvenLifecycleHarness({
     version: 1,
     updatedAt: new Date().toISOString(),
     expiry: "2026-08-25",
-    spot: 23767.45,
+    spot,
     rows: Array.from({ length: 41 }, (_, index) => {
       const strike = 22800 + index * 50;
       return { strike, call: 100 + index, put: 200 + index, ...(invalidRows[strike] || {}) };
@@ -2141,6 +2167,10 @@ function createBreakEvenLifecycleHarness({
       layoutDecorations(...args) { return railApi.layoutDecorations(...args); },
       project(...args) { return project(...args); }
     },
+    NiftyManualPlan: manualPlanApi,
+    NiftyManualPayoff: manualPayoffApi,
+    NiftyManualInteraction: manualInteractionApi,
+    NiftyManualUi: manualUiApi,
     NiftyRiskOverlay: require("./risk-overlay.js"),
     NiftySellerViewIdentity: viewIdentity,
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
@@ -2159,9 +2189,15 @@ function createBreakEvenLifecycleHarness({
             callback({
               enabled: true,
               expiry: snapshot.expiry,
+              manualPlans: initialManualPlans,
               sellerSafetyChain: snapshot,
               sellerSafetyChainsByExpiry: { [snapshot.expiry]: snapshot }
             });
+          },
+          async set(value) {
+            storageWrites.push(value);
+            if (storageSetError) throw storageSetError;
+            if (value[manualPlanApi.STORAGE_KEY]) storedManualPlans = value[manualPlanApi.STORAGE_KEY];
           }
         },
         onChanged: { addListener(listener) { storageListeners.push(listener); } }
@@ -2170,7 +2206,10 @@ function createBreakEvenLifecycleHarness({
     document,
     fetch: async () => {
       fetchCalls += 1;
-      return { ok: true, json: async () => ({ spot: snapshot.spot, rows: snapshot.rows }) };
+      const rows = snapshot.rows.map((row) => row.strike === 24450 && refreshNumbers
+        ? { ...row, ...refreshNumbers }
+        : row);
+      return { ok: true, json: async () => ({ spot: snapshot.spot, rows }) };
     },
     setTimeout(callback, delay) {
       const id = nextTimerId++;
@@ -2179,6 +2218,7 @@ function createBreakEvenLifecycleHarness({
     },
     clearTimeout(id) { timers.delete(id); },
     window: { innerWidth: 1600, innerHeight: 900 },
+    crypto: { randomUUID() { return "new-manual-entry"; } },
     location,
     ...globalEvents,
     console
@@ -2190,11 +2230,22 @@ function createBreakEvenLifecycleHarness({
     for (let index = 0; index < 8; index += 1) await new Promise(setImmediate);
   }
 
+  function flushClickTimer() {
+    const timer = [...timers.entries()].find(([, entry]) => entry.delay === 240);
+    if (timer) {
+      timers.delete(timer[0]);
+      timer[1].callback();
+    }
+  }
+
   return {
     document,
     roots,
     runtimeListeners,
     rails() { return document.getElementById("nifty-break-even-rails"); },
+    editor(strike) { return this.row(strike)?.querySelector(".nifty-manual-editor"); },
+    manualEntries() { return manualPlanApi.entriesFor(storedManualPlans, snapshot.expiry); },
+    storageSetCalls() { return storageWrites.length; },
     fetchCalls() { return fetchCalls; },
     status() { return document.getElementById("nifty-axis-ladder")?.querySelector(".nifty-axis-ladder__status")?.textContent || null; },
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
@@ -2222,8 +2273,20 @@ function createBreakEvenLifecycleHarness({
       const row = root?.querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
       assert.ok(row, "exact rendered row is available for selection");
       root.dispatch("click", { target: row });
+      flushClickTimer();
       return row;
     },
+    clickTarget(target) {
+      document.getElementById("nifty-axis-ladder")?.dispatch("click", { target });
+    },
+    doubleClick(strike = 23750) {
+      const root = document.getElementById("nifty-axis-ladder");
+      const row = this.row(strike);
+      assert.ok(row, "exact rendered row is available for double click");
+      root.dispatch("click", { target: row });
+      root.dispatch("dblclick", { target: row });
+    },
+    flushClickTimer,
     select(strike = 23750) {
       const row = this.click(strike);
       assert.equal(row.classList.contains("is-selected"), true);
@@ -2237,9 +2300,102 @@ function createBreakEvenLifecycleHarness({
       });
     },
     storage(change) { storageListeners[0](change, "local"); },
+    async refreshOptionNumbers(values) {
+      refreshNumbers = values;
+      await new Promise((resolve) => runtimeListeners[0]({ type: "REFRESH_OPTION_NUMBERS" }, null, resolve));
+      await settle();
+    },
     settle
   };
+
 }
+
+function chooseCallSellEditor(h, strike = 23750) {
+  let editor = h.editor(strike);
+  editor.children[0].dispatch("click", {});
+  editor.children.at(-1).children[1].dispatch("click", {});
+  editor = h.editor(strike);
+  editor.children[4].dispatch("click", {});
+  editor = h.editor(strike);
+  editor.children[5].value = "358";
+  editor.children[5].dispatch("change", {});
+}
+
+test("manual refresh preserves saved entry snapshot", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [{
+    id: "e1", underlying: "NIFTY", expiry: "2026-08-25", strike: 24450,
+    optionType: "CALL", direction: "SELL", lots: 2, premium: 358,
+    callSnapshot: 358, putSnapshot: 414.6,
+    createdAt: "2026-07-29T10:00:00.000Z", updatedAt: "2026-07-29T10:00:00.000Z"
+  }] });
+  await h.settle();
+
+  await h.refreshOptionNumbers({ call: 223.4, put: 409.8 });
+
+  assert.equal(h.manualEntries()[0].callSnapshot, 358);
+  assert.equal(h.manualEntries()[0].putSnapshot, 414.6);
+});
+
+test("double click opens editor without quick rails or face flash", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+
+  h.doubleClick(23750);
+  h.flushClickTimer();
+
+  assert.ok(h.editor(23750));
+  assert.equal(h.rails(), null);
+  assert.equal(h.row(23750).classList.contains("is-manual-entry"), false);
+});
+
+test("editor controls never schedule a delayed row interaction", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.doubleClick(23750);
+  const editor = h.editor(23750);
+
+  h.clickTarget(editor.children[0]);
+  h.flushClickTimer();
+  await h.settle();
+
+  assert.equal(h.editor(23750), editor);
+  assert.equal(h.rails(), null);
+});
+
+test("editor add persists only exact row and restores focus without fetching", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  const fetchesBeforeEditor = h.fetchCalls();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h);
+  h.editor(23750).children[6].dispatch("click", {});
+  await h.settle();
+
+  assert.deepEqual(h.manualEntries().map((entry) => ({
+    id: entry.id, strike: entry.strike, optionType: entry.optionType,
+    direction: entry.direction, lots: entry.lots, premium: entry.premium
+  })), [{ id: "new-manual-entry", strike: 23750, optionType: "CALL", direction: "SELL", lots: 2, premium: 358 }]);
+  assert.equal(h.storageSetCalls(), 1);
+  assert.equal(h.editor(23750), null);
+  assert.equal(h.document.activeElement, h.row(23750));
+  assert.equal(h.fetchCalls(), fetchesBeforeEditor);
+});
+
+test("storage failure keeps exact editor draft open and old plan intact", async () => {
+  const h = createBreakEvenLifecycleHarness({ storageSetError: new Error("write failed") });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h);
+  h.editor(23750).children[6].dispatch("click", {});
+  await h.settle();
+
+  assert.ok(h.editor(23750));
+  assert.deepEqual(h.manualEntries(), []);
+  assert.equal(h.storageSetCalls(), 1);
+  assert.equal(h.status(), "PLAN NOT SAVED");
+});
 
 test("selected rows clear through outside input, Escape, dedicated refresh clear, and expiry change", async () => {
   const harness = createBreakEvenLifecycleHarness();

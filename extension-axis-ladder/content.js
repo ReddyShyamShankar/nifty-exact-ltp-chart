@@ -1,17 +1,6 @@
 (function (root) {
   "use strict";
 
-  const DEFAULTS = {
-    enabled: false,
-    expiry: "current_month",
-    labelCount: "5",
-    panelOpen: false,
-    selectedStrategyId: "",
-    sellerSafetyView: null,
-    sellerSafetyChartView: null,
-    sellerSafetyChain: null,
-    sellerSafetyChainsByExpiry: {}
-  };
   const RETRY_DELAYS = [0, 250, 650, 1200];
   const API = "http://127.0.0.1:8787";
   const LABELS_ID = "nifty-axis-ladder";
@@ -30,6 +19,26 @@
     || (typeof module !== "undefined" && module.exports ? require("./breakeven-rails.js") : null);
   const liveBadgeApi = root.NiftyTradingViewLiveBadge
     || (typeof module !== "undefined" && module.exports ? require("./tradingview-live-badge.js") : null);
+  const manualPlanApi = root.NiftyManualPlan
+    || (typeof module !== "undefined" && module.exports ? require("./manual-plan.js") : null);
+  const manualPayoffApi = root.NiftyManualPayoff
+    || (typeof module !== "undefined" && module.exports ? require("./manual-payoff.js") : null);
+  const manualInteractionApi = root.NiftyManualInteraction
+    || (typeof module !== "undefined" && module.exports ? require("./manual-interaction.js") : null);
+  const manualUiApi = root.NiftyManualUi
+    || (typeof module !== "undefined" && module.exports ? require("./manual-ui.js") : null);
+  const DEFAULTS = {
+    enabled: false,
+    expiry: "current_month",
+    labelCount: "5",
+    panelOpen: false,
+    selectedStrategyId: "",
+    sellerSafetyView: null,
+    sellerSafetyChartView: null,
+    sellerSafetyChain: null,
+    sellerSafetyChainsByExpiry: {},
+    manualPlans: manualPlanApi.emptyStore()
+  };
 
   function quote(value) {
     if (typeof value === "boolean" || value === null || value === undefined) return null;
@@ -846,6 +855,55 @@
     current() { return null; },
     select() { return false; }
   };
+  let manualInteraction = null;
+  let manualEditor = null;
+
+  function normalizeManualPlans(value) {
+    return manualPlanApi.normalizeStore(value);
+  }
+
+  function manualEntriesForExpiry() {
+    return manualPlanApi.entriesFor(settings.manualPlans, settings.expiry);
+  }
+
+  function manualEntriesByStrike() {
+    return manualPlanApi.groupByStrike(manualEntriesForExpiry());
+  }
+
+  function closeManualEditor() {
+    manualEditor?.element?.remove?.();
+    manualEditor = null;
+  }
+
+  function focusManualRow(strike) {
+    rootNode().querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`)?.focus?.();
+  }
+
+  function ensureManualInteraction() {
+    if (manualInteraction || !manualInteractionApi?.createController) return manualInteraction;
+    manualInteraction = manualInteractionApi.createController({
+      delay: 240,
+      setTimer: (callback, delay) => setTimeout(callback, delay),
+      clearTimer: (timer) => clearTimeout(timer),
+      onQuick: ({ liveRow }) => handleQuickSelection(liveRow),
+      onFace: ({ strike }) => {
+        clearBreakEvenSelection();
+        renderManualRows([strike]);
+        void controller?.place();
+      },
+      onEditor: (context) => {
+        clearBreakEvenSelection();
+        openManualEditor(context);
+      },
+      onReset: () => renderManualRows()
+    });
+    return manualInteraction;
+  }
+
+  function clearManualTransientState() {
+    closeManualEditor();
+    ensureManualInteraction()?.reset();
+  }
 
   function rootNode() {
     let node = document.getElementById(LABELS_ID);
@@ -854,7 +912,10 @@
     node.id = LABELS_ID;
     node.hidden = true;
     document.documentElement.append(node);
-    if (controller) node.addEventListener("click", handleLadderClick);
+    if (controller) {
+      node.addEventListener("click", handleLadderClick);
+      node.addEventListener("dblclick", handleLadderDoubleClick);
+    }
     return node;
   }
 
@@ -880,6 +941,7 @@
   }
 
   function hideRows(status) {
+    clearManualTransientState();
     clearBreakEvenRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => row.remove());
@@ -889,6 +951,7 @@
   }
 
   function concealRows(status) {
+    clearManualTransientState();
     clearBreakEvenRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => { row.hidden = true; });
@@ -897,10 +960,31 @@
     showStatus(status);
   }
 
+  function renderManualRow(element, row, membership, entriesByStrike) {
+    const isSelected = breakEvenSelection.current()?.strike === row.strike;
+    const entries = entriesByStrike.get(row.strike) || [];
+    if (manualUiApi?.renderRow) {
+      manualUiApi.renderRow(document, element, {
+        liveRow: row,
+        isAtm: row.strike === membership.atm,
+        entries,
+        activeEntryId: ensureManualInteraction()?.activeEntryId(row.strike) || null
+      });
+    } else {
+      element.classList.toggle("is-atm", row.strike === membership.atm);
+      element.textContent = formatRow(row);
+    }
+    element.classList.toggle("is-selected", isSelected);
+    element.setAttribute("aria-pressed", String(isSelected));
+    element.hidden = false;
+  }
+
   function renderRows(rows, membership) {
+    closeManualEditor();
     const node = rootNode();
     const existing = new Map([...node.querySelectorAll(".nifty-axis-ladder__row")]
       .map((row) => [Number(row.dataset.strike), row]));
+    const entriesByStrike = manualEntriesByStrike();
     rows.forEach((row) => {
       let element = existing.get(row.strike);
       if (!element) {
@@ -912,16 +996,23 @@
         element.setAttribute("aria-pressed", "false");
         node.append(element);
       }
-      element.classList.toggle("is-atm", row.strike === membership.atm);
-      const isSelected = breakEvenSelection.current()?.strike === row.strike;
-      element.classList.toggle("is-selected", isSelected);
-      element.setAttribute("aria-pressed", String(isSelected));
-      element.textContent = formatRow(row);
-      element.hidden = false;
+      renderManualRow(element, row, membership, entriesByStrike);
       existing.delete(row.strike);
     });
     existing.forEach((row) => row.remove());
     node.hidden = false;
+  }
+
+  function renderManualRows(strikes) {
+    const membership = controller?.membership();
+    if (!membership) return;
+    const requested = Array.isArray(strikes) ? new Set(strikes.map(Number)) : null;
+    const entriesByStrike = manualEntriesByStrike();
+    const node = rootNode();
+    membership.rows.filter((row) => !requested || requested.has(row.strike)).forEach((row) => {
+      const element = node.querySelector(`.nifty-axis-ladder__row[data-strike="${row.strike}"]`);
+      if (element) renderManualRow(element, row, membership, entriesByStrike);
+    });
   }
 
   function clearBreakEvenRails() {
@@ -1022,6 +1113,75 @@
       row.setAttribute("aria-pressed", "false");
     });
     clearBreakEvenStatusOverride();
+  }
+
+  async function persistManualPlans(next) {
+    const normalized = manualPlanApi.normalizeStore(next);
+    await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: normalized });
+    settings.manualPlans = normalized;
+    renderManualRows();
+    await controller?.place();
+    return normalized;
+  }
+
+  function openManualEditor(context) {
+    if (!manualUiApi?.createDraft || !manualUiApi?.renderEditor || !manualPlanApi) return;
+    const strike = Number(context?.strike);
+    const liveRow = controller?.membership()?.rows.find((row) => row.strike === strike);
+    const rowElement = rootNode().querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
+    if (!liveRow || !rowElement) return;
+    const entries = manualEntriesByStrike().get(strike) || [];
+    const entry = entries.find((item) => item.id === context?.entryId) || null;
+    let draft = manualUiApi.createDraft({ expiry: settings.expiry, row: liveRow, entry });
+    let editor = null;
+
+    function renderEditor() {
+      editor?.remove?.();
+      editor = manualUiApi.renderEditor(document, draft, {
+        chooseAction(optionType, direction) {
+          draft = manualUiApi.chooseAction(draft, optionType, direction);
+          renderEditor();
+        },
+        setLots(lots) {
+          draft = manualUiApi.setLots(draft, lots);
+          renderEditor();
+        },
+        setPremium(premium) {
+          draft = manualUiApi.setPremium(draft, premium);
+          renderEditor();
+        },
+        async save() {
+          if (!manualUiApi.validateDraft(draft).ok) return;
+          const entryToSave = manualUiApi.entryFromDraft(draft, {
+            id: draft.id || crypto.randomUUID(),
+            now: new Date().toISOString()
+          });
+          try {
+            await persistManualPlans(manualPlanApi.upsertEntry(settings.manualPlans, entryToSave));
+            closeManualEditor();
+            focusManualRow(strike);
+          } catch (_) {
+            showStatus("PLAN NOT SAVED");
+          }
+        },
+        async remove() {
+          if (!draft.id) return;
+          try {
+            await persistManualPlans(manualPlanApi.removeEntry(settings.manualPlans, settings.expiry, draft.id));
+            closeManualEditor();
+            focusManualRow(strike);
+          } catch (_) {
+            showStatus("PLAN NOT SAVED");
+          }
+        },
+        close: closeManualEditor
+      });
+      rowElement.append(editor);
+      manualEditor = { strike, element: editor };
+    }
+
+    closeManualEditor();
+    renderEditor();
   }
 
   function riskRoot() {
@@ -1286,6 +1446,7 @@
     if (!isNiftyChartLabel(label)) {
       clearRetries();
       clearBreakEvenSelection();
+      clearManualTransientState();
       controller.invalidate();
       document.getElementById(LABELS_ID)?.remove();
       return false;
@@ -1300,6 +1461,7 @@
 
   function scheduleTimeframeCheck() {
     if (timeframeTimer !== null) return;
+    clearManualTransientState();
     const nextTimeframe = timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || "");
     const membership = controller?.membership();
     if (membership && nextTimeframe !== membership.timeframe) concealRows("CALIBRATING");
@@ -1332,6 +1494,7 @@
     if (nextUrl !== currentUrl) {
       currentUrl = nextUrl;
       clearBreakEvenSelection();
+      clearManualTransientState();
     }
     if (records.some((record) => record.type === "attributes" && record.attributeName === "data-nifty-axis-ticks")) {
       scheduleAxisPlacement();
@@ -1343,26 +1506,29 @@
   function handleUrlNavigation() {
     currentUrl = String(root.location?.href || "");
     clearBreakEvenSelection();
+    clearManualTransientState();
   }
 
   function handlePageHide() {
     clearBreakEvenSelection();
+    clearManualTransientState();
   }
 
   function handleDocumentPointerDown(event) {
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
-    if (!row) clearBreakEvenSelection();
+    if (!row) {
+      clearBreakEvenSelection();
+      clearManualTransientState();
+    }
   }
 
-  function handleLadderClick(event) {
-    const rowElement = event.target?.closest?.(".nifty-axis-ladder__row");
-    if (!rowElement) return;
-    const strike = Number(rowElement.dataset.strike);
+  function handleQuickSelection(snapshot) {
+    const strike = Number(snapshot?.strike);
+    if (!Number.isFinite(strike)) return;
     if (breakEvenSelection.current()?.strike === strike) {
       clearBreakEvenSelection();
       return;
     }
-    const snapshot = controller?.membership()?.rows.find((row) => row.strike === strike);
     clearBreakEvenRails();
     if (!breakEvenSelection.select(snapshot)) {
       showStatus("OPTION PRICE UNAVAILABLE");
@@ -1372,8 +1538,34 @@
     void controller?.place();
   }
 
+  function manualRowContext(rowElement) {
+    const strike = Number(rowElement?.dataset?.strike);
+    const liveRow = controller?.membership()?.rows.find((row) => row.strike === strike);
+    if (!Number.isFinite(strike) || !liveRow) return null;
+    return { strike, entries: manualEntriesByStrike().get(strike) || [], liveRow };
+  }
+
+  function handleLadderClick(event) {
+    if (event.target?.closest?.(".nifty-manual-editor")) return;
+    const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
+    if (!context) return;
+    const interaction = ensureManualInteraction();
+    if (interaction) interaction.click(context); else handleQuickSelection(context.liveRow);
+  }
+
+  function handleLadderDoubleClick(event) {
+    if (event.target?.closest?.(".nifty-manual-editor")) return;
+    const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
+    if (!context) return;
+    ensureManualInteraction()?.doubleClick(context);
+  }
+
   function handleDocumentKeyDown(event) {
-    if (event.key === "Escape") clearBreakEvenSelection();
+    if (event.key === "Escape") {
+      clearBreakEvenSelection();
+      clearManualTransientState();
+    }
+    if (event.target?.closest?.(".nifty-manual-editor")) return;
     if (!["Enter", " "].includes(event.key)) return;
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
     if (row) {
@@ -1412,6 +1604,7 @@
     });
     document.addEventListener("pointerdown", handleDocumentPointerDown, true);
     rootNode().addEventListener("click", handleLadderClick);
+    rootNode().addEventListener("dblclick", handleLadderDoubleClick);
     document.addEventListener("keydown", handleDocumentKeyDown);
     root.addEventListener?.("pagehide", handlePageHide);
     root.addEventListener?.("popstate", handleUrlNavigation);
@@ -1422,8 +1615,10 @@
 
   function stop() {
     clearBreakEvenSelection();
+    clearManualTransientState();
     document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
     document.getElementById(LABELS_ID)?.removeEventListener("click", handleLadderClick);
+    document.getElementById(LABELS_ID)?.removeEventListener("dblclick", handleLadderDoubleClick);
     document.removeEventListener("keydown", handleDocumentKeyDown);
     root.removeEventListener?.("pagehide", handlePageHide);
     root.removeEventListener?.("popstate", handleUrlNavigation);
@@ -1447,6 +1642,7 @@
   chrome.storage.local.get(DEFAULTS, (stored) => {
     const loaded = { ...DEFAULTS, ...stored };
     settings = sellerViewIdentityApi.normalizeStoredRiskViews(loaded);
+    settings.manualPlans = normalizeManualPlans(loaded.manualPlans);
     if (settings.sellerSafetyChartView !== loaded.sellerSafetyChartView) {
       chrome.storage.local.set?.({ sellerSafetyChartView: settings.sellerSafetyChartView });
     }
@@ -1464,8 +1660,14 @@
       if (settings.enabled) controller?.setChainSnapshots(settings.sellerSafetyChainsByExpiry);
     }
     if (changes.sellerSafetyChain) settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
+    if (changes.manualPlans) {
+      settings.manualPlans = normalizeManualPlans(changes.manualPlans.newValue);
+      renderManualRows();
+      void controller?.place();
+    }
     if (changes.expiry) {
       clearBreakEvenSelection();
+      clearManualTransientState();
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
       if (settings.enabled) {
         controller?.setExpiry(settings.expiry).then((hasCached) => {

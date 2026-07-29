@@ -29,3 +29,10 @@ test("extension card and toolbar use popup-matching green status mark", () => {
     assert.equal(fs.existsSync(path.join(__dirname, file)), true, `${file} must exist`);
   }
 });
+
+test("manual modules load before content in dependency order", () => {
+  const scripts = manifest.content_scripts.find((entry) => entry.js.includes("content.js")).js;
+  for (const file of ["manual-plan.js", "manual-payoff.js", "manual-interaction.js", "manual-ui.js"]) {
+    assert.ok(scripts.indexOf(file) < scripts.indexOf("content.js"), `${file} must load before content.js`);
+  }
+});
