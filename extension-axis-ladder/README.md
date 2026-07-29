@@ -54,7 +54,7 @@ The full-height side panel retains the same UI design as version 0.4.0.
 
 ## Clicked-strike break-evens
 
-Click one ladder strike to show its independent single-leg Call and Put expiry break-evens on chart. CALL BE is strike plus displayed Call premium; PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both. Manual refresh removes them; click a strike again to calculate from refreshed numbers. These are not combined short-straddle break-evens.
+Click one ladder strike to show its independent single-leg Call and Put expiry break-evens on chart. CALL BE is strike plus displayed Call premium; PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both break-even rails. Manual refresh removes both break-even rails; click a strike again to calculate from refreshed numbers. These are independent single-leg expiry break-evens, not combined short-straddle break-evens.
 
 ## Workflow
 

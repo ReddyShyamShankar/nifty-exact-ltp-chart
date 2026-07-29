@@ -12,10 +12,13 @@ const RISK_EXPIRY = "2026-08-25";
 
 test("operator guide documents click-only single-leg break-even rails", () => {
   const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
-  assert.match(readme, /click[^\n]*strike[^\n]*CALL BE[^\n]*PUT BE/i);
-  assert.match(readme, /outside click[^\n]*remove/i);
-  assert.match(readme, /single-leg[^\n]*expiry break-even/i);
-  assert.match(readme, /manual refresh[^\n]*click[^\n]*again/i);
+  assert.match(readme, /click one ladder strike/i);
+  assert.match(readme, /CALL BE is strike plus displayed Call premium/i);
+  assert.match(readme, /PUT BE is strike minus displayed Put premium/i);
+  assert.match(readme, /Values are rounded to whole NIFTY points/i);
+  assert.match(readme, /outside click removes both break-even rails/i);
+  assert.match(readme, /Manual refresh removes both break-even rails; click a strike again/i);
+  assert.match(readme, /independent single-leg expiry break-evens, not combined short-straddle break-evens/i);
 });
 
 function acceptedRiskView(overrides = {}) {
