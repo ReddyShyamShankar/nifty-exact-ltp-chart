@@ -860,6 +860,8 @@
   let manualEditorToken = 0;
   let manualLifecycleGeneration = 0;
   let manualPersistTail = Promise.resolve();
+  let manualRowsConcealed = false;
+  let manualStorageEchoes = [];
 
   function normalizeManualPlans(value) {
     return manualPlanApi.normalizeStore(value);
@@ -882,10 +884,12 @@
     if (manualEditor && manualEditor.strike !== Number(strike)) closeManualEditor();
   }
 
+  function manualLifecycleOriginIsCurrent(origin) {
+    return Boolean(origin) && manualLifecycleGeneration === origin.lifecycleGeneration;
+  }
+
   function manualEditorOriginIsCurrent(origin) {
-    return Boolean(origin)
-      && manualLifecycleGeneration === origin.lifecycleGeneration
-      && manualEditor?.token === origin.token;
+    return manualLifecycleOriginIsCurrent(origin) && manualEditor?.token === origin.token;
   }
 
   function focusManualRow(strike) {
@@ -960,6 +964,7 @@
   }
 
   function hideRows(status) {
+    manualRowsConcealed = true;
     clearManualTransientState();
     clearBreakEvenRails();
     const node = rootNode();
@@ -970,6 +975,7 @@
   }
 
   function concealRows(status) {
+    manualRowsConcealed = true;
     clearManualTransientState();
     clearBreakEvenRails();
     const node = rootNode();
@@ -1019,6 +1025,7 @@
       existing.delete(row.strike);
     });
     existing.forEach((row) => row.remove());
+    manualRowsConcealed = false;
     node.hidden = false;
   }
 
@@ -1138,6 +1145,46 @@
     return { manualStorageWriteFailure: true, cause };
   }
 
+  function manualStoreSignature(value) {
+    return JSON.stringify(normalizeManualPlans(value));
+  }
+
+  function rememberManualStorageEcho(origin, store) {
+    const echo = { origin, signature: manualStoreSignature(store) };
+    manualStorageEchoes = [...manualStorageEchoes.slice(-15), echo];
+    return echo;
+  }
+
+  function forgetManualStorageEcho(echo) {
+    manualStorageEchoes = manualStorageEchoes.filter((candidate) => candidate !== echo);
+  }
+
+  function consumeManualStorageEcho(store) {
+    const signature = manualStoreSignature(store);
+    const index = manualStorageEchoes.findIndex((echo) => echo.signature === signature);
+    if (index < 0) return null;
+    const [echo] = manualStorageEchoes.splice(index, 1);
+    return echo;
+  }
+
+  function canRenderStorageManualPlans(lifecycleGeneration) {
+    return manualLifecycleGeneration === lifecycleGeneration
+      && !manualRowsConcealed
+      && !manualEditor;
+  }
+
+  async function renderStorageManualPlans() {
+    const lifecycleGeneration = manualLifecycleGeneration;
+    if (!canRenderStorageManualPlans(lifecycleGeneration)) return;
+    try {
+      renderManualRows();
+    } catch (_) {}
+    if (!canRenderStorageManualPlans(lifecycleGeneration)) return;
+    try {
+      await controller?.place();
+    } catch (_) {}
+  }
+
   async function renderCommittedManualPlans(origin) {
     if (!manualEditorOriginIsCurrent(origin)) return;
     try {
@@ -1153,9 +1200,11 @@
     const commit = async () => {
       const next = typeof updater === "function" ? updater(settings.manualPlans) : updater;
       const normalized = manualPlanApi.normalizeStore(next);
+      const echo = rememberManualStorageEcho(origin, normalized);
       try {
         await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: normalized });
       } catch (cause) {
+        forgetManualStorageEcho(echo);
         throw storageWriteFailure(cause);
       }
       settings.manualPlans = normalized;
@@ -1202,9 +1251,11 @@
         closeManualEditor();
         focusManualRow(strike);
       } catch (error) {
-        if (!manualEditorOriginIsCurrent(origin)) return;
-        pendingCommit = false;
-        setCommitControlsDisabled(false);
+        if (!manualLifecycleOriginIsCurrent(origin)) return;
+        if (manualEditorOriginIsCurrent(origin)) {
+          pendingCommit = false;
+          setCommitControlsDisabled(false);
+        }
         if (error?.manualStorageWriteFailure) showStatus("PLAN NOT SAVED");
       }
     }
@@ -1726,9 +1777,9 @@
     }
     if (changes.sellerSafetyChain) settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
     if (changes.manualPlans) {
+      const selfOrigin = consumeManualStorageEcho(changes.manualPlans.newValue)?.origin || null;
       settings.manualPlans = normalizeManualPlans(changes.manualPlans.newValue);
-      renderManualRows();
-      void controller?.place();
+      if (!selfOrigin) void renderStorageManualPlans();
     }
     if (changes.expiry) {
       clearBreakEvenSelection();

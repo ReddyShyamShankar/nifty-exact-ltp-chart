@@ -2021,6 +2021,7 @@ function createBreakEvenLifecycleHarness({
   const storageWrites = [];
   const pendingStorageWrites = [];
   let renderManualError = null;
+  let manualRenderCalls = 0;
   let nextManualEntryId = 1;
   const railApi = require("./breakeven-rails.js");
   const manualPlanApi = require("./manual-plan.js");
@@ -2036,6 +2037,10 @@ function createBreakEvenLifecycleHarness({
     { price: 23700, y: 160 }
   ];
   let project = railApi.project;
+
+  function dispatchStorage(changes) {
+    storageListeners.forEach((listener) => listener(changes, "local"));
+  }
 
   function eventTarget() {
     const listeners = new Map();
@@ -2177,6 +2182,7 @@ function createBreakEvenLifecycleHarness({
     NiftyManualUi: {
       ...manualUiApi,
       renderRow(...args) {
+        manualRenderCalls += 1;
         if (renderManualError) throw renderManualError;
         return manualUiApi.renderRow(...args);
       }
@@ -2206,11 +2212,20 @@ function createBreakEvenLifecycleHarness({
           },
           async set(value) {
             storageWrites.push(value);
-            if (storageSetError) throw storageSetError;
             if (deferStorage) {
               await new Promise((resolve) => pendingStorageWrites.push({ value, resolve }));
             }
-            if (value[manualPlanApi.STORAGE_KEY]) storedManualPlans = value[manualPlanApi.STORAGE_KEY];
+            if (storageSetError) throw storageSetError;
+            if (value[manualPlanApi.STORAGE_KEY]) {
+              const oldValue = storedManualPlans;
+              storedManualPlans = value[manualPlanApi.STORAGE_KEY];
+              dispatchStorage({
+                [manualPlanApi.STORAGE_KEY]: {
+                  oldValue,
+                  newValue: storedManualPlans
+                }
+              });
+            }
           }
         },
         onChanged: { addListener(listener) { storageListeners.push(listener); } }
@@ -2266,6 +2281,7 @@ function createBreakEvenLifecycleHarness({
       pending.resolve();
     },
     setRenderManualError(error) { renderManualError = error; },
+    manualRenderCalls() { return manualRenderCalls; },
     fetchCalls() { return fetchCalls; },
     status() { return document.getElementById("nifty-axis-ladder")?.querySelector(".nifty-axis-ladder__status")?.textContent || null; },
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
@@ -2277,6 +2293,10 @@ function createBreakEvenLifecycleHarness({
     navigateSpa(nextUrl) {
       location.href = nextUrl;
       globalEvents.dispatch("popstate", {});
+    },
+    scheduleTimeframeChange(nextLabel) {
+      chartLabel = nextLabel;
+      mutationCallback?.([{ type: "attributes", attributeName: "aria-label" }]);
     },
     mutateUrl(nextUrl) {
       location.href = nextUrl;
@@ -2323,7 +2343,7 @@ function createBreakEvenLifecycleHarness({
         assert.equal(runtimeListeners[0]({ type: "RETRY_LABEL_PLACEMENT" }, null, resolve), true);
       });
     },
-    storage(change) { storageListeners[0](change, "local"); },
+    storage(change) { dispatchStorage(change); },
     async refreshOptionNumbers(values) {
       refreshNumbers = values;
       await new Promise((resolve) => runtimeListeners[0]({ type: "REFRESH_OPTION_NUMBERS" }, null, resolve));
@@ -2487,6 +2507,172 @@ test("serialized overlapping manual commits preserve both explicit entries", asy
   assert.equal(h.document.activeElement, h.row(23800));
 });
 
+test("self-originated storage echo cannot replace a newer manual editor", async () => {
+  const h = createBreakEvenLifecycleHarness({ deferStorage: true });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  h.doubleClick(23800);
+  chooseCallSellEditor(h, 23800);
+  const newerEditor = h.editor(23800);
+
+  h.resolveStorageWrite();
+  await h.settle();
+
+  assert.equal(h.editor(23800), newerEditor, "storage echo from the older editor leaves the newer draft intact");
+  assert.equal(h.document.activeElement, null);
+});
+
+test("self-originated storage echo cannot rerender or unhide concealed rows", async () => {
+  const h = createBreakEvenLifecycleHarness({ deferStorage: true });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  const row = h.row(23750);
+  h.scheduleTimeframeChange("Chart for NSE_DLY:NIFTY, 1 day");
+  assert.equal(row.hidden, true);
+  const rendersBeforeEcho = h.manualRenderCalls();
+
+  h.resolveStorageWrite();
+  await h.settle();
+
+  assert.equal(row.hidden, true);
+  assert.equal(h.manualRenderCalls(), rendersBeforeEcho);
+});
+
+test("self-originated storage echo cannot rerender after pagehide lifecycle reset", async () => {
+  const h = createBreakEvenLifecycleHarness({ deferStorage: true });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  h.pagehide(true);
+  const rendersBeforeEcho = h.manualRenderCalls();
+
+  h.resolveStorageWrite();
+  await h.settle();
+
+  assert.equal(h.manualRenderCalls(), rendersBeforeEcho);
+  assert.equal(h.editor(23750) ?? null, null);
+});
+
+test("serialized overlapping save and remove preserve both explicit mutations", async () => {
+  const saved = savedManualEntry();
+  const removable = savedManualEntry({
+    id: "entry-23800",
+    strike: 23800,
+    premium: 120,
+    callSnapshot: 120,
+    putSnapshot: 220,
+    createdAt: "2026-07-29T09:00:00.000Z",
+    updatedAt: "2026-07-29T09:00:00.000Z"
+  });
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [saved, removable], deferStorage: true });
+  await h.settle();
+
+  h.click(23750);
+  h.doubleClick(23750);
+  h.editor(23750).children[4].dispatch("click", {});
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  h.click(23800);
+  h.doubleClick(23800);
+  const remove = removeManualEditor(h, 23800);
+  await h.settle();
+  assert.equal(remove.disabled, true);
+
+  h.resolveStorageWrite();
+  await h.settle();
+  assert.ok(h.editor(23800), "older save completion cannot replace queued remove editor");
+
+  h.resolveStorageWrite();
+  await h.settle();
+  assert.deepEqual(h.manualEntries().map(({ id, lots }) => ({ id, lots })), [{ id: saved.id, lots: 2 }]);
+  assert.equal(h.document.activeElement, h.row(23800));
+});
+
+test("serialized overlapping remove and add preserve both explicit mutations", async () => {
+  const removed = savedManualEntry();
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [removed], deferStorage: true });
+  await h.settle();
+
+  h.click(23750);
+  h.doubleClick(23750);
+  removeManualEditor(h, 23750);
+  await h.settle();
+
+  h.doubleClick(23800);
+  chooseCallSellEditor(h, 23800);
+  commitManualEditor(h, 23800);
+  await h.settle();
+
+  h.resolveStorageWrite();
+  await h.settle();
+  assert.ok(h.editor(23800), "older remove completion cannot replace queued add editor");
+
+  h.resolveStorageWrite();
+  await h.settle();
+  assert.deepEqual(h.manualEntries().map(({ id, strike }) => ({ id, strike })), [
+    { id: "new-manual-entry-1", strike: 23800 }
+  ]);
+  assert.equal(h.document.activeElement, h.row(23800));
+});
+
+test("same-lifecycle storage failure reports globally without modifying a newer editor", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    deferStorage: true,
+    storageSetError: new Error("write failed")
+  });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  h.doubleClick(23800);
+  chooseCallSellEditor(h, 23800);
+  const newerEditor = h.editor(23800);
+
+  h.resolveStorageWrite();
+  await h.settle();
+
+  assert.equal(h.status(), "PLAN NOT SAVED");
+  assert.equal(h.editor(23800), newerEditor);
+  assert.equal(h.manualEntries().length, 0);
+});
+
+test("lifecycle reset suppresses storage failure status from an older editor", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    deferStorage: true,
+    storageSetError: new Error("write failed")
+  });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  h.storage({ enabled: { newValue: false } });
+  h.resolveStorageWrite();
+  await h.settle();
+
+  assert.equal(h.document.getElementById("nifty-axis-ladder"), null);
+});
+
 test("stale manual completion cannot restore UI after lifecycle reset", async () => {
   const h = createBreakEvenLifecycleHarness({ deferStorage: true });
   await h.settle();
@@ -2521,6 +2707,20 @@ test("post-write render failure keeps the committed plan and never reports PLAN 
   assert.equal(h.editor(23750), null, "a successful persistence still completes the editor action");
 });
 
+test("post-write placement failure keeps the committed plan and never reports PLAN NOT SAVED", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.setAxisPairs([]);
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  assert.equal(h.manualEntries().length, 1);
+  assert.notEqual(h.status(), "PLAN NOT SAVED");
+});
+
 test("different-row interaction closes the current manual editor before quick rails", async () => {
   const h = createBreakEvenLifecycleHarness();
   await h.settle();
@@ -2532,6 +2732,19 @@ test("different-row interaction closes the current manual editor before quick ra
 
   assert.equal(h.editor(23750), null);
   assert.ok(h.rails(), "the other row receives its existing quick break-even rails");
+});
+
+test("different-row double click closes the current manual editor before opening the next editor", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.doubleClick(23750);
+  assert.ok(h.editor(23750));
+
+  h.doubleClick(23800);
+
+  assert.equal(h.editor(23750), null);
+  assert.ok(h.editor(23800));
+  assert.equal(h.rails(), null);
 });
 
 test("manual edit preserves identity and created timestamp while focusing its exact row", async () => {
@@ -2617,6 +2830,29 @@ test("every manual lifecycle hook closes transient editor state", async () => {
 
     assert.equal(h.editor(23750) ?? null, null, `${name}: editor closes`);
   }
+});
+
+test("direct hideRows route closes manual editor state", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.doubleClick(23750);
+
+  await h.navigateTo("Chart for NSE_DLY:NIFTY, 2 hours");
+
+  assert.equal(h.editor(23750) ?? null, null);
+  assert.equal(h.row(23750) ?? null, null);
+});
+
+test("direct concealRows route closes editor before timeframe recalibration", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.doubleClick(23750);
+  const row = h.row(23750);
+
+  h.scheduleTimeframeChange("Chart for NSE_DLY:NIFTY, 1 day");
+
+  assert.equal(h.editor(23750) ?? null, null);
+  assert.equal(row.hidden, true);
 });
 
 test("selected rows clear through outside input, Escape, dedicated refresh clear, and expiry change", async () => {
