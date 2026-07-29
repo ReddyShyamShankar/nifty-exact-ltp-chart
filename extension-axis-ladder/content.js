@@ -923,10 +923,12 @@
     return manualInteraction;
   }
 
-  function clearManualTransientState() {
+  function clearManualTransientState({ restorePlanRails = false } = {}) {
+    const hadEditor = Boolean(manualEditor);
     manualLifecycleGeneration += 1;
     closeManualEditor();
     ensureManualInteraction()?.reset();
+    if (restorePlanRails && hadEditor) restoreSavedManualPlanRails();
   }
 
   function rootNode() {
@@ -1064,6 +1066,13 @@
     clearManualPayoffStatusOverride();
   }
 
+  function restoreSavedManualPlanRails() {
+    clearManualPlanRails();
+    Promise.resolve(controller?.place?.()).then((placed) => {
+      if (!placed) clearManualPlanRails();
+    }).catch(() => clearManualPlanRails());
+  }
+
   function breakEvenRoot() {
     let rails = document.getElementById("nifty-break-even-rails");
     if (!rails) {
@@ -1102,7 +1111,19 @@
       || { status: "empty", levels: [] };
   }
 
-  function placeManualPlanRails(toY, rect, labelRight) {
+  function manualRailPlacements(toY, rect, payoff = manualLevels()) {
+    if (payoff?.status !== "ok" || !breakEvenApi || typeof toY !== "function") return null;
+    const plotLeft = Number(rect?.left);
+    const plotRight = Number(rect?.right);
+    if (!Number.isFinite(plotLeft) || !Number.isFinite(plotRight) || plotRight <= plotLeft) return null;
+    const placements = payoff.levels.map((level) => ({
+      level,
+      projection: breakEvenApi.project(level, toY, rect)
+    }));
+    return placements.length && !placements.some(({ projection }) => !projection) ? placements : null;
+  }
+
+  function placeManualPlanRails(toY, rect, labelRight, decorations) {
     const payoff = manualLevels();
     if (payoff.status === "empty") {
       clearManualPlanRails();
@@ -1113,26 +1134,17 @@
       showStatus("PLAN PAYOFF FLAT");
       return true;
     }
-    if (!breakEvenApi || typeof toY !== "function") {
-      clearManualPlanRails();
-      return false;
-    }
     const plotLeft = Number(rect?.left);
     const plotRight = Number(rect?.right);
-    if (!Number.isFinite(plotLeft) || !Number.isFinite(plotRight) || plotRight <= plotLeft) {
+    const placements = manualRailPlacements(toY, rect, payoff);
+    if (!placements) {
       clearManualPlanRails();
       return false;
     }
-    const placements = payoff.levels.map((level) => ({
-      level,
-      projection: breakEvenApi.project(level, toY, rect)
-    }));
-    if (!placements.length || placements.some(({ projection }) => !projection)) {
-      clearManualPlanRails();
-      return false;
-    }
-    const decorations = breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2);
-    if (!decorations) {
+    const labelDecorations = decorations === undefined
+      ? breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2)
+      : decorations;
+    if (!labelDecorations) {
       clearManualPlanRails();
       return false;
     }
@@ -1150,13 +1162,13 @@
         const label = document.createElement("span");
         label.className = "nifty-manual-plan__label is-plan";
         label.style.right = `${window.innerWidth - railRight}px`;
-        label.style.top = `${decorations[index].top}px`;
+        label.style.top = `${labelDecorations[index].top}px`;
         label.textContent = level.label;
         element.append(label);
       } else {
         element.classList.add(`is-${projection.edge}`);
         element.style.right = `${window.innerWidth - railRight}px`;
-        element.style.top = `${decorations[index].top}px`;
+        element.style.top = `${labelDecorations[index].top}px`;
         element.textContent = level.label;
       }
       rails.append(element);
@@ -1165,40 +1177,52 @@
     return true;
   }
 
-  function placeBreakEvenRails(toY, rect, labelRight) {
+  function quickRailPlacements(toY, rect) {
     const selection = breakEvenSelection.current();
-    if (!selection) {
-      clearBreakEvenRails();
-      return false;
-    }
-    if (!breakEvenApi || typeof toY !== "function") {
-      clearBreakEvenRails();
-      return false;
-    }
+    if (!selection || !breakEvenApi || typeof toY !== "function") return null;
     const breakEvens = breakEvenApi.calculate(selection);
-    if (!breakEvens) {
-      clearBreakEvenRails();
-      return false;
-    }
+    if (!breakEvens) return null;
     const plotLeft = Number(rect?.left);
     const plotRight = Number(rect?.right);
     const plotTop = Number(rect?.top);
     const plotBottom = Number(rect?.bottom);
     if (![plotLeft, plotRight, plotTop, plotBottom].every(Number.isFinite) || plotRight <= plotLeft || plotBottom <= plotTop) {
-      clearBreakEvenRails();
-      return false;
+      return null;
     }
     const placements = [breakEvens.call, breakEvens.put].map((level) => ({
       level,
       projection: breakEvenApi.project(level, toY, rect)
     }));
-    if (placements.some(({ projection }) => !projection)) {
+    return placements.some(({ projection }) => !projection) ? null : placements;
+  }
+
+  function sharedRailDecorations(toY, rect) {
+    const quick = quickRailPlacements(toY, rect);
+    const manual = manualRailPlacements(toY, rect);
+    if (!quick && !manual) return { quick: null, manual: null };
+    const combined = [...(quick || []), ...(manual || [])];
+    const decorations = breakEvenApi?.layoutDecorations?.(combined, rect, BREAK_EVEN_LABEL_HEIGHT, 2);
+    if (!decorations) return { quick: null, manual: null };
+    const quickCount = quick?.length || 0;
+    return {
+      quick: quick ? decorations.slice(0, quickCount) : null,
+      manual: manual ? decorations.slice(quickCount) : null
+    };
+  }
+
+  function placeBreakEvenRails(toY, rect, labelRight, decorations) {
+    const placements = quickRailPlacements(toY, rect);
+    if (!placements) {
       clearBreakEvenRails();
       return false;
     }
+    const plotLeft = Number(rect?.left);
+    const plotRight = Number(rect?.right);
     const railRight = Math.max(plotLeft, Math.min(plotRight, Number.isFinite(labelRight) ? labelRight : plotRight));
-    const decorations = breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2);
-    if (!decorations) {
+    const labelDecorations = decorations === undefined
+      ? breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2)
+      : decorations;
+    if (!labelDecorations) {
       clearBreakEvenRails();
       return false;
     }
@@ -1215,13 +1239,13 @@
         const label = document.createElement("span");
         label.className = `nifty-break-even__label is-${level.kind}`;
         label.style.right = `${window.innerWidth - railRight}px`;
-        label.style.top = `${decorations[index].top}px`;
+        label.style.top = `${labelDecorations[index].top}px`;
         label.textContent = level.label;
         element.append(label);
       } else {
         element.style.left = "";
         element.style.right = `${window.innerWidth - railRight}px`;
-        element.style.top = `${decorations[index].top}px`;
+        element.style.top = `${labelDecorations[index].top}px`;
         element.classList.add(`is-${projection.edge}`);
         element.textContent = level.label;
       }
@@ -1641,8 +1665,9 @@
         .filter((_entry, index) => layout.lanes[index] === 0)
         .map(({ element }) => element);
       const labelRight = riskLabelLayout(laneZeroRows)?.labelRight ?? rect.right;
-      placeBreakEvenRails(toY, rect, labelRight);
-      placeManualPlanRails(toY, rect, labelRight);
+      const railDecorations = sharedRailDecorations(toY, rect);
+      placeBreakEvenRails(toY, rect, labelRight, railDecorations.quick);
+      placeManualPlanRails(toY, rect, labelRight, railDecorations.manual);
       scaleFitAttempts = 0;
       scaleFitTimeframe = membership?.timeframe || scaleFitTimeframe;
       return { riskLayout: { labelRight } };
@@ -1725,6 +1750,7 @@
       currentUrl = nextUrl;
       clearBreakEvenSelection();
       clearManualTransientState();
+      clearManualPlanRails();
     }
     if (records.some((record) => record.type === "attributes" && record.attributeName === "data-nifty-axis-ticks")) {
       scheduleAxisPlacement();
@@ -1737,18 +1763,20 @@
     currentUrl = String(root.location?.href || "");
     clearBreakEvenSelection();
     clearManualTransientState();
+    clearManualPlanRails();
   }
 
   function handlePageHide() {
     clearBreakEvenSelection();
     clearManualTransientState();
+    clearManualPlanRails();
   }
 
   function handleDocumentPointerDown(event) {
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
     if (!row) {
       clearBreakEvenSelection();
-      clearManualTransientState();
+      clearManualTransientState({ restorePlanRails: true });
     }
   }
 
@@ -1795,7 +1823,7 @@
   function handleDocumentKeyDown(event) {
     if (event.key === "Escape") {
       clearBreakEvenSelection();
-      clearManualTransientState();
+      clearManualTransientState({ restorePlanRails: true });
     }
     if (event.target?.closest?.(".nifty-manual-editor")) return;
     if (!["Enter", " "].includes(event.key)) return;

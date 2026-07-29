@@ -2447,6 +2447,11 @@ function removeManualEditor(h, strike = 23750) {
   return remove;
 }
 
+function previewChangedManualPlan(h) {
+  h.openEdit("call-entry");
+  h.setEditorLots(2);
+}
+
 test("manual refresh preserves saved entry snapshot", async () => {
   const h = createBreakEvenLifecycleHarness({ manualEntries: [{
     id: "e1", underlying: "NIFTY", expiry: "2026-08-25", strike: 24450,
@@ -2488,6 +2493,84 @@ test("valid draft previews changed lots without saving", async () => {
   h.cancelEditor();
   await h.settle();
   assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+});
+
+test("outside click replaces preview rails with saved plan rails", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
+
+  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  await h.settle();
+
+  assert.equal(h.editor(24100), null);
+  assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+test("Escape replaces preview rails with saved plan rails", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
+
+  h.document.dispatch("keydown", { key: "Escape", target: h.row(24100) });
+  await h.settle();
+
+  assert.equal(h.editor(24100), null);
+  assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+test("pagehide clears manual rail visuals without deleting saved entries", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+
+  h.pagehide(true);
+  await h.settle();
+
+  assert.equal(h.editor(24100), null);
+  assert.equal(h.manualRails(), null);
+  assert.equal(h.manualEntries().length, 2);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+test("same-label SPA navigation clears manual rail visuals without deleting saved entries", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+
+  h.navigateSpa("https://www.tradingview.com/chart/next-layout/");
+  await h.settle();
+
+  assert.equal(h.editor(24100), null);
+  assert.equal(h.manualRails(), null);
+  assert.equal(h.manualEntries().length, 2);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+test("quick and manual near-price labels share one collision layout without moving rail y", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  h.setProject((level) => ({
+    mode: "line",
+    y: level.kind === "call" ? 200 : level.kind === "put" ? 205 : level.exact < 24000 ? 202 : 207
+  }));
+  await h.settle();
+  h.select(23750);
+  await h.settle();
+
+  const quick = h.rails();
+  const manual = h.manualRails();
+  assert.deepEqual(quick.children.map((line) => line.style.top), ["200px", "205px"]);
+  assert.deepEqual(manual.children.map((line) => line.style.top), ["202px", "207px"]);
+  assert.deepEqual(quick.children.map((line) => line.children[0].style.top), ["185px", "219px"]);
+  assert.deepEqual(manual.children.map((line) => line.children[0].style.top), ["202px", "236px"]);
 });
 
 test("saving a draft replaces preview rails with committed plan rails", async () => {
