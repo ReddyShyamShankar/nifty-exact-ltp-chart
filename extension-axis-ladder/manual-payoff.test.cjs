@@ -36,7 +36,18 @@ test("lower and upper tail roots stay numerically exact", () => {
   const call = leg({ strike: 100, optionType: "CALL", direction: "BUY", premium: 120 });
   const put = leg({ strike: 100, optionType: "PUT", direction: "BUY", premium: 80 });
   assert.deepEqual(payoff.breakEvens([call]).points, [220]);
-  assert.deepEqual(payoff.breakEvens([put]).points, [20]);
+  const putRoot = payoff.breakEvens([put]).points[0];
+  const putResidual = Math.abs(payoff.payoffAt([put], putRoot));
+  assert.ok(putResidual <= Number.EPSILON * Math.max(1, Math.abs(putRoot), put.premium));
+});
+
+test("solver preserves raw roots within machine precision", () => {
+  const entry = leg({ strike: 24100, optionType: "CALL", direction: "BUY", premium: 358.123456789123 });
+  const root = payoff.breakEvens([entry]).points[0];
+  const expected = entry.strike + entry.premium;
+  const residual = Math.abs(payoff.payoffAt([entry], root));
+  assert.equal(root, expected);
+  assert.ok(residual <= Number.EPSILON * Math.max(1, Math.abs(root)), `residual=${residual}`);
 });
 
 test("levels preserve exact roots and format rounded Indian labels", () => {

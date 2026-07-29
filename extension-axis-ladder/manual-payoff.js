@@ -60,7 +60,7 @@
     const points = [];
     const addPoint = (value) => {
       if (!Number.isFinite(value) || value < -DEDUPE_EPSILON) return;
-      const point = Math.abs(value) <= DEDUPE_EPSILON ? 0 : Number(value.toFixed(10));
+      const point = Math.abs(value) <= DEDUPE_EPSILON ? 0 : value;
       if (!points.some((existing) => Math.abs(existing - point) <= DEDUPE_EPSILON)) points.push(point);
     };
 
