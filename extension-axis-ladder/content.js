@@ -815,6 +815,7 @@
   let axisPlacementTimer = null;
   let retryTimers = [];
   let currentLabel = null;
+  let currentUrl = String(root.location?.href || "");
   let runtimeObserver = null;
   let scaleFitAttempts = 0;
   let scaleFitInFlight = false;
@@ -879,7 +880,7 @@
   }
 
   function hideRows(status) {
-    clearBreakEvenSelection();
+    clearBreakEvenRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => row.remove());
     node.hidden = !settings.enabled;
@@ -908,13 +909,13 @@
         element.dataset.strike = String(row.strike);
         element.setAttribute("role", "button");
         element.setAttribute("tabindex", "0");
-        element.setAttribute("aria-selected", "false");
+        element.setAttribute("aria-pressed", "false");
         node.append(element);
       }
       element.classList.toggle("is-atm", row.strike === membership.atm);
       const isSelected = breakEvenSelection.current()?.strike === row.strike;
       element.classList.toggle("is-selected", isSelected);
-      element.setAttribute("aria-selected", String(isSelected));
+      element.setAttribute("aria-pressed", String(isSelected));
       element.textContent = formatRow(row);
       element.hidden = false;
       existing.delete(row.strike);
@@ -969,9 +970,14 @@
       return false;
     }
     const railRight = Math.max(plotLeft, Math.min(plotRight, Number.isFinite(labelRight) ? labelRight : plotRight));
+    const decorations = breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2);
+    if (!decorations) {
+      clearBreakEvenRails();
+      return false;
+    }
     clearBreakEvenRails();
     const rails = breakEvenRoot();
-    placements.forEach(({ level, projection }) => {
+    placements.forEach(({ level, projection }, index) => {
       const element = document.createElement("div");
       const className = projection.mode === "line" ? "line" : "marker";
       element.className = `nifty-break-even__${className} is-${level.kind}`;
@@ -982,12 +988,13 @@
         const label = document.createElement("span");
         label.className = `nifty-break-even__label is-${level.kind}`;
         label.style.right = `${window.innerWidth - railRight}px`;
-        label.style.top = `${Math.max(plotTop, Math.min(plotBottom - BREAK_EVEN_LABEL_HEIGHT, projection.y - BREAK_EVEN_LABEL_HEIGHT))}px`;
+        label.style.top = `${decorations[index].top}px`;
         label.textContent = level.label;
         element.append(label);
       } else {
         element.style.left = "";
         element.style.right = `${window.innerWidth - railRight}px`;
+        element.style.top = `${decorations[index].top}px`;
         element.classList.add(`is-${projection.edge}`);
         element.textContent = level.label;
       }
@@ -1001,7 +1008,7 @@
     rootNode().querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
       const isSelected = Number(row.dataset.strike) === selectedStrike;
       row.classList.toggle("is-selected", isSelected);
-      row.setAttribute("aria-selected", String(isSelected));
+      row.setAttribute("aria-pressed", String(isSelected));
     });
     if (!Number.isFinite(selectedStrike)) clearBreakEvenRails();
   }
@@ -1012,7 +1019,7 @@
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
       row.classList.remove("is-selected");
-      row.setAttribute("aria-selected", "false");
+      row.setAttribute("aria-pressed", "false");
     });
     clearBreakEvenStatusOverride();
   }
@@ -1321,11 +1328,25 @@
   }
 
   function handleRuntimeMutations(records) {
+    const nextUrl = String(root.location?.href || "");
+    if (nextUrl !== currentUrl) {
+      currentUrl = nextUrl;
+      clearBreakEvenSelection();
+    }
     if (records.some((record) => record.type === "attributes" && record.attributeName === "data-nifty-axis-ticks")) {
       scheduleAxisPlacement();
     }
     const label = chartCanvas()?.getAttribute("aria-label") || "";
     if (label !== currentLabel) scheduleTimeframeCheck();
+  }
+
+  function handleUrlNavigation() {
+    currentUrl = String(root.location?.href || "");
+    clearBreakEvenSelection();
+  }
+
+  function handlePageHide() {
+    clearBreakEvenSelection();
   }
 
   function handleDocumentPointerDown(event) {
@@ -1381,6 +1402,7 @@
       setStatus: showStatus
     });
     currentLabel = chartCanvas()?.getAttribute("aria-label") || "";
+    currentUrl = String(root.location?.href || "");
     runtimeObserver = new MutationObserver(handleRuntimeMutations);
     runtimeObserver.observe(document.documentElement, {
       attributes: true,
@@ -1391,6 +1413,10 @@
     document.addEventListener("pointerdown", handleDocumentPointerDown, true);
     rootNode().addEventListener("click", handleLadderClick);
     document.addEventListener("keydown", handleDocumentKeyDown);
+    root.addEventListener?.("pagehide", handlePageHide);
+    root.addEventListener?.("popstate", handleUrlNavigation);
+    root.addEventListener?.("hashchange", handleUrlNavigation);
+    root.navigation?.addEventListener?.("navigate", handleUrlNavigation);
     if (controller.hasCachedChain()) void rebuildCurrent(false);
   }
 
@@ -1399,6 +1425,10 @@
     document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
     document.getElementById(LABELS_ID)?.removeEventListener("click", handleLadderClick);
     document.removeEventListener("keydown", handleDocumentKeyDown);
+    root.removeEventListener?.("pagehide", handlePageHide);
+    root.removeEventListener?.("popstate", handleUrlNavigation);
+    root.removeEventListener?.("hashchange", handleUrlNavigation);
+    root.navigation?.removeEventListener?.("navigate", handleUrlNavigation);
     clearTimeout(timeframeTimer);
     timeframeTimer = null;
     clearTimeout(axisPlacementTimer);
@@ -1456,7 +1486,12 @@
   });
 
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
-    if (!["RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS"].includes(message?.type)) return false;
+    if (!["CLEAR_BREAK_EVEN_SELECTION", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS"].includes(message?.type)) return false;
+    if (message.type === "CLEAR_BREAK_EVEN_SELECTION") {
+      clearBreakEvenSelection();
+      sendResponse({ ok: true });
+      return false;
+    }
     if (!settings.enabled) {
       sendResponse({ ok: false, error: "Enable ladder first." });
       return false;

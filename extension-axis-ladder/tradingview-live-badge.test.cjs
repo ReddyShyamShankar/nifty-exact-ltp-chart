@@ -4,12 +4,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const api = require("./tradingview-live-badge.js");
 
-function badge(text) {
-  return { textContent: text, classList: { values: new Set(), add(...v) { v.forEach((x) => this.values.add(x)); }, remove(...v) { v.forEach((x) => this.values.delete(x)); } } };
+function badge(text, children = []) {
+  return { textContent: text, children, classList: { values: new Set(), add(...v) { v.forEach((x) => this.values.add(x)); }, remove(...v) { v.forEach((x) => this.values.delete(x)); } } };
 }
 
-function control(text, badges) {
-  return { textContent: text, querySelectorAll() { return badges; } };
+function control(text, badges, ariaLabel = null) {
+  return {
+    textContent: text,
+    getAttribute(name) { return name === "aria-label" ? ariaLabel : null; },
+    querySelectorAll() { return badges; }
+  };
 }
 
 function documentWith(controls) {
@@ -29,6 +33,17 @@ test("finds one exact badge only inside one Publish control", () => {
   assert.equal(api.findBadge(documentWith([control("Other LIVE", [target])])), null);
 });
 
+test("rejects Publish-like controls and accepts compact Publish with nested LIVE", () => {
+  const live = badge("LIVE");
+  const nested = badge("LIVE", [live]);
+
+  assert.equal(api.findBadge(documentWith([control("Publish idea LIVE", [live])])), null);
+  assert.equal(api.findBadge(documentWith([control("Republish LIVE", [live])])), null);
+  assert.equal(api.findBadge(documentWith([control("Publish LIVE", [live], "Publish idea")])), null);
+  assert.equal(api.findBadge(documentWith([control("PublishLIVE", [nested, live])])), live);
+  assert.equal(api.findBadge(documentWith([control("LIVE", [live], "Publish")])), live);
+});
+
 test("ambiguous Publish controls or status descendants fail closed", () => {
   const first = badge("LIVE");
   const second = badge("LIVE");
@@ -41,11 +56,13 @@ test("ambiguous Publish controls or status descendants fail closed", () => {
 
 test("decoration replaces only owned state classes and preserves text", () => {
   const target = badge("LIVE");
-  const doc = documentWith([control("Publish LIVE", [target])]);
+  const publish = control("Publish LIVE", [target]);
+  const doc = documentWith([publish]);
   assert.equal(api.decorate(doc), "live");
   assert.equal(target.textContent, "LIVE");
   assert.deepEqual([...target.classList.values].sort(), ["is-live", "nifty-tv-status-badge"]);
   target.textContent = "OFFLINE";
+  publish.textContent = "Publish OFFLINE";
   assert.equal(api.decorate(doc), "offline");
   assert.deepEqual([...target.classList.values].sort(), ["is-offline", "nifty-tv-status-badge"]);
 });
@@ -74,7 +91,8 @@ test("decoration clears prior owned target when discovery becomes ambiguous", ()
 
 test("install decorates immediately, responds to rerender, and disconnects", () => {
   const target = badge("LIVE");
-  const doc = documentWith([control("Publish LIVE", [target])]);
+  const publish = control("Publish LIVE", [target]);
+  const doc = documentWith([publish]);
   let callback;
   let disconnected = false;
   class Observer {
@@ -85,12 +103,14 @@ test("install decorates immediately, responds to rerender, and disconnects", () 
   const stop = api.install(doc, Observer);
   assert.equal(target.classList.values.has("is-live"), true);
   target.textContent = "OFFLINE";
+  publish.textContent = "Publish OFFLINE";
   callback([]);
   assert.equal(target.classList.values.has("is-live"), false);
   assert.equal(target.classList.values.has("is-offline"), true);
   stop();
   assert.equal(disconnected, true);
   target.textContent = "LIVE";
+  publish.textContent = "Publish LIVE";
   callback([]);
   assert.equal(target.classList.values.has("is-live"), false);
   assert.equal(target.classList.values.has("is-offline"), true);

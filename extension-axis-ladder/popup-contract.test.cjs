@@ -221,6 +221,8 @@ function dailyReviewStorage() {
 function popupHarness(initialStorage = {}, options = {}) {
   const listeners = new Map();
   const requests = [];
+  const chartMessages = [];
+  const refreshEvents = [];
   const writes = [];
   const openedTabs = [];
   const created = [];
@@ -309,7 +311,12 @@ function popupHarness(initialStorage = {}, options = {}) {
       } },
       tabs: {
         async query() { return [{ id: 7, url: "https://www.tradingview.com/chart/test/" }]; },
-        async sendMessage() { return { ok: true }; },
+        async sendMessage(tabId, message) {
+          chartMessages.push({ tabId, message: structuredClone(message) });
+          refreshEvents.push(`message:${message?.type || "unknown"}`);
+          if (options.messageError) throw options.messageError;
+          return { ok: true };
+        },
         async create(input) { openedTabs.push(input); }
       }
     },
@@ -330,6 +337,7 @@ function popupHarness(initialStorage = {}, options = {}) {
         configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z"
       });
       if (String(url).includes("/api/seller-refresh")) {
+        refreshEvents.push("network:seller-refresh");
         const payload = refreshPayloads[Math.min(refreshIndex, refreshPayloads.length - 1)];
         refreshIndex += 1;
         if (payload?.__httpError) return response({ error: payload.error, kind: payload.kind }, false, payload.status || 502);
@@ -348,7 +356,7 @@ function popupHarness(initialStorage = {}, options = {}) {
   };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(read("popup.js"), sandbox);
-  return { listeners, requests, writes, openedTabs, nodes, storage, created };
+  return { listeners, requests, chartMessages, refreshEvents, writes, openedTabs, nodes, storage, created };
 }
 
 async function settle() {
@@ -404,6 +412,41 @@ test("one primary press requests one coordinated refresh and withholds changed m
   assert.equal(harness.storage.sellerSafetyPending.chain.expiry, "2026-08-25");
   assert.equal(harness.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
   assert.equal(harness.nodes.get("review-panel").hidden, false);
+});
+
+test("real REFRESH ALL clears chart selection before successful or failed network refresh", async () => {
+  const cases = [
+    {},
+    { refreshPayload: { __httpError: true, status: 429, kind: "rate_limit", error: "Upstream rate limit." } }
+  ];
+
+  for (const options of cases) {
+    const harness = popupHarness(acceptedStorage(), options);
+    await settle();
+    await harness.listeners.get("refresh-all:click")();
+
+    assert.deepEqual(harness.chartMessages, [{
+      tabId: 7,
+      message: { type: "CLEAR_BREAK_EVEN_SELECTION" }
+    }]);
+    assert.deepEqual(harness.refreshEvents, [
+      "message:CLEAR_BREAK_EVEN_SELECTION",
+      "network:seller-refresh"
+    ]);
+  }
+});
+
+test("chart-clear delivery failure stays isolated from seller refresh", async () => {
+  const harness = popupHarness({}, { messageError: new Error("content script unavailable") });
+  await settle();
+
+  await harness.listeners.get("refresh-all:click")();
+
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  assert.deepEqual(harness.refreshEvents, [
+    "message:CLEAR_BREAK_EVEN_SELECTION",
+    "network:seller-refresh"
+  ]);
 });
 
 test("changed-position refresh preserves accepted evidence across popup reopen while chart publication is withheld", async () => {

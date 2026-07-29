@@ -1,16 +1,16 @@
 # NIFTY Seller Safety Map + Exact Axis Ladder
 
-Version 0.4.0 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain LTP Overlay v0.14.0 remains unchanged.
+Version 0.4.3 is a side-by-side, read-only NIFTY extension. Existing NIFTY Chain LTP Overlay v0.14.0 remains unchanged.
 
 ## Side-panel workflow
 
 - Click the pinned NIFTY extension icon on a TradingView tab to open the full-height side panel.
-- The side panel is TradingView-only and uses the same seller-safety UI as version 0.4.0.
+- The side panel is TradingView-only and uses the same seller-safety UI as the version 0.4.0 baseline.
 - Switching tabs closes the panel. Click the NIFTY icon again when returning to a chart.
 - Opening, closing, or resizing the panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains the existing bridge-health, expiry-list, and Zerodha-status checks.
 - Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
 
-The full-height side panel retains the same UI design as version 0.4.0.
+The full-height side panel retains the version 0.4.0 baseline UI design.
 
 ## What it does
 

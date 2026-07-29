@@ -28,6 +28,39 @@ test("projects exact rails and truthful top or bottom markers", () => {
   assert.deepEqual(api.project({ exact: 23000 }, toY, bounds), { mode: "edge", edge: "bottom", y: 700 });
 });
 
+test("stacks close line labels without moving exact rail coordinates", () => {
+  const placements = [
+    { level: { kind: "call" }, projection: { mode: "line", y: 200 } },
+    { level: { kind: "put" }, projection: { mode: "line", y: 205 } }
+  ];
+
+  assert.deepEqual(api.layoutDecorations(placements, { top: 100, bottom: 300 }), [
+    { top: 185 },
+    { top: 202 }
+  ]);
+  assert.deepEqual(placements.map(({ projection }) => projection.y), [200, 205]);
+});
+
+test("deterministically stacks same-edge markers inside plot bounds", () => {
+  const top = [
+    { level: { kind: "call" }, projection: { mode: "edge", edge: "top", y: 100 } },
+    { level: { kind: "put" }, projection: { mode: "edge", edge: "top", y: 100 } }
+  ];
+  const bottom = top.map(({ level }) => ({
+    level,
+    projection: { mode: "edge", edge: "bottom", y: 300 }
+  }));
+
+  assert.deepEqual(api.layoutDecorations(top, { top: 100, bottom: 300 }), [
+    { top: 100 },
+    { top: 117 }
+  ]);
+  assert.deepEqual(api.layoutDecorations(bottom, { top: 100, bottom: 300 }), [
+    { top: 268 },
+    { top: 285 }
+  ]);
+});
+
 test("selection replaces exact snapshot and clear removes it", () => {
   const changes = [];
   const controller = api.createSelectionController((value) => changes.push(value));

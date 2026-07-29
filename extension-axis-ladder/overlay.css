@@ -69,14 +69,6 @@
   border-left-color: #f59e0b;
 }
 
-.nifty-break-even__marker.is-top {
-  transform: translateY(0);
-}
-
-.nifty-break-even__marker.is-bottom {
-  transform: translateY(-100%);
-}
-
 .nifty-seller-risk__band,
 .nifty-seller-risk__line {
   position: fixed;

@@ -11,16 +11,32 @@
     return null;
   }
 
-  function findBadge(documentRef) {
-    const controls = [...documentRef.querySelectorAll('button, [role="button"]')]
-      .filter((node) => /\bpublish\b/i.test(String(node.textContent || "")));
-    if (controls.length !== 1) return null;
+  function normalizedIdentity(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+  }
 
-    const candidates = [...controls[0].querySelectorAll("*")].filter((node) =>
-      stateFor(node.textContent)
-      && ![...(node.children || [])].some((child) => stateFor(child.textContent))
-    );
-    return candidates.length === 1 ? candidates[0] : null;
+  function publishIdentity(control, statusLeaf) {
+    const ariaLabel = control.getAttribute?.("aria-label");
+    if (ariaLabel !== null && ariaLabel !== undefined && String(ariaLabel).trim()) {
+      return normalizedIdentity(ariaLabel);
+    }
+    const statusText = String(statusLeaf?.textContent || "");
+    const controlText = String(control?.textContent || "");
+    const offset = controlText.toUpperCase().indexOf(statusText.toUpperCase());
+    if (offset < 0) return normalizedIdentity(controlText);
+    return normalizedIdentity(controlText.slice(0, offset) + controlText.slice(offset + statusText.length));
+  }
+
+  function findBadge(documentRef) {
+    const matches = [...documentRef.querySelectorAll('button, [role="button"]')].flatMap((control) => {
+      const candidates = [...control.querySelectorAll("*")].filter((node) =>
+        stateFor(node.textContent)
+        && ![...(node.children || [])].some((child) => stateFor(child.textContent))
+      );
+      if (candidates.length !== 1 || publishIdentity(control, candidates[0]) !== "PUBLISH") return [];
+      return [candidates[0]];
+    });
+    return matches.length === 1 ? matches[0] : null;
   }
 
   function decorate(documentRef) {

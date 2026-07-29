@@ -475,6 +475,16 @@ function failedRefreshChartView() {
   };
 }
 
+async function clearChartBreakEvenSelection() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    await chrome.tabs.sendMessage(tab.id, { type: "CLEAR_BREAK_EVEN_SELECTION" });
+  } catch (_) {
+    // Chart selection cleanup must never block broker and market refresh.
+  }
+}
+
 async function refreshAll() {
   const button = $("#refresh-all");
   const label = $("#refresh-label");
@@ -483,6 +493,7 @@ async function refreshAll() {
   label.textContent = "REFRESHING…";
   $("#placement-status").textContent = "READING BROKER + MARKET SNAPSHOT…";
   try {
+    await clearChartBreakEvenSelection();
     await clearPendingCandidate();
     const data = await responseData(await fetch(`${API}/api/seller-refresh?expiry=${encodeURIComponent(state.expiry)}`, { cache: "no-store" }));
     const candidate = validateRefreshPayload(data);

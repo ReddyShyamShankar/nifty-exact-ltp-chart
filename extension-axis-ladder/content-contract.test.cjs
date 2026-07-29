@@ -12,6 +12,10 @@ const RISK_EXPIRY = "2026-08-25";
 
 test("operator guide documents click-only single-leg break-even rails", () => {
   const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+  assert.match(readme, /^Version 0\.4\.3\b/m);
+  readme.split("\n").filter((line) => /0\.4\.0/.test(line)).forEach((line) => {
+    assert.match(line, /baseline/i, `0.4.0 reference must be explicit baseline wording: ${line}`);
+  });
   assert.match(readme, /click one ladder strike/i);
   assert.match(readme, /CALL BE is strike plus displayed Call premium/i);
   assert.match(readme, /PUT BE is strike minus displayed Put premium/i);
@@ -1965,7 +1969,8 @@ test("breakeven module loads before content and selection remains explicit", () 
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   assert.match(source, /NiftyBreakEvenRails/);
   assert.match(source, /role", "button"/);
-  assert.match(source, /aria-selected/);
+  assert.match(source, /aria-pressed/);
+  assert.doesNotMatch(source, /aria-selected/);
   assert.match(source, /clearBreakEvenSelection/);
   assert.doesNotMatch(source, /autoSelectBreakEven|persistedBreakEven/);
 });
@@ -2010,6 +2015,9 @@ function createBreakEvenLifecycleHarness({
       listenerCount(type) { return listeners.get(type)?.size || 0; }
     };
   }
+
+  const globalEvents = eventTarget();
+  const location = { href: "https://www.tradingview.com/chart/initial/" };
 
   function makeNode(tagName = "div") {
     const events = eventTarget();
@@ -2115,6 +2123,7 @@ function createBreakEvenLifecycleHarness({
     NiftyBreakEvenRails: {
       calculate: railApi.calculate,
       createSelectionController: railApi.createSelectionController,
+      layoutDecorations(...args) { return railApi.layoutDecorations(...args); },
       project(...args) { return project(...args); }
     },
     NiftyRiskOverlay: require("./risk-overlay.js"),
@@ -2155,6 +2164,8 @@ function createBreakEvenLifecycleHarness({
     },
     clearTimeout(id) { timers.delete(id); },
     window: { innerWidth: 1600, innerHeight: 900 },
+    location,
+    ...globalEvents,
     console
   };
   sandbox.globalThis = sandbox;
@@ -2173,6 +2184,15 @@ function createBreakEvenLifecycleHarness({
     status() { return document.getElementById("nifty-axis-ladder")?.querySelector(".nifty-axis-ladder__status")?.textContent || null; },
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
     setProject(nextProject) { project = nextProject; },
+    row(strike = 23750) {
+      return document.getElementById("nifty-axis-ladder")
+        ?.querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
+    },
+    navigateSpa(nextUrl) {
+      location.href = nextUrl;
+      globalEvents.dispatch("popstate", {});
+    },
+    pagehide(persisted = false) { globalEvents.dispatch("pagehide", { persisted }); },
     async navigateTo(nextLabel) {
       chartLabel = nextLabel;
       mutationCallback?.([{ type: "attributes", attributeName: "aria-label" }]);
@@ -2192,7 +2212,8 @@ function createBreakEvenLifecycleHarness({
     select(strike = 23750) {
       const row = this.click(strike);
       assert.equal(row.classList.contains("is-selected"), true);
-      assert.equal(row.getAttribute("aria-selected"), "true");
+      assert.equal(row.getAttribute("aria-pressed"), "true");
+      assert.equal(row.getAttribute("aria-selected"), null);
       return row;
     },
     retryPlacement() {
@@ -2205,31 +2226,31 @@ function createBreakEvenLifecycleHarness({
   };
 }
 
-test("selected rows clear through outside input, Escape, refresh, and expiry change", async () => {
+test("selected rows clear through outside input, Escape, dedicated refresh clear, and expiry change", async () => {
   const harness = createBreakEvenLifecycleHarness();
   await harness.settle();
 
   let row = harness.select();
   harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
   assert.equal(row.classList.contains("is-selected"), false);
-  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(row.getAttribute("aria-pressed"), "false");
 
   row = harness.select();
   harness.document.dispatch("keydown", { key: "Escape", target: row });
   assert.equal(row.classList.contains("is-selected"), false);
-  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(row.getAttribute("aria-pressed"), "false");
 
   row = harness.select();
-  const refreshHandledAsync = harness.runtimeListeners[0]({ type: "REFRESH_OPTION_NUMBERS" }, null, () => {});
-  assert.equal(refreshHandledAsync, true);
+  const refreshHandledAsync = harness.runtimeListeners[0]({ type: "CLEAR_BREAK_EVEN_SELECTION" }, null, () => {});
+  assert.equal(refreshHandledAsync, false);
   assert.equal(row.classList.contains("is-selected"), false, "refresh clears before async option fetch settles");
-  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(row.getAttribute("aria-pressed"), "false");
 
   await harness.settle();
   row = harness.select();
   harness.storage({ expiry: { newValue: "2026-09-01" } });
   assert.equal(row.classList.contains("is-selected"), false);
-  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(row.getAttribute("aria-pressed"), "false");
 });
 
 test("stop clears selected rows and re-enable restores one listener set", async () => {
@@ -2243,7 +2264,7 @@ test("stop clears selected rows and re-enable restores one listener set", async 
 
   harness.storage({ enabled: { newValue: false } });
   assert.equal(row.classList.contains("is-selected"), false);
-  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(row.getAttribute("aria-pressed"), "false");
   assert.equal(harness.document.listenerCount("pointerdown"), 0);
   assert.equal(harness.document.listenerCount("keydown"), 0);
   assert.equal(initialRoot.listenerCount("click"), 0);
@@ -2284,7 +2305,7 @@ test("switching valid rows removes old rails before the next asynchronous placem
 
   const nextRow = harness.select(23800);
   assert.equal(harness.rails(), null, "previous rails disappear in the click turn");
-  assert.equal(nextRow.getAttribute("aria-selected"), "true");
+  assert.equal(nextRow.getAttribute("aria-pressed"), "true");
   assert.equal(harness.fetchCalls(), fetchesBeforeClick, "row clicks only place cached rows");
 
   await harness.settle();
@@ -2300,7 +2321,7 @@ test("clicking the selected row toggles its rails and selection off", async () =
 
   harness.click(23750);
   assert.equal(row.classList.contains("is-selected"), false);
-  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(row.getAttribute("aria-pressed"), "false");
   assert.equal(harness.rails(), null);
   assert.equal(harness.status(), "LIVE");
 });
@@ -2312,7 +2333,7 @@ test("invalid-price row stays selected, draws no rails, and reports unavailable 
 
   const row = harness.click(23750);
   assert.equal(row.classList.contains("is-selected"), true);
-  assert.equal(row.getAttribute("aria-selected"), "true");
+  assert.equal(row.getAttribute("aria-pressed"), "true");
   assert.equal(harness.rails(), null);
   assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
   assert.equal(harness.fetchCalls(), fetchesBeforeClick);
@@ -2333,6 +2354,54 @@ test("unavailable status overrides later placement while normal status updates u
 
   harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
   assert.equal(harness.status(), "Native axis map is unavailable.");
+});
+
+test("generic timeframe rebuild failure preserves clicked snapshot and restores rails after axis recovery", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  harness.select(23750);
+  await harness.settle();
+  assert.equal(harness.rails().children.length, 2);
+
+  harness.setAxisPairs([]);
+  await harness.navigateTo("Chart for NSE_DLY:NIFTY, 1 day");
+  assert.equal(harness.rails(), null);
+
+  harness.setAxisPairs([
+    { price: 24000, y: 100 },
+    { price: 23900, y: 120 },
+    { price: 23800, y: 140 },
+    { price: 23700, y: 160 }
+  ]);
+  await harness.navigateTo("Chart for NSE_DLY:NIFTY, 1 hour");
+  const restored = harness.row(23750);
+  assert.equal(restored.classList.contains("is-selected"), true);
+  assert.equal(restored.getAttribute("aria-pressed"), "true");
+  assert.equal(harness.rails().children.length, 2);
+});
+
+test("generic timeframe rebuild failure preserves unavailable selection feedback through recovery", async () => {
+  const harness = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
+  await harness.settle();
+  harness.select(23750);
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+
+  harness.setAxisPairs([]);
+  await harness.navigateTo("Chart for NSE_DLY:NIFTY, 1 day");
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+
+  harness.setAxisPairs([
+    { price: 24000, y: 100 },
+    { price: 23900, y: 120 },
+    { price: 23800, y: 140 },
+    { price: 23700, y: 160 }
+  ]);
+  await harness.navigateTo("Chart for NSE_DLY:NIFTY, 1 hour");
+  const restored = harness.row(23750);
+  assert.equal(restored.classList.contains("is-selected"), true);
+  assert.equal(restored.getAttribute("aria-pressed"), "true");
+  assert.equal(harness.rails(), null);
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
 });
 
 test("switching from invalid selection to a valid row clears unavailable override", async () => {
@@ -2385,10 +2454,38 @@ test("non-NIFTY navigation clears invalid selection, rails, and unavailable feed
 
   await harness.navigateTo("Chart for TVC:DXY, 1 hour");
   assert.equal(row.classList.contains("is-selected"), false);
-  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(row.getAttribute("aria-pressed"), "false");
   assert.equal(harness.rails(), null);
   assert.equal(harness.status(), null);
   assert.equal(harness.document.getElementById("nifty-axis-ladder"), null);
+});
+
+test("pagehide including BFCache entry clears clicked selection immediately", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  const row = harness.select();
+  await harness.settle();
+
+  harness.pagehide(true);
+
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-pressed"), "false");
+  assert.equal(harness.rails(), null);
+});
+
+test("same-label SPA URL navigation clears selection without treating timeframe rebuild as navigation", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  let row = harness.select();
+  await harness.navigateTo("Chart for NSE_DLY:NIFTY, 1 day");
+  row = harness.row(23750);
+  assert.equal(row.getAttribute("aria-pressed"), "true", "timeframe transition preserves selection");
+
+  harness.navigateSpa("https://www.tradingview.com/chart/next-layout/");
+
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-pressed"), "false");
+  assert.equal(harness.rails(), null);
 });
 
 test("off-screen rails pin top and bottom markers to plot edges before lane-zero rows", async () => {
@@ -2408,7 +2505,8 @@ test("off-screen rails pin top and bottom markers to plot edges before lane-zero
   rails = harness.rails();
   marker = rails.children.find((element) => element.classList.contains("is-bottom"));
   assert.ok(marker);
-  assert.equal(marker.style.top, "230px");
+  assert.equal(marker.style.top, "215px");
+  assert.equal(Number(marker.style.top.slice(0, -2)) + 15, 230);
   assert.equal(marker.style.right, "1512px");
 });
 
@@ -2429,6 +2527,30 @@ test("visible rail labels stay within plot bounds near top and bottom", async ()
       assert.ok(top + 15 <= 253);
     });
   }
+});
+
+test("close rails keep exact line y coordinates while labels stack", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  harness.setProject((level) => ({ mode: "line", y: level.kind === "call" ? 200 : 205 }));
+  await harness.settle();
+  harness.select();
+  await harness.settle();
+
+  const lines = harness.rails().children;
+  assert.deepEqual(lines.map((line) => line.style.top), ["200px", "205px"]);
+  assert.deepEqual(lines.map((line) => line.children[0].style.top), ["185px", "202px"]);
+});
+
+test("same-edge offscreen markers stack without leaving plot", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  harness.setProject(() => ({ mode: "edge", edge: "top", y: 0 }));
+  await harness.settle();
+  harness.select();
+  await harness.settle();
+
+  const markers = harness.rails().children;
+  assert.deepEqual(markers.map((marker) => marker.style.top), ["0px", "17px"]);
+  assert.ok(markers.every((marker) => marker.classList.contains("is-top")));
 });
 
 test("invalid axis map or projection conceals rails without clearing selected row", async () => {
