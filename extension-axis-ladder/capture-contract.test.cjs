@@ -3,11 +3,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const manualPlan = require("./manual-plan.js");
 
-function loadBackground() {
+function loadBackground({ manualPlans = manualPlan.emptyStore() } = {}) {
   const listeners = {};
   const sidePanelCalls = [];
   const session = {};
+  const local = { [manualPlan.STORAGE_KEY]: manualPlans };
+  const manualWrites = [];
   global.chrome = {
     runtime: {
       onMessage: { addListener(listener) { listeners.message = listener; } },
@@ -34,6 +37,16 @@ function loadBackground() {
       session: {
         async get(key) { return { [key]: session[key] }; },
         async set(values) { Object.assign(session, values); }
+      },
+      local: {
+        async get(key) {
+          if (typeof key === "string") return { [key]: local[key] };
+          return { ...key, ...local };
+        },
+        async set(values) {
+          Object.assign(local, values);
+          if (Object.hasOwn(values, manualPlan.STORAGE_KEY)) manualWrites.push(values[manualPlan.STORAGE_KEY]);
+        }
       }
     },
     debugger: {
@@ -46,21 +59,119 @@ function loadBackground() {
     for (const file of files) {
       if (file === "overlay-utils.js") global.NiftyOverlay = require("./overlay-utils.js");
       if (file === "side-panel.js") global.NiftySidePanel = require("./side-panel.js");
+      if (file === "manual-plan.js") global.NiftyManualPlan = manualPlan;
     }
   };
   const filename = path.join(__dirname, "background.js");
   delete require.cache[filename];
-  return { api: require(filename), listeners, sidePanelCalls };
+  return { api: require(filename), listeners, sidePanelCalls, local, manualWrites };
 }
 
-test("exports native-axis-only capture API", () => {
+test("exports native-axis capture and single-writer manual mutation API", () => {
   const { api } = loadBackground();
   assert.deepEqual(Object.keys(api).sort(), [
-    "axisPairsFromCandidates", "captureAxisScale", "dispatchScaleDrag", "extractAxisPrices", "fitAxisScale", "isCaptureMessage", "isFitMessage", "isolateAxisCandidates"
+    "applyManualPlanMutation", "axisPairsFromCandidates", "captureAxisScale", "dispatchScaleDrag",
+    "enqueueManualPlanMutation", "extractAxisPrices", "fitAxisScale", "isCaptureMessage",
+    "isFitMessage", "isManualPlanMutationMessage", "isolateAxisCandidates"
   ]);
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), false);
   assert.equal(api.isFitMessage("FIT_AXIS_SCALE"), true);
+  assert.equal(api.isManualPlanMutationMessage("MUTATE_MANUAL_PLANS"), true);
+});
+
+function manualEntry(overrides = {}) {
+  return {
+    id: "entry-a",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    strike: 23750,
+    optionType: "CALL",
+    direction: "SELL",
+    lots: 1,
+    premium: 119,
+    callSnapshot: 119,
+    putSnapshot: null,
+    createdAt: "2026-07-29T10:00:00.000Z",
+    updatedAt: "2026-07-29T10:00:00.000Z",
+    ...overrides
+  };
+}
+
+function sendManualMutation(listeners, tabId, mutation) {
+  return new Promise((resolve) => {
+    const handled = listeners.message(
+      { type: "MUTATE_MANUAL_PLANS", mutation },
+      { tab: { id: tabId }, url: `https://www.tradingview.com/chart/tab-${tabId}/` },
+      resolve
+    );
+    assert.equal(handled, true);
+  });
+}
+
+test("background queue preserves concurrent adds from two TradingView contexts", async () => {
+  const h = loadBackground();
+  const first = sendManualMutation(h.listeners, 1, { type: "upsert", entry: manualEntry() });
+  const second = sendManualMutation(h.listeners, 2, {
+    type: "upsert",
+    entry: manualEntry({ id: "entry-b", strike: 23800, callSnapshot: 120 })
+  });
+
+  const responses = await Promise.all([first, second]);
+
+  assert.equal(responses.every((response) => response.ok), true);
+  assert.deepEqual(manualPlan.entriesFor(h.local.manualPlans, "2026-08-25")
+    .map(({ id, strike }) => ({ id, strike })), [
+    { id: "entry-a", strike: 23750 },
+    { id: "entry-b", strike: 23800 }
+  ]);
+  assert.equal(h.manualWrites.length, 2);
+});
+
+test("background queue preserves concurrent save and add from two TradingView contexts", async () => {
+  const initial = manualPlan.upsertEntry(manualPlan.emptyStore(), manualEntry());
+  const h = loadBackground({ manualPlans: initial });
+  const save = sendManualMutation(h.listeners, 1, {
+    type: "upsert",
+    entry: manualEntry({ lots: 3, updatedAt: "2026-07-29T10:05:00.000Z" })
+  });
+  const add = sendManualMutation(h.listeners, 2, {
+    type: "upsert",
+    entry: manualEntry({ id: "entry-b", strike: 23800, callSnapshot: 120 })
+  });
+
+  await Promise.all([save, add]);
+
+  assert.deepEqual(manualPlan.entriesFor(h.local.manualPlans, "2026-08-25")
+    .map(({ id, lots }) => ({ id, lots })), [
+    { id: "entry-a", lots: 3 },
+    { id: "entry-b", lots: 1 }
+  ]);
+});
+
+test("background queue preserves concurrent remove and add without deleting quarantine", async () => {
+  const raw = { ...manualEntry(), id: "recover", action: "HOLD", direction: "HOLD" };
+  let initial = manualPlan.normalizeStore({
+    version: 1,
+    plans: { "2026-08-25": { entries: [manualEntry(), raw] } }
+  });
+  const h = loadBackground({ manualPlans: initial });
+  const remove = sendManualMutation(h.listeners, 1, {
+    type: "remove",
+    expiry: "2026-08-25",
+    entryId: "entry-a"
+  });
+  const add = sendManualMutation(h.listeners, 2, {
+    type: "upsert",
+    entry: manualEntry({ id: "entry-b", strike: 23800, callSnapshot: 120 })
+  });
+
+  await Promise.all([remove, add]);
+  initial = h.local.manualPlans;
+
+  assert.deepEqual(manualPlan.entriesFor(initial, "2026-08-25").map((entry) => entry.id), ["entry-b"]);
+  assert.equal(manualPlan.invalidCount(initial), 1);
+  assert.deepEqual(manualPlan.invalidEntries(initial)[0].raw, raw);
 });
 
 test("background installs tab-specific side panel without changing capture API", async () => {

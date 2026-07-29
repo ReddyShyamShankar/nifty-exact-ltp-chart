@@ -12,10 +12,11 @@ Version 0.5.0 is a chart-first, manual NIFTY options planning candidate for Trad
 - With saved entries, single-click cycles newest-first through one snapshot at a time, then returns to live.
 - `PLAN BE` marks every exact price where the combined same-expiry payoff is zero after all saved Buy/Sell legs, premiums, strikes, and lots are combined. `PREVIEW BE` uses the valid unsaved draft before Add or Save.
 - A manual refresh changes live values only; saved snapshots remain unchanged.
+- Add and Save stay disabled until the selected Call/Put side has a valid non-negative premium and positive whole-number lot count; typing updates `PREVIEW BE` without closing or rebuilding the editor.
 - Keyboard: `Shift+Enter` opens the focused row editor; `Enter` or `Space` keeps single-click behavior; `Escape` closes the editor or returns the row to live.
 - The manual-only builder does not import broker positions or tradebooks and cannot place, modify, or cancel orders.
 
-Add or Save writes the exact-expiry plan to local extension storage. Remove deletes only the selected entry. Close, outside click, or `Escape` cancels an unsaved draft. Reload, timeframe changes, zoom, and pan rebuild saved plan rails from local snapshots and TradingView's validated native price axis.
+Add or Save sends one mutation to the background service worker, which serializes writes from every open TradingView tab before updating exact-expiry local storage. Remove deletes only the selected entry. Close, outside click, or `Escape` cancels an unsaved draft. Reload, timeframe changes, zoom, and pan rebuild saved plan rails from local snapshots and TradingView's validated native price axis.
 
 ## Ladder and quick break-evens
 
@@ -28,7 +29,9 @@ Click one ladder strike without saved entries to show independent single-leg exp
 - Plans are NIFTY-only and keyed by one exact expiry.
 - Live numbers change only after existing explicit manual refresh.
 - Saved premiums and captured Call/Put snapshots never update from refresh, side-panel activity, timeframe changes, zoom, pan, or reload.
-- Missing quotes, malformed local storage, unsupported timeframes, nonlinear scales, incomplete strike ranges, and invalid native-axis observations fail closed.
+- Only the selected side needs a captured snapshot; an unavailable opposite-side snapshot remains shown as `—` and is never backfilled.
+- Malformed stored entries are quarantined for recovery and exposed through `MANUAL ENTRY NEEDS REVIEW`; valid edits do not erase that recovery data.
+- Missing quotes, unsupported timeframes, nonlinear scales, incomplete strike ranges, and invalid native-axis observations fail closed.
 - No automatic option refresh, bottom tray, full option-chain table, Greeks, probability, margin, or recommendation engine is added.
 - Chrome 141 or newer is required.
 

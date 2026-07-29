@@ -12,10 +12,11 @@ Version 0.5.0 adds a manual NIFTY options strategy builder directly to the Tradi
 - With saved entries, single-click cycles newest-first through one snapshot at a time, then returns to live.
 - `PLAN BE` marks every exact price where the combined same-expiry payoff is zero after all saved legs are combined.
 - A manual refresh changes live values only; saved snapshots remain unchanged.
+- Add and Save stay disabled until the selected Call/Put side has a valid non-negative premium and positive whole-number lot count; typing previews payoff without closing or rebuilding the editor.
 - Keyboard: `Shift+Enter` opens the focused row editor; `Enter` or `Space` keeps single-click behavior; `Escape` closes the editor or returns the row to live.
 - The manual-only builder does not import broker positions or tradebooks and cannot place, modify, or cancel orders.
 
-Plans stay in local extension storage, keyed by exact expiry. Entry premiums and captured Call/Put snapshots remain fixed through refresh, reload, timeframe changes, zoom, pan, and side-panel activity. Invalid storage or axis data fails closed.
+Plans stay in local extension storage, keyed by exact expiry. The background service worker serializes mutations across tabs so one valid edit cannot overwrite another. Entry premiums and captured snapshots remain fixed through refresh, reload, timeframe changes, zoom, pan, and side-panel activity; an unavailable opposite-side snapshot remains unavailable. Malformed stored entries are quarantined for recovery and reported as `MANUAL ENTRY NEEDS REVIEW` instead of being discarded. Invalid axis data fails closed.
 
 ## Setup
 

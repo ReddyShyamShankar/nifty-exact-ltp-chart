@@ -1810,6 +1810,10 @@ test("manual row states use exact markup tokens and no new semantic color", () =
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?width:\s*max-content/);
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?text-align:\s*center/);
   assert.match(css, /--ladder-selected:\s*#facc15/);
+  assert.doesNotMatch(css, /#a78bfa|#ddd6fe/i);
+  assert.match(css, /\.nifty-manual-plan__line\s*\{[^}]*border-top:\s*1px dashed var\(--ladder-line\)/);
+  assert.match(css, /\.nifty-manual-plan__label,[\s\S]*?border-left:\s*2px solid var\(--ladder-ink\)/);
+  assert.match(css, /\.nifty-manual-plan__label,[\s\S]*?color:\s*var\(--ladder-ink\)/);
 });
 
 test("entry faces contain exact compact copy without redundant trade words or icon", () => {
@@ -1824,13 +1828,21 @@ test("count dot and inline editor use neutral tokens without moving row geometry
   const editor = css.match(/\.nifty-manual-editor\s*\{([^}]+)\}/)?.[1] || "";
   assert.match(count, /background:\s*var\(--ladder-surface\)/);
   assert.match(count, /color:\s*var\(--ladder-ink\)/);
-  assert.match(editor, /position:\s*absolute/);
-  assert.match(editor, /right:\s*-1px/);
+  assert.match(editor, /position:\s*fixed/);
+  assert.match(editor, /z-index:\s*[3-9]/);
   assert.match(editor, /top:\s*50%/);
   assert.match(editor, /width:\s*max-content/);
   assert.match(editor, /background:\s*var\(--ladder-selected\)/);
   assert.match(editor, /transform:\s*translateY\(-50%\)/);
-  assert.match(css, /\.nifty-axis-ladder__row:has\(>\s*\.nifty-manual-editor\)[\s\S]*?\.nifty-axis-ladder__cell[\s\S]*?visibility:\s*hidden/);
+  assert.match(css, /\.nifty-axis-ladder__row\.has-manual-editor[\s\S]*?\.nifty-axis-ladder__cell[\s\S]*?visibility:\s*hidden/);
+  assert.doesNotMatch(css, /\.nifty-axis-ladder__row:has\(>\s*\.nifty-manual-editor\)/);
+});
+
+test("manual persistence crosses only the service-worker operation boundary", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /MUTATE_MANUAL_PLANS/);
+  assert.doesNotMatch(source, /chrome\.storage\.local\.set\(\{\s*\[manualPlanApi\.STORAGE_KEY\]/);
+  assert.doesNotMatch(source, /manualPersistTail/);
 });
 
 test("selected strike uses a solid yellow fill without an outline, including ATM", () => {
@@ -2053,6 +2065,7 @@ function createBreakEvenLifecycleHarness({
   plotRect = { left: 0, top: 0, right: 1200, bottom: 800 },
   invalidRows = {},
   manualEntries = [],
+  rawManualPlans = null,
   storageSetError = null,
   deferStorage = false,
   deferManualStorageEvents = false,
@@ -2072,6 +2085,8 @@ function createBreakEvenLifecycleHarness({
   let refreshNumbers = null;
   let activeElement = null;
   const storageWrites = [];
+  const manualMutationMessages = [];
+  let localManualSetCalls = 0;
   const pendingStorageWrites = [];
   const pendingManualStorageEvents = [];
   const pendingAxisCaptures = [];
@@ -2086,8 +2101,12 @@ function createBreakEvenLifecycleHarness({
   const manualPayoffApi = require("./manual-payoff.js");
   const manualInteractionApi = require("./manual-interaction.js");
   const manualUiApi = require("./manual-ui.js");
-  const initialManualPlans = manualEntries.reduce((store, entry) => manualPlanApi.upsertEntry(store, entry), manualPlanApi.emptyStore());
+  const initialManualPlans = rawManualPlans || manualEntries.reduce(
+    (store, entry) => manualPlanApi.upsertEntry(store, entry),
+    manualPlanApi.emptyStore()
+  );
   let storedManualPlans = initialManualPlans;
+  let manualMutationTail = Promise.resolve();
   let axisPairs = [
     { price: 24000, y: 100 },
     { price: 23900, y: 120 },
@@ -2284,7 +2303,42 @@ function createBreakEvenLifecycleHarness({
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
     chrome: {
       runtime: {
-        sendMessage: async () => {
+        sendMessage: async (message) => {
+          if (message?.type === "MUTATE_MANUAL_PLANS") {
+            manualMutationMessages.push(message.mutation);
+            const commit = async () => {
+              const next = message.mutation?.type === "upsert"
+                ? manualPlanApi.upsertEntry(storedManualPlans, message.mutation.entry)
+                : manualPlanApi.removeEntry(
+                  storedManualPlans,
+                  message.mutation?.expiry,
+                  message.mutation?.entryId
+                );
+              storageWrites.push({ [manualPlanApi.STORAGE_KEY]: next });
+              if (deferStorage) {
+                await new Promise((resolve) => pendingStorageWrites.push({ value: next, resolve }));
+              }
+              if (storageSetError) throw storageSetError;
+              const oldValue = storedManualPlans;
+              storedManualPlans = next;
+              const changes = {
+                [manualPlanApi.STORAGE_KEY]: {
+                  oldValue,
+                  newValue: storedManualPlans
+                }
+              };
+              if (deferManualStorageEvents) pendingManualStorageEvents.push(changes);
+              else dispatchStorage(changes);
+              return { ok: true, manualPlans: next };
+            };
+            const result = manualMutationTail.then(commit, commit);
+            manualMutationTail = result.catch(() => {});
+            try {
+              return await result;
+            } catch (error) {
+              return { ok: false, error: error?.message || "Manual plan mutation failed." };
+            }
+          }
           if (deferAxisCaptures) {
             return new Promise((resolve) => pendingAxisCaptures.push(resolve));
           }
@@ -2305,6 +2359,7 @@ function createBreakEvenLifecycleHarness({
           },
           async set(value) {
             storageWrites.push(value);
+            if (value[manualPlanApi.STORAGE_KEY]) localManualSetCalls += 1;
             if (deferStorage) {
               await new Promise((resolve) => pendingStorageWrites.push({ value, resolve }));
             }
@@ -2327,9 +2382,15 @@ function createBreakEvenLifecycleHarness({
       }
     },
     document,
-    fetch: async () => {
+    fetch: async (_url, options = {}) => {
       fetchCalls += 1;
-      if (deferFetches) return new Promise((resolve) => pendingFetches.push(resolve));
+      if (deferFetches) {
+        return new Promise((resolve, reject) => pendingFetches.push({
+          resolve,
+          reject,
+          signal: options.signal
+        }));
+      }
       return optionChainResponse();
     },
     setTimeout(callback, delay) {
@@ -2373,9 +2434,18 @@ function createBreakEvenLifecycleHarness({
     rails() { return document.getElementById("nifty-break-even-rails"); },
     manualRails() { return document.getElementById("nifty-manual-plan-rails"); },
     manualRailLabels() { return this.manualRails()?.children.map((node) => node.textContent) || []; },
-    editor(strike) { return this.row(strike)?.querySelector(".nifty-manual-editor"); },
+    editor(strike) {
+      const root = document.getElementById("nifty-axis-ladder");
+      return root?.querySelectorAll(".nifty-manual-editor").find((editor) => {
+        const owner = editor.parent?.closest?.(".nifty-axis-ladder__row");
+        return Number(editor.dataset.strike || owner?.dataset?.strike) === Number(strike);
+      }) || null;
+    },
     manualEntries() { return manualPlanApi.entriesFor(storedManualPlans, snapshot.expiry); },
+    invalidManualEntries() { return manualPlanApi.invalidEntries(storedManualPlans); },
     storageSetCalls() { return storageWrites.length; },
+    manualMutationMessages() { return manualMutationMessages.slice(); },
+    localManualSetCalls() { return localManualSetCalls; },
     lastManualPlanWrite() { return storageWrites.at(-1)?.[manualPlanApi.STORAGE_KEY] || null; },
     pendingStorageWriteCount() { return pendingStorageWrites.length; },
     pendingManualStorageEventCount() { return pendingManualStorageEvents.length; },
@@ -2399,6 +2469,7 @@ function createBreakEvenLifecycleHarness({
     deferFetches() { deferFetches = true; },
     pendingAxisCaptureCount() { return pendingAxisCaptures.length; },
     pendingFetchCount() { return pendingFetches.length; },
+    pendingFetchAborted(index = 0) { return Boolean(pendingFetches[index]?.signal?.aborted); },
     resolveAxisCapture(index = 0, result = axisCaptureResult()) {
       const [resolve] = pendingAxisCaptures.splice(index, 1);
       assert.ok(resolve, "expected a pending axis capture");
@@ -2408,9 +2479,14 @@ function createBreakEvenLifecycleHarness({
       this.resolveAxisCapture(pendingAxisCaptures.length - 1, result);
     },
     resolveFetch(index = 0, overrides) {
-      const [resolve] = pendingFetches.splice(index, 1);
-      assert.ok(resolve, "expected a pending option-number fetch");
-      resolve(optionChainResponse(overrides));
+      const [pending] = pendingFetches.splice(index, 1);
+      assert.ok(pending, "expected a pending option-number fetch");
+      pending.resolve(optionChainResponse(overrides));
+    },
+    rejectFetch(index = 0, error = new Error("Option chain unavailable.")) {
+      const [pending] = pendingFetches.splice(index, 1);
+      assert.ok(pending, "expected a pending option-number fetch");
+      pending.reject(error);
     },
     row(strike = 23750) {
       return document.getElementById("nifty-axis-ladder")
@@ -2509,7 +2585,7 @@ function chooseCallSellEditor(h, strike = 23750) {
   editor.children[4].dispatch("click", {});
   editor = h.editor(strike);
   editor.children[5].value = "358";
-  editor.children[5].dispatch("change", {});
+  editor.children[5].dispatch("input", {});
 }
 
 function savedManualEntry(overrides = {}) {
@@ -2560,6 +2636,31 @@ function previewChangedManualPlan(h) {
   h.setEditorLots(2);
 }
 
+test("malformed stored records stay recoverable and expose compact review count after valid mutation", async () => {
+  const valid = savedManualEntry();
+  const malformed = { ...valid, id: "recover-me", direction: "HOLD" };
+  const h = createBreakEvenLifecycleHarness({
+    rawManualPlans: {
+      version: 1,
+      plans: { "2026-08-25": { entries: [valid, malformed] } }
+    }
+  });
+  await h.settle();
+
+  assert.match(h.status(), /MANUAL ENTRY NEEDS REVIEW · 1/);
+  assert.deepEqual(h.manualEntries().map((entry) => entry.id), [valid.id]);
+  assert.deepEqual(h.invalidManualEntries().map((item) => item.raw), [malformed]);
+
+  h.openEdit(valid.id);
+  h.setEditorLots(2);
+  commitManualEditor(h);
+  await h.settle();
+
+  assert.deepEqual(h.manualEntries().map(({ id, lots }) => ({ id, lots })), [{ id: valid.id, lots: 2 }]);
+  assert.deepEqual(h.invalidManualEntries().map((item) => item.raw), [malformed]);
+  assert.match(h.status(), /MANUAL ENTRY NEEDS REVIEW · 1/);
+});
+
 test("manual refresh preserves saved entry snapshot", async () => {
   const h = createBreakEvenLifecycleHarness({ manualEntries: [{
     id: "e1", underlying: "NIFTY", expiry: "2026-08-25", strike: 24450,
@@ -2573,6 +2674,189 @@ test("manual refresh preserves saved entry snapshot", async () => {
 
   assert.equal(h.manualEntries()[0].callSnapshot, 358);
   assert.equal(h.manualEntries()[0].putSnapshot, 414.6);
+});
+
+for (const [name, dismiss] of [
+  ["close", (h) => h.cancelEditor()],
+  ["outside", (h) => h.document.dispatch("pointerdown", { target: { closest() { return null; } } })],
+  ["Escape", (h) => h.document.dispatch("keydown", { key: "Escape", target: h.row(24100) })]
+]) {
+  test(`successful deferred save rerenders committed rows and rails after ${name}`, async () => {
+    const h = createBreakEvenLifecycleHarness({
+      manualEntries: approvedOneCallThreePuts,
+      spot: 24050,
+      deferStorage: true
+    });
+    await h.settle();
+    h.openEdit("call-entry");
+    h.setEditorLots(2);
+    commitManualEditor(h, 24100);
+    await h.settle();
+    assert.equal(h.pendingStorageWriteCount(), 1);
+
+    dismiss(h);
+    await h.settle();
+    assert.equal(h.editor(24100), null);
+    assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+
+    h.resolveStorageWrite();
+    await h.settle();
+
+    assert.equal(h.manualEntries().find((entry) => entry.id === "call-entry").lots, 2);
+    assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,578", "PLAN BE 24,733"]);
+    assert.equal(h.row(24100).querySelector(".nifty-axis-ladder__count").textContent, "1");
+    h.document.dispatch("keydown", { key: "Escape", target: h.row(24100) });
+    h.click(24100);
+    assert.match(h.row(24100).getAttribute("aria-label"), /2 lots/);
+  });
+}
+
+test("manual add uses service-worker mutation message instead of content storage write", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.doubleClick(23750);
+  chooseCallSellEditor(h);
+  commitManualEditor(h);
+  await h.settle();
+
+  assert.deepEqual(h.manualMutationMessages().map((mutation) => mutation.type), ["upsert"]);
+  assert.equal(h.localManualSetCalls(), 0);
+  assert.equal(h.manualEntries().length, 1);
+});
+
+test("editor is an accessible sibling of the ARIA row and inside clicks do not dismiss it", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.doubleClick(23750);
+  const row = h.row(23750);
+  const editor = h.editor(23750);
+  const root = h.document.getElementById("nifty-axis-ladder");
+
+  assert.equal(row.getAttribute("role"), "button");
+  assert.equal(row.querySelector(".nifty-manual-editor"), null);
+  assert.equal(editor.parent, root);
+  assert.equal(editor.getAttribute("role"), "group");
+  assert.equal(row.getAttribute("aria-hidden"), "true");
+
+  h.document.dispatch("pointerdown", {
+    target: editor.querySelector(".nifty-manual-editor__premium")
+  });
+  assert.equal(h.editor(23750), editor);
+});
+
+test("premium input previews in place, preserves focus and selection, and drives compact validation", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: approvedOneCallThreePuts,
+    spot: 24050
+  });
+  await h.settle();
+  h.openEdit("call-entry");
+  const editor = h.editor(24100);
+  const premium = editor.querySelector(".nifty-manual-editor__premium");
+  const commit = editor.querySelector(".nifty-manual-editor__commit");
+  const validation = editor.querySelector(".nifty-manual-editor__validation");
+  premium.focus();
+  premium.selectionStart = 1;
+  premium.selectionEnd = 4;
+  premium.value = "400";
+  premium.dispatch("input", {});
+  await h.settle();
+
+  assert.equal(h.editor(24100), editor);
+  assert.equal(h.document.activeElement, premium);
+  assert.deepEqual([premium.selectionStart, premium.selectionEnd], [1, 4]);
+  assert.equal(commit.disabled, false);
+  assert.equal(validation.textContent, "");
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,684", "PREVIEW BE 25,049"]);
+
+  premium.value = "";
+  premium.dispatch("input", {});
+  await h.settle();
+  assert.equal(h.editor(24100), editor);
+  assert.equal(commit.disabled, true);
+  assert.equal(validation.textContent, "ENTER PREMIUM");
+  assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+test("new editor disables Add until selected leg and premium are valid", async () => {
+  const h = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
+  await h.settle();
+  h.doubleClick(23750);
+  let editor = h.editor(23750);
+  assert.equal(editor.querySelector(".nifty-manual-editor__commit").disabled, true);
+  assert.equal(editor.querySelector(".nifty-manual-editor__validation").textContent, "CHOOSE LEG");
+
+  editor.children[0].dispatch("click", {});
+  editor.children.at(-1).children[0].dispatch("click", {});
+  editor = h.editor(23750);
+  assert.equal(editor.children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(editor.children[0].textContent, "BUY CALL ▾");
+  assert.equal(editor.querySelector(".nifty-manual-editor__commit").disabled, true);
+  assert.equal(editor.querySelector(".nifty-manual-editor__validation").textContent, "ENTER PREMIUM");
+
+  const premium = editor.querySelector(".nifty-manual-editor__premium");
+  premium.value = "0";
+  premium.dispatch("input", {});
+  assert.equal(h.editor(23750), editor);
+  assert.equal(editor.querySelector(".nifty-manual-editor__commit").disabled, false);
+  assert.equal(editor.querySelector(".nifty-manual-editor__validation").textContent, "");
+});
+
+for (const [name, finish] of [
+  ["success", async (h, request) => {
+    h.resolveFetch(0, { byStrike: { 23750: { call: 500, put: 600 } } });
+    assert.equal((await request).ok, true);
+  }],
+  ["network failure", async (h, request) => {
+    h.rejectFetch(0, new Error("network failed"));
+    assert.equal((await request).ok, false);
+  }],
+  ["placement failure", async (h, request) => {
+    h.setRenderManualError(new Error("placement failed"));
+    h.resolveFetch();
+    assert.equal((await request).ok, false);
+  }]
+]) {
+  test(`refresh clears manual editor and active face before ${name}`, async () => {
+    const h = createBreakEvenLifecycleHarness({
+      manualEntries: [savedManualEntry()],
+      deferFetches: true
+    });
+    await h.settle();
+    h.openEdit("entry-23750");
+    assert.ok(h.editor(23750));
+    assert.equal(h.row(23750).classList.contains("is-manual-entry"), true);
+
+    const request = h.startRefreshOptionNumbers();
+
+    assert.equal(h.editor(23750), null);
+    assert.equal(h.row(23750).classList.contains("is-manual-entry"), false);
+    await finish(h, request);
+    await h.settle();
+    assert.equal(h.editor(23750), null);
+  });
+}
+
+test("second refresh aborts first request and clears a newly opened manual editor before fetch", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: [savedManualEntry()],
+    deferFetches: true
+  });
+  await h.settle();
+  h.openEdit("entry-23750");
+  const first = h.startRefreshOptionNumbers();
+  assert.equal(h.editor(23750), null);
+
+  h.openEdit("entry-23750");
+  const second = h.startRefreshOptionNumbers();
+  assert.equal(h.pendingFetchAborted(0), true);
+  assert.equal(h.editor(23750), null);
+
+  h.resolveFetch(1);
+  assert.equal((await second).ok, true);
+  h.resolveFetch(0);
+  assert.equal((await first).ok, false);
 });
 
 test("saved manual plan draws every neutral break-even through native axis", async () => {

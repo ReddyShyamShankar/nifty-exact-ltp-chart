@@ -28,6 +28,15 @@ test("solver returns every root and detects fully flat payoff", () => {
   assert.equal(payoff.breakEvens([leg({ id: "a", direction: "BUY" }), leg({ id: "b", direction: "SELL" })]).status, "flat");
 });
 
+test("solver retains a zero crossing exactly at a strike knot", () => {
+  const syntheticLong = [
+    leg({ id: "call", strike: 100, optionType: "CALL", direction: "BUY", premium: 10 }),
+    leg({ id: "put", strike: 100, optionType: "PUT", direction: "SELL", premium: 10 })
+  ];
+  assert.deepEqual(payoff.breakEvens(syntheticLong), { status: "ok", points: [100] });
+  assert.equal(payoff.payoffAt(syntheticLong, 100), 0);
+});
+
 test("empty plans have no break-even points", () => {
   assert.deepEqual(payoff.breakEvens([]), { status: "empty", points: [] });
 });

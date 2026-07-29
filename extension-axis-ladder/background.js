@@ -1,8 +1,12 @@
 "use strict";
 
-importScripts("overlay-utils.js", "side-panel.js");
+importScripts("overlay-utils.js", "side-panel.js", "manual-plan.js");
 
 NiftySidePanel.install(chrome);
+
+const manualPlanApi = globalThis.NiftyManualPlan;
+const MANUAL_PLAN_MUTATION = "MUTATE_MANUAL_PLANS";
+let manualPlanMutationTail = Promise.resolve();
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -45,6 +49,36 @@ function isCaptureMessage(type) {
 
 function isFitMessage(type) {
   return type === "FIT_AXIS_SCALE";
+}
+
+function isManualPlanMutationMessage(type) {
+  return type === MANUAL_PLAN_MUTATION;
+}
+
+function applyManualPlanMutation(store, mutation) {
+  if (mutation?.type === "upsert") return manualPlanApi.upsertEntry(store, mutation.entry);
+  if (mutation?.type === "remove"
+    && manualPlanApi.isIsoDate(mutation.expiry)
+    && typeof mutation.entryId === "string"
+    && mutation.entryId) {
+    return manualPlanApi.removeEntry(store, mutation.expiry, mutation.entryId);
+  }
+  throw new Error("Invalid manual plan mutation.");
+}
+
+function enqueueManualPlanMutation(mutation) {
+  const commit = async () => {
+    const stored = await chrome.storage.local.get(manualPlanApi.STORAGE_KEY);
+    const next = applyManualPlanMutation(
+      stored?.[manualPlanApi.STORAGE_KEY] || manualPlanApi.emptyStore(),
+      mutation
+    );
+    await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: next });
+    return next;
+  };
+  const result = manualPlanMutationTail.then(commit, commit);
+  manualPlanMutationTail = result.catch(() => {});
+  return result;
 }
 
 const fittingTabs = new Set();
@@ -291,12 +325,21 @@ async function captureAxisScale(_sender, message) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!isCaptureMessage(message?.type) && !isFitMessage(message?.type)) return;
+  const manualMutation = isManualPlanMutationMessage(message?.type);
+  if (!isCaptureMessage(message?.type) && !isFitMessage(message?.type) && !manualMutation) return;
   if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
-    sendResponse({ ok: false, error: "Axis capture is limited to TradingView tabs." });
+    sendResponse({
+      ok: false,
+      error: manualMutation
+        ? "Manual plan mutations are limited to TradingView tabs."
+        : "Axis capture is limited to TradingView tabs."
+    });
     return;
   }
-  const operation = isFitMessage(message?.type) ? fitAxisScale(sender, message) : captureAxisScale(sender, message);
+  const operation = manualMutation
+    ? enqueueManualPlanMutation(message.mutation)
+      .then((manualPlans) => ({ ok: true, manualPlans }))
+    : isFitMessage(message?.type) ? fitAxisScale(sender, message) : captureAxisScale(sender, message);
   operation
     .then(sendResponse)
     .catch((error) => sendResponse({ ok: false, error: error.message }));
@@ -305,13 +348,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    applyManualPlanMutation,
     axisPairsFromCandidates,
     captureAxisScale,
     dispatchScaleDrag,
+    enqueueManualPlanMutation,
     extractAxisPrices,
     fitAxisScale,
     isCaptureMessage,
     isFitMessage,
+    isManualPlanMutationMessage,
     isolateAxisCandidates
   };
 }

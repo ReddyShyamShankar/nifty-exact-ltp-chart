@@ -891,9 +891,7 @@
   let manualEditorToken = 0;
   let manualLifecycleGeneration = 0;
   let railVisualRevision = 0;
-  let manualPersistTail = Promise.resolve();
   let manualRowsConcealed = false;
-  let manualStorageEchoes = [];
 
   function normalizeManualPlans(value) {
     return manualPlanApi.normalizeStore(value);
@@ -908,7 +906,11 @@
   }
 
   function closeManualEditor() {
-    manualEditor?.element?.remove?.();
+    const current = manualEditor;
+    current?.rowElement?.classList?.remove("has-manual-editor");
+    current?.rowElement?.setAttribute?.("aria-hidden", "false");
+    current?.rowElement?.setAttribute?.("tabindex", "0");
+    current?.element?.remove?.();
     manualEditor = null;
   }
 
@@ -941,6 +943,20 @@
     rootNode().querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`)?.focus?.();
   }
 
+  function positionManualEditor() {
+    if (!manualEditor?.element || !manualEditor?.rowElement) return;
+    const row = manualEditor.rowElement;
+    const bounds = row.getBoundingClientRect?.();
+    const top = row.style?.top || (Number.isFinite(bounds?.top) && Number.isFinite(bounds?.bottom)
+      ? `${(bounds.top + bounds.bottom) / 2}px`
+      : null);
+    const right = row.style?.right || (Number.isFinite(bounds?.right)
+      ? `${Math.max(0, window.innerWidth - bounds.right)}px`
+      : null);
+    if (top) manualEditor.element.style.top = top;
+    if (right) manualEditor.element.style.right = right;
+  }
+
   function ensureManualInteraction() {
     if (manualInteraction || !manualInteractionApi?.createController) return manualInteraction;
     manualInteraction = manualInteractionApi.createController({
@@ -967,10 +983,10 @@
     return manualInteraction;
   }
 
-  function clearManualTransientState({ restorePlanRails = false } = {}) {
+  function clearManualTransientState({ restorePlanRails = false, invalidatePlacements = true } = {}) {
     const hadEditor = Boolean(manualEditor);
     manualLifecycleGeneration += 1;
-    invalidateVisualPlacements();
+    if (invalidatePlacements) invalidateVisualPlacements();
     closeManualEditor();
     ensureManualInteraction()?.reset();
     if (restorePlanRails && hadEditor) restoreSavedManualPlanRails();
@@ -997,13 +1013,17 @@
     else normalStatus = status;
     const visibleStatus = breakEvenStatusOverride || manualPayoffStatusOverride || status;
     node.dataset.status = visibleStatus;
+    const invalidManualCount = manualPlanApi?.invalidCount?.(settings.manualPlans) || 0;
+    node.dataset.manualInvalidCount = String(invalidManualCount);
     let statusNode = node.querySelector(".nifty-axis-ladder__status");
     if (!statusNode) {
       statusNode = document.createElement("div");
       statusNode.className = "nifty-axis-ladder__status";
       node.append(statusNode);
     }
-    statusNode.textContent = visibleStatus;
+    statusNode.textContent = invalidManualCount > 0
+      ? `${visibleStatus} · MANUAL ENTRY NEEDS REVIEW · ${invalidManualCount}`
+      : visibleStatus;
   }
 
   function clearBreakEvenStatusOverride() {
@@ -1332,32 +1352,11 @@
     return { manualStorageWriteFailure: true, cause };
   }
 
-  function manualStoreSignature(value) {
-    return JSON.stringify(normalizeManualPlans(value));
-  }
-
-  function rememberManualStorageEcho(origin, store) {
-    const echo = { origin, signature: manualStoreSignature(store) };
-    manualStorageEchoes = [...manualStorageEchoes, echo];
-    return echo;
-  }
-
-  function forgetManualStorageEcho(echo) {
-    manualStorageEchoes = manualStorageEchoes.filter((candidate) => candidate !== echo);
-  }
-
-  function consumeManualStorageEcho(store) {
-    const signature = manualStoreSignature(store);
-    const index = manualStorageEchoes.findIndex((echo) => echo.signature === signature);
-    if (index < 0) return null;
-    const [echo] = manualStorageEchoes.splice(index, 1);
-    return echo;
-  }
-
   function canRenderStorageManualPlans(lifecycleGeneration) {
     return manualLifecycleGeneration === lifecycleGeneration
       && !manualRowsConcealed
-      && !manualEditor;
+      && settings.enabled
+      && Boolean(controller);
   }
 
   async function renderStorageManualPlans() {
@@ -1373,32 +1372,37 @@
   }
 
   async function renderCommittedManualPlans(origin) {
-    if (!manualEditorOriginIsCurrent(origin)) return;
+    const canRender = () => !manualRowsConcealed
+      && settings.enabled
+      && Boolean(controller)
+      && settings.expiry === origin?.expiry
+      && controller?.membership()?.expiry === origin?.expiry;
+    if (!canRender()) return;
     try {
       renderManualRows();
     } catch (_) {}
+    if (!canRender()) return;
+    try {
+      await controller?.place();
+    } catch (_) {}
   }
 
-  function persistManualPlans(updater, origin) {
-    const commit = async () => {
-      const next = typeof updater === "function" ? updater(settings.manualPlans) : updater;
-      const normalized = manualPlanApi.normalizeStore(next);
-      const echo = rememberManualStorageEcho(origin, normalized);
-      try {
-        await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: normalized });
-      } catch (cause) {
-        forgetManualStorageEcho(echo);
-        throw storageWriteFailure(cause);
-      }
-      settings.manualPlans = normalized;
-      return normalized;
-    };
-    const storageCommit = manualPersistTail.then(commit, commit);
-    manualPersistTail = storageCommit.catch(() => {});
-    return storageCommit.then(async (normalized) => {
-      await renderCommittedManualPlans(origin);
-      return normalized;
-    });
+  async function persistManualPlans(mutation) {
+    let response;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: "MUTATE_MANUAL_PLANS",
+        mutation
+      });
+    } catch (cause) {
+      throw storageWriteFailure(cause);
+    }
+    if (!response?.ok || !response.manualPlans) {
+      throw storageWriteFailure(new Error(response?.error || "Manual plan mutation failed."));
+    }
+    const normalized = normalizeManualPlans(response.manualPlans);
+    settings.manualPlans = normalized;
+    return normalized;
   }
 
   function openManualEditor(context) {
@@ -1414,33 +1418,33 @@
     let pendingCommit = false;
     const origin = {
       token: ++manualEditorToken,
-      lifecycleGeneration: manualLifecycleGeneration
+      lifecycleGeneration: manualLifecycleGeneration,
+      expiry: settings.expiry
     };
 
-    function setCommitControlsDisabled(disabled) {
+    function syncCommitControls() {
       const commit = editor?.querySelector?.(".nifty-manual-editor__commit");
       const remove = editor?.querySelector?.(".nifty-manual-editor__remove");
-      if (commit) commit.disabled = disabled;
-      if (remove) remove.disabled = disabled;
+      if (commit) commit.disabled = pendingCommit || !manualUiApi.validateDraft(draft).ok;
+      if (remove) remove.disabled = pendingCommit;
     }
 
-    async function commitManualPlan(updater) {
+    async function commitManualPlan(mutation) {
       if (pendingCommit) return;
       pendingCommit = true;
-      setCommitControlsDisabled(true);
+      syncCommitControls();
       try {
-        await persistManualPlans(updater, origin);
-        if (!manualEditorOriginIsCurrent(origin)) return;
-        closeManualEditor();
-        focusManualRow(strike);
-        try {
-          await controller?.place();
-        } catch (_) {}
+        await persistManualPlans(mutation);
+        if (manualEditorOriginIsCurrent(origin)) {
+          closeManualEditor();
+          focusManualRow(strike);
+        }
+        await renderCommittedManualPlans(origin);
       } catch (error) {
         if (!manualLifecycleOriginIsCurrent(origin)) return;
         if (manualEditorOriginIsCurrent(origin)) {
           pendingCommit = false;
-          setCommitControlsDisabled(false);
+          syncCommitControls();
         }
         if (error?.manualStorageWriteFailure) showStatus("PLAN NOT SAVED");
       }
@@ -1459,7 +1463,10 @@
         },
         setPremium(premium) {
           draft = manualUiApi.setPremium(draft, premium);
-          renderEditor(true);
+          if (manualEditorOriginIsCurrent(origin)) manualEditor.draft = draft;
+          manualUiApi.updateEditorState?.(editor, draft, { preservePremiumInput: true });
+          syncCommitControls();
+          void controller?.place();
         },
         async save() {
           if (!manualUiApi.validateDraft(draft).ok) return;
@@ -1467,11 +1474,11 @@
             id: draft.id || crypto.randomUUID(),
             now: new Date().toISOString()
           });
-          await commitManualPlan((store) => manualPlanApi.upsertEntry(store, entryToSave));
+          await commitManualPlan({ type: "upsert", entry: entryToSave });
         },
         async remove() {
           if (!draft.id) return;
-          await commitManualPlan((store) => manualPlanApi.removeEntry(store, draft.expiry, draft.id));
+          await commitManualPlan({ type: "remove", expiry: draft.expiry, entryId: draft.id });
         },
         close() {
           closeManualEditor();
@@ -1479,9 +1486,14 @@
           void controller?.place();
         }
       });
-      rowElement.append(editor);
-      manualEditor = { strike, element: editor, draft, ...origin };
-      setCommitControlsDisabled(pendingCommit);
+      editor.dataset.strike = String(strike);
+      rowElement.classList.add("has-manual-editor");
+      rowElement.setAttribute("aria-hidden", "true");
+      rowElement.setAttribute("tabindex", "-1");
+      rootNode().append(editor);
+      manualEditor = { strike, element: editor, rowElement, draft, ...origin };
+      positionManualEditor();
+      syncCommitControls();
       if (placePreview) void controller?.place();
     }
 
@@ -1716,6 +1728,7 @@
         element.style.right = `${baseRight + lane * laneOffset}px`;
         element.style.top = `${row.y}px`;
       });
+      positionManualEditor();
       const laneZeroRows = elements
         .filter((_entry, index) => layout.lanes[index] === 0)
         .map(({ element }) => element);
@@ -1803,6 +1816,7 @@
     const nextUrl = String(root.location?.href || "");
     if (nextUrl !== currentUrl) {
       currentUrl = nextUrl;
+      manualRowsConcealed = true;
       clearBreakEvenSelection();
       clearManualTransientState();
       clearManualPlanRails();
@@ -1816,18 +1830,21 @@
 
   function handleUrlNavigation() {
     currentUrl = String(root.location?.href || "");
+    manualRowsConcealed = true;
     clearBreakEvenSelection();
     clearManualTransientState();
     clearManualPlanRails();
   }
 
   function handlePageHide() {
+    manualRowsConcealed = true;
     clearBreakEvenSelection();
     clearManualTransientState();
     clearManualPlanRails();
   }
 
   function handleDocumentPointerDown(event) {
+    if (event.target?.closest?.(".nifty-manual-editor")) return;
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
     if (!row) {
       clearBreakEvenSelection();
@@ -1989,9 +2006,8 @@
     }
     if (changes.sellerSafetyChain) settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
     if (changes.manualPlans) {
-      const selfOrigin = consumeManualStorageEcho(changes.manualPlans.newValue)?.origin || null;
       settings.manualPlans = normalizeManualPlans(changes.manualPlans.newValue);
-      if (!selfOrigin) void renderStorageManualPlans();
+      void renderStorageManualPlans();
     }
     if (changes.expiry) {
       clearBreakEvenSelection();
@@ -2033,6 +2049,8 @@
     }
     if (message.type === "REFRESH_OPTION_NUMBERS") {
       clearBreakEvenSelection();
+      clearManualTransientState({ invalidatePlacements: false });
+      clearManualPlanRails();
       const refresh = controller?.membership() ? controller.refreshLtp() : rebuildCurrent(true, true);
       refresh.then((ok) => sendResponse(ok
         ? { ok: true, chain: controller.chain() }

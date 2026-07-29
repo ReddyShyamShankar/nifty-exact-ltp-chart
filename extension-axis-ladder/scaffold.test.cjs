@@ -40,3 +40,13 @@ test("manual modules load before content in dependency order", () => {
     "content.js"
   ]);
 });
+
+test("manual plan mutations are owned by the manifest service worker", () => {
+  const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8");
+
+  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.background.service_worker, "background.js");
+  assert.equal(manifest.permissions.includes("storage"), true);
+  assert.match(background, /importScripts\([^)]*"manual-plan\.js"/);
+  assert.match(background, /MUTATE_MANUAL_PLANS/);
+});

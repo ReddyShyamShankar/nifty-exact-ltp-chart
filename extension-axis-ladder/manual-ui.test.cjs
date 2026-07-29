@@ -22,7 +22,12 @@ function fakeDocument() {
       classList: {
         add(...values) { values.forEach((value) => classes.add(value)); },
         contains(value) { return classes.has(value); },
-        remove(...values) { values.forEach((value) => classes.delete(value)); }
+        remove(...values) { values.forEach((value) => classes.delete(value)); },
+        toggle(value, force) {
+          const enabled = force === undefined ? !classes.has(value) : Boolean(force);
+          if (enabled) classes.add(value); else classes.delete(value);
+          return enabled;
+        }
       },
       get className() { return [...classes].join(" "); },
       set className(value) {
@@ -59,6 +64,63 @@ test("edited traded premium replaces only selected snapshot", () => {
   draft = ui.setPremium(ui.setLots(draft, 2), 358);
   const entry = ui.entryFromDraft(draft, { id: "e1", now: "2026-07-29T10:00:00.000Z" });
   assert.deepEqual([entry.callSnapshot, entry.putSnapshot, entry.premium], [358, 409.8, 358]);
+});
+
+test("editing preserves unavailable opposite snapshot instead of backfilling live quote", () => {
+  const saved = {
+    id: "e1",
+    expiry,
+    strike: 24450,
+    optionType: "CALL",
+    direction: "SELL",
+    lots: 2,
+    premium: 358,
+    callSnapshot: 358,
+    putSnapshot: null,
+    createdAt: "2026-07-28T10:00:00.000Z"
+  };
+  const draft = ui.setLots(ui.createDraft({ expiry, row, entry: saved }), 3);
+  const entry = ui.entryFromDraft(draft, { id: saved.id, now: "2026-07-29T10:00:00.000Z" });
+  const face = ui.rowModel({ liveRow: row, entries: [entry], activeEntryId: entry.id });
+
+  assert.equal(ui.validateDraft(draft).ok, true);
+  assert.equal(draft.putSnapshot, null);
+  assert.equal(entry.putSnapshot, null);
+  assert.deepEqual(face.columns, ["C 358.00 ×3", "P —", "24,450"]);
+});
+
+test("draft validation requires only selected snapshot and rejects malformed input matrix", () => {
+  const valid = ui.chooseAction(ui.createDraft({
+    expiry,
+    row: { ...row, put: null }
+  }), "CALL", "BUY");
+  assert.equal(ui.validateDraft(valid).ok, true, "missing opposite quote remains saveable");
+
+  const invalidCases = [
+    ["expiry", { expiry: "2026-02-30" }],
+    ["strike", { strike: 0 }],
+    ["optionType", { optionType: "WING" }],
+    ["direction", { direction: "HOLD" }],
+    ["lots zero", { lots: 0 }],
+    ["lots fractional", { lots: 1.5 }],
+    ["premium negative", { premium: -1 }],
+    ["premium malformed", { premium: null }],
+    ["selected snapshot", { callSnapshot: null }]
+  ];
+  for (const [name, change] of invalidCases) {
+    assert.equal(ui.validateDraft({ ...valid, ...change }).ok, false, name);
+  }
+  assert.throws(() => ui.entryFromDraft(valid, {
+    id: "e1",
+    now: "2026-02-30T10:00:00.000Z"
+  }), /identity/);
+  assert.equal(ui.entryFromDraft({
+    ...valid,
+    createdAt: "not-a-timestamp"
+  }, {
+    id: "e1",
+    now: "2026-07-29T10:00:00.000Z"
+  }).createdAt, "2026-07-29T10:00:00.000Z");
 });
 
 test("editing keeps creation time and preview replaces only matching entry", () => {
@@ -127,6 +189,8 @@ test("editor model contains two staged menus and no strike or flip icon", () => 
   assert.equal(model.flipIcon, null);
   assert.equal(model.commitLabel, "ADD");
   assert.equal(model.canRemove, false);
+  assert.equal(model.canCommit, false);
+  assert.equal(model.validationLabel, "CHOOSE LEG");
 });
 
 test("renderRow replaces children with safe cells and optional count dot", () => {
@@ -177,17 +241,42 @@ test("editor wires staged actions, lot stepper, premium, save, remove, and close
   assert.equal(editor.children.some((child) => child.textContent.includes("24,450")), false);
   assert.equal(editor.children[5].size, 6);
   assert.equal(editor.children[5].getAttribute("aria-label"), "Premium");
+  assert.equal(editor.children[6].disabled, false);
   assert.equal(editor.children.map((child) => child.textContent).includes("REMOVE"), true);
   assert.equal(editor.children[8].getAttribute("aria-label"), "Close editor");
+  assert.equal(editor.children[9].className, "nifty-manual-editor__validation");
   editor.children[0].dispatch("click");
   const menu = editor.children.at(-1);
   assert.deepEqual(menu.children.map((child) => child.textContent), ["BUY", "SELL"]);
+  assert.deepEqual(menu.children.map((child) => child.getAttribute("aria-pressed")), ["false", "false"]);
   menu.children[1].dispatch("click");
   editor.children[4].dispatch("click");
   editor.children[5].value = "358";
-  editor.children[5].dispatch("change");
+  editor.children[5].dispatch("input");
   editor.children[6].dispatch("click");
   editor.children[7].dispatch("click");
   editor.children[8].dispatch("click");
   assert.deepEqual(calls, [["action", "CALL", "SELL"], ["lots", 3], ["premium", 358], ["save"], ["remove"], ["close"]]);
+});
+
+test("editor exposes selected side and direction while invalid commit stays disabled", () => {
+  const document = fakeDocument();
+  const blank = ui.renderEditor(document, ui.createDraft({ expiry, row }));
+  assert.equal(blank.children[0].getAttribute("aria-pressed"), "false");
+  assert.equal(blank.children[1].getAttribute("aria-pressed"), "false");
+  assert.equal(blank.children[6].disabled, true);
+  assert.equal(blank.children.at(-1).textContent, "CHOOSE LEG");
+
+  const selected = ui.renderEditor(document, actionDraft());
+  assert.equal(selected.children[0].textContent, "SELL CALL ▾");
+  assert.equal(selected.children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(selected.children[0].classList.contains("is-selected"), true);
+  assert.equal(selected.children[1].getAttribute("aria-pressed"), "false");
+  assert.equal(selected.children[6].disabled, false);
+  assert.equal(selected.children.at(-1).textContent, "");
+
+  selected.children[0].dispatch("click");
+  const menu = selected.children.at(-1);
+  assert.deepEqual(menu.children.map((child) => child.getAttribute("aria-pressed")), ["false", "true"]);
+  assert.equal(menu.children[1].classList.contains("is-selected"), true);
 });

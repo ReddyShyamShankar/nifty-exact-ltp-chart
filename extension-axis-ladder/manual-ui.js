@@ -34,16 +34,35 @@
     return `${count} saved ${count === 1 ? "entry" : "entries"}`;
   }
 
+  function isIsoDate(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }
+
+  function isIsoTimestamp(value) {
+    if (typeof value !== "string") return false;
+    const match = value.match(/^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(Z|([+-])(\d{2}):(\d{2}))$/);
+    if (!match || !isIsoDate(match[1])) return false;
+    if (match[3] !== "Z") {
+      const offsetHours = Number(match[5]);
+      const offsetMinutes = Number(match[6]);
+      if (offsetHours > 14 || offsetMinutes > 59 || (offsetHours === 14 && offsetMinutes !== 0)) return false;
+    }
+    return Number.isFinite(Date.parse(value));
+  }
+
   function createDraft({ expiry, row, entry } = {}) {
     const liveCall = snapshot(row?.call);
     const livePut = snapshot(row?.put);
+    const editing = Boolean(entry && typeof entry === "object");
     const optionType = OPTION_TYPES.includes(entry?.optionType) ? entry.optionType : null;
-    const callSnapshot = snapshot(entry?.callSnapshot) ?? liveCall;
-    const putSnapshot = snapshot(entry?.putSnapshot) ?? livePut;
+    const callSnapshot = editing ? snapshot(entry?.callSnapshot) : liveCall;
+    const putSnapshot = editing ? snapshot(entry?.putSnapshot) : livePut;
     const premium = snapshot(entry?.premium) ?? (optionType === "CALL" ? callSnapshot : optionType === "PUT" ? putSnapshot : null);
     return {
       id: typeof entry?.id === "string" && entry.id ? entry.id : null,
-      createdAt: typeof entry?.createdAt === "string" ? entry.createdAt : null,
+      createdAt: isIsoTimestamp(entry?.createdAt) ? entry.createdAt : null,
       expiry: typeof expiry === "string" ? expiry : null,
       strike: number(row?.strike ?? entry?.strike),
       liveCall,
@@ -83,14 +102,14 @@
 
   function validateDraft(draft) {
     const errors = [];
-    if (typeof draft?.expiry !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(draft.expiry)) errors.push("expiry");
+    if (!isIsoDate(draft?.expiry)) errors.push("expiry");
     if (number(draft?.strike) === null || draft.strike <= 0) errors.push("strike");
     if (!OPTION_TYPES.includes(draft?.optionType)) errors.push("optionType");
     if (!DIRECTIONS.includes(draft?.direction)) errors.push("direction");
     if (!Number.isInteger(draft?.lots) || draft.lots <= 0) errors.push("lots");
     if (snapshot(draft?.premium) === null) errors.push("premium");
-    if (snapshot(draft?.callSnapshot) === null) errors.push("callSnapshot");
-    if (snapshot(draft?.putSnapshot) === null) errors.push("putSnapshot");
+    if (draft?.optionType === "CALL" && snapshot(draft?.callSnapshot) === null) errors.push("callSnapshot");
+    if (draft?.optionType === "PUT" && snapshot(draft?.putSnapshot) === null) errors.push("putSnapshot");
     return { ok: errors.length === 0, errors };
   }
 
@@ -98,7 +117,7 @@
     if (!validateDraft(draft).ok) throw new Error("invalid manual draft");
     const id = typeof identity.id === "string" && identity.id ? identity.id : draft.id;
     const now = identity.now;
-    if (typeof id !== "string" || !id || typeof now !== "string" || !now) throw new Error("manual entry identity required");
+    if (typeof id !== "string" || !id || !isIsoTimestamp(now)) throw new Error("manual entry identity required");
     return {
       id,
       underlying: "NIFTY",
@@ -110,7 +129,7 @@
       premium: draft.premium,
       callSnapshot: draft.callSnapshot,
       putSnapshot: draft.putSnapshot,
-      createdAt: draft.createdAt || now,
+      createdAt: isIsoTimestamp(draft.createdAt) ? draft.createdAt : now,
       updatedAt: now
     };
   }
@@ -149,6 +168,14 @@
   }
 
   function editorModel(draft) {
+    const validation = validateDraft(draft);
+    const validationLabel = validation.errors.some((error) => ["optionType", "direction"].includes(error))
+      ? "CHOOSE LEG"
+      : validation.errors.includes("lots")
+        ? "LOTS ≥ 1"
+        : validation.errors.some((error) => ["premium", "callSnapshot", "putSnapshot"].includes(error))
+          ? "ENTER PREMIUM"
+          : validation.ok ? "" : "ENTRY INVALID";
     return {
       typeButtons: ["CALL", "PUT"],
       actions: ["BUY", "SELL"],
@@ -156,6 +183,10 @@
       premium: money(draft?.premium),
       commitLabel: draft?.id ? "SAVE" : "ADD",
       canRemove: Boolean(draft?.id),
+      canCommit: validation.ok,
+      validationLabel,
+      selectedOptionType: draft?.optionType || null,
+      selectedDirection: draft?.direction || null,
       visibleStrike: null,
       flipIcon: null
     };
@@ -188,10 +219,40 @@
     return handler?.(...args);
   }
 
+  function updateEditorState(editor, draft, { preservePremiumInput = false } = {}) {
+    if (!editor) return editor;
+    const model = editorModel(draft);
+    const menuButtons = editor.querySelectorAll?.(".nifty-manual-editor__menu") || [];
+    Array.from(menuButtons).forEach((button) => {
+      const optionType = button.dataset.optionType;
+      const selected = optionType === model.selectedOptionType;
+      button.textContent = selected ? `${model.selectedDirection} ${optionType} ▾` : `${optionType} ▾`;
+      button.classList.toggle("is-selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+      button.setAttribute("aria-label", selected
+        ? `Selected ${word(model.selectedDirection)} ${word(optionType)}`
+        : `Choose ${word(optionType)} action`);
+    });
+    const lots = editor.querySelector?.(".nifty-manual-editor__lots");
+    if (lots) lots.textContent = String(model.lots);
+    const premium = editor.querySelector?.(".nifty-manual-editor__premium");
+    if (premium) {
+      if (!preservePremiumInput) premium.value = model.premium === "—" ? "" : model.premium;
+      premium.setAttribute("aria-invalid", String(model.validationLabel === "ENTER PREMIUM"));
+    }
+    const commit = editor.querySelector?.(".nifty-manual-editor__commit");
+    if (commit) commit.disabled = !model.canCommit;
+    const validation = editor.querySelector?.(".nifty-manual-editor__validation");
+    if (validation) validation.textContent = model.validationLabel;
+    return editor;
+  }
+
   function renderEditor(document, draft, handlers = {}) {
     const model = editorModel(draft);
     const editor = document.createElement("div");
     editor.className = "nifty-manual-editor";
+    editor.setAttribute("role", "group");
+    editor.setAttribute("aria-label", `Manual entry editor for strike ${strikeLabel(draft?.strike)}`);
     let menu = null;
 
     function button(label, className, onClick) {
@@ -216,15 +277,34 @@
       menu = document.createElement("div");
       menu.className = "nifty-manual-editor__actions";
       menu.dataset.optionType = optionType;
-      model.actions.forEach((direction) => menu.append(button(direction, "nifty-manual-editor__action", () => {
-        invoke(handlers, ["chooseAction", "onChooseAction", "action"], optionType, direction);
-        clearMenu();
-      })));
+      model.actions.forEach((direction) => {
+        const action = button(direction, "nifty-manual-editor__action", () => {
+          invoke(handlers, ["chooseAction", "onChooseAction", "action"], optionType, direction);
+          clearMenu();
+        });
+        const selected = optionType === model.selectedOptionType && direction === model.selectedDirection;
+        action.dataset.direction = direction;
+        action.classList.toggle("is-selected", selected);
+        action.setAttribute("aria-pressed", String(selected));
+        menu.append(action);
+      });
       editor.append(menu);
     }
 
-    const call = button("CALL ▾", "nifty-manual-editor__menu", () => toggleMenu("CALL"));
-    const put = button("PUT ▾", "nifty-manual-editor__menu", () => toggleMenu("PUT"));
+    const typeButton = (optionType) => {
+      const selected = optionType === model.selectedOptionType;
+      const label = selected ? `${model.selectedDirection} ${optionType} ▾` : `${optionType} ▾`;
+      const control = button(label, "nifty-manual-editor__menu", () => toggleMenu(optionType));
+      control.dataset.optionType = optionType;
+      control.classList.toggle("is-selected", selected);
+      control.setAttribute("aria-pressed", String(selected));
+      control.setAttribute("aria-label", selected
+        ? `Selected ${word(model.selectedDirection)} ${word(optionType)}`
+        : `Choose ${word(optionType)} action`);
+      return control;
+    };
+    const call = typeButton("CALL");
+    const put = typeButton("PUT");
     const decrement = button("−", "nifty-manual-editor__step", () => invoke(handlers, ["setLots", "onSetLots", "lots"], Math.max(1, (number(draft?.lots) || 1) - 1)));
     const lots = document.createElement("span");
     lots.className = "nifty-manual-editor__lots";
@@ -236,18 +316,44 @@
     premium.size = 6;
     premium.value = model.premium === "—" ? "" : model.premium;
     premium.setAttribute("aria-label", "Premium");
-    premium.addEventListener("change", () => invoke(handlers, ["setPremium", "onSetPremium", "premium"], number(premium.value)));
+    premium.setAttribute("aria-invalid", String(model.validationLabel === "ENTER PREMIUM"));
+    premium.addEventListener("input", () => invoke(
+      handlers,
+      ["setPremium", "onSetPremium", "premium"],
+      number(premium.value),
+      premium
+    ));
     const commit = button(model.commitLabel, "nifty-manual-editor__commit", () => invoke(handlers, ["save", "onSave", "commit"]));
+    commit.disabled = !model.canCommit;
     const controls = [call, put, decrement, lots, increment, premium, commit];
     if (model.canRemove) controls.push(button("REMOVE", "nifty-manual-editor__remove", () => invoke(handlers, ["remove", "onRemove"])));
     const close = button("×", "nifty-manual-editor__close", () => invoke(handlers, ["close", "onClose"]));
     close.setAttribute("aria-label", "Close editor");
     controls.push(close);
+    const validation = document.createElement("span");
+    validation.className = "nifty-manual-editor__validation";
+    validation.setAttribute("role", "status");
+    validation.setAttribute("aria-live", "polite");
+    validation.textContent = model.validationLabel;
+    controls.push(validation);
     editor.append(...controls);
     return editor;
   }
 
-  const api = { createDraft, chooseAction, setLots, setPremium, validateDraft, entryFromDraft, previewEntries, rowModel, editorModel, renderRow, renderEditor };
+  const api = {
+    createDraft,
+    chooseAction,
+    setLots,
+    setPremium,
+    validateDraft,
+    entryFromDraft,
+    previewEntries,
+    rowModel,
+    editorModel,
+    renderRow,
+    renderEditor,
+    updateEditorState
+  };
   root.NiftyManualUi = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

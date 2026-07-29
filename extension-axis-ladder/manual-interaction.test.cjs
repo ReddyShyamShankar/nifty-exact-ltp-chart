@@ -122,3 +122,21 @@ test("outside and escape cancel timer and reset faces", () => {
   h.flush();
   assert.deepEqual(h.calls, [["reset"]]);
 });
+
+test("Escape and reset clear active face after completed cycles", () => {
+  const h = harness();
+  const context = { strike: 24450, entries: [{ id: "new" }, { id: "old" }] };
+
+  h.controller.click(context);
+  h.flush();
+  assert.equal(h.controller.activeEntryId(24450), "new");
+  h.controller.escape();
+  assert.equal(h.controller.activeEntryId(24450), null);
+
+  h.controller.click(context);
+  h.flush();
+  assert.equal(h.controller.activeEntryId(24450), "new");
+  h.controller.reset();
+  assert.equal(h.controller.activeEntryId(24450), null);
+  assert.deepEqual(h.calls, [["face", "new"], ["reset"], ["face", "new"], ["reset"]]);
+});
