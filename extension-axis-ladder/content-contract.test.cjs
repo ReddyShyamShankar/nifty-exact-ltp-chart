@@ -2006,6 +2006,7 @@ function createBreakEvenLifecycleHarness({
   storageSetError = null,
   deferStorage = false,
   deferManualStorageEvents = false,
+  deferAxisCaptures: initiallyDeferAxisCaptures = false,
   spot = 23767.45
 } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
@@ -2022,6 +2023,8 @@ function createBreakEvenLifecycleHarness({
   const storageWrites = [];
   const pendingStorageWrites = [];
   const pendingManualStorageEvents = [];
+  const pendingAxisCaptures = [];
+  let deferAxisCaptures = initiallyDeferAxisCaptures;
   let renderManualError = null;
   let manualRenderCalls = 0;
   let nextManualEntryId = 1;
@@ -2170,6 +2173,15 @@ function createBreakEvenLifecycleHarness({
       return { strike, call: 100 + index, put: 200 + index, ...(invalidRows[strike] || {}) };
     })
   };
+
+  function axisCaptureResult() {
+    return {
+      ok: true,
+      gridGapPx: 20,
+      axisPairs
+    };
+  }
+
   const sandbox = {
     AbortController,
     MutationObserver: class {
@@ -2199,11 +2211,12 @@ function createBreakEvenLifecycleHarness({
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
     chrome: {
       runtime: {
-        sendMessage: async () => ({
-          ok: true,
-          gridGapPx: 20,
-          axisPairs
-        }),
+        sendMessage: async () => {
+          if (deferAxisCaptures) {
+            return new Promise((resolve) => pendingAxisCaptures.push(resolve));
+          }
+          return axisCaptureResult();
+        },
         onMessage: { addListener(listener) { runtimeListeners.push(listener); } }
       },
       storage: {
@@ -2304,6 +2317,16 @@ function createBreakEvenLifecycleHarness({
     status() { return document.getElementById("nifty-axis-ladder")?.querySelector(".nifty-axis-ladder__status")?.textContent || null; },
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
     setProject(nextProject) { project = nextProject; },
+    deferAxisCaptures() { deferAxisCaptures = true; },
+    pendingAxisCaptureCount() { return pendingAxisCaptures.length; },
+    resolveAxisCapture(index = 0, result = axisCaptureResult()) {
+      const [resolve] = pendingAxisCaptures.splice(index, 1);
+      assert.ok(resolve, "expected a pending axis capture");
+      resolve(result);
+    },
+    resolveLatestAxisCapture(result = axisCaptureResult()) {
+      this.resolveAxisCapture(pendingAxisCaptures.length - 1, result);
+    },
     row(strike = 23750) {
       return document.getElementById("nifty-axis-ladder")
         ?.querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
@@ -2525,6 +2548,38 @@ test("Escape replaces preview rails with saved plan rails", async () => {
   assert.equal(h.storageSetCalls(), 0);
 });
 
+test("outside click clears preview rails when saved re-placement has an invalid native axis", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+  h.setAxisPairs([{ price: 24000, y: 100 }]);
+
+  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  await h.settle();
+
+  assert.equal(h.editor(24100), null);
+  assert.equal(h.manualRails(), null);
+  assert.equal(h.manualEntries().length, 2);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+test("Escape clears preview rails when saved re-placement has an invalid native axis", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+  h.setAxisPairs([{ price: 24000, y: 100 }]);
+
+  h.document.dispatch("keydown", { key: "Escape", target: h.row(24100) });
+  await h.settle();
+
+  assert.equal(h.editor(24100), null);
+  assert.equal(h.manualRails(), null);
+  assert.equal(h.manualEntries().length, 2);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
 test("pagehide clears manual rail visuals without deleting saved entries", async () => {
   const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
   await h.settle();
@@ -2552,6 +2607,72 @@ test("same-label SPA navigation clears manual rail visuals without deleting save
   assert.equal(h.editor(24100), null);
   assert.equal(h.manualRails(), null);
   assert.equal(h.manualEntries().length, 2);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+for (const [name, reset] of [
+  ["pagehide", (h) => h.pagehide(true)],
+  ["same-label SPA navigation", (h) => h.navigateSpa("https://www.tradingview.com/chart/after-reset/")]
+]) {
+  test(`delayed placement started before ${name} cannot redraw manual rails after reset`, async () => {
+    const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+    await h.settle();
+    h.deferAxisCaptures();
+    const stalePlacement = h.retryPlacement();
+    assert.equal(h.pendingAxisCaptureCount(), 1);
+
+    reset(h);
+    h.resolveAxisCapture();
+    await stalePlacement;
+    await h.settle();
+
+    assert.equal(h.manualRails(), null);
+    assert.equal(h.manualEntries().length, 2);
+    assert.equal(h.storageSetCalls(), 0);
+  });
+}
+
+test("older cancelled placement cannot clear newer preview rails after it completes", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+  h.deferAxisCaptures();
+
+  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  assert.equal(h.pendingAxisCaptureCount(), 1);
+  previewChangedManualPlan(h);
+  assert.ok(h.pendingAxisCaptureCount() > 1);
+
+  h.resolveLatestAxisCapture();
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
+
+  h.resolveAxisCapture();
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
+  assert.equal(h.storageSetCalls(), 0);
+});
+
+test("older failed placement cannot clear newer preview rails", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  await h.settle();
+  previewChangedManualPlan(h);
+  await h.settle();
+  h.deferAxisCaptures();
+
+  h.document.dispatch("keydown", { key: "Escape", target: h.row(24100) });
+  assert.equal(h.pendingAxisCaptureCount(), 1);
+  previewChangedManualPlan(h);
+  assert.ok(h.pendingAxisCaptureCount() > 1);
+
+  h.resolveLatestAxisCapture();
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
+
+  h.resolveAxisCapture(0, { ok: false, error: "axis unavailable" });
+  await h.settle();
+  assert.deepEqual(h.manualRailLabels(), ["PREVIEW BE 23,578", "PREVIEW BE 24,733"]);
   assert.equal(h.storageSetCalls(), 0);
 });
 

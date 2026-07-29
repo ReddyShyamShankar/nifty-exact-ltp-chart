@@ -241,6 +241,8 @@
     const setStatus = dependencies.setStatus || (() => {});
     const axisObservationAt = dependencies.axisObservationAt || (() => 0);
     const activeTimeframe = dependencies.activeTimeframe || (() => desiredTimeframe);
+    const beginVisualPlacement = dependencies.beginVisualPlacement || (() => undefined);
+    const isVisualPlacementCurrent = dependencies.isVisualPlacementCurrent || (() => true);
     let expiry = dependencies.expiry || DEFAULTS.expiry;
     const scheduleRetry = dependencies.scheduleRetry || ((run, delay) => setTimeout(run, delay));
     const cancelRetry = dependencies.cancelRetry || clearTimeout;
@@ -376,17 +378,18 @@
       cachedRiskGeneration = null;
     }
 
-    function placeCached(membership = current) {
+    function placeCached(membership = current, visualPlacementRevision = beginVisualPlacement()) {
+      if (!isVisualPlacementCurrent(visualPlacementRevision)) return false;
       const positioned = positionedRows(membership, cachedAxisToY);
       if (!positioned) return false;
       clearCachedRiskPlacement();
-      const rowPlacement = placeRows(positioned, membership, cachedAxisToY);
-      if (rowPlacement === false) return false;
+      const rowPlacement = placeRows(positioned, membership, cachedAxisToY, visualPlacementRevision);
+      if (!isVisualPlacementCurrent(visualPlacementRevision) || rowPlacement === false) return false;
       cachedRiskLayout = rowPlacement && typeof rowPlacement === "object"
         ? rowPlacement.riskLayout || null
         : null;
       if (cachedRiskLayout) cachedRiskGeneration = generation;
-      if (riskIsPublishable(riskView)) {
+      if (riskIsPublishable(riskView) && isVisualPlacementCurrent(visualPlacementRevision)) {
         try {
           placeRisk(riskView, cachedAxisToY, membership, cachedRiskLayout);
         } catch {
@@ -448,8 +451,9 @@
       }, delay);
     }
 
-    function failRebuild(localGeneration, timeframe, requestedExpiry, signal, message, minimumObservedAt, allowRetry = true) {
-      if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+    function failRebuild(localGeneration, timeframe, requestedExpiry, signal, message, minimumObservedAt, allowRetry = true, visualPlacementRevision) {
+      if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)
+        || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
       current = null;
       cachedAxisToY = null;
       clearCachedRiskPlacement();
@@ -480,6 +484,7 @@
       const signal = rebuildAbort?.signal;
       setStatus("CALIBRATING");
       concealRows("CALIBRATING");
+      const visualPlacementRevision = beginVisualPlacement();
       try {
         let chain = cachedChain;
         if (!chain) {
@@ -493,28 +498,32 @@
               signal,
               error?.message || "Option chain unavailable.",
               minimumObservedAt,
-              false
+              false,
+              visualPlacementRevision
             );
           }
-          if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+          if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)
+            || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
           cachedChain = chain;
         }
         const firstScale = await captureAxisScale(signal, { minimumObservedAt, timeframe });
-        if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+        if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)
+          || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
         const firstNativeInterval = timeframeApi.maxStrikeInterval(intervalFromAxisScale(firstScale));
         const preferredInterval = timeframeApi.preferredIntervalForTimeframe(timeframe);
         if (!firstScale?.ok || !validPineSanity(firstScale) || !firstNativeInterval || !preferredInterval || !Number.isFinite(Number(chain?.spot))) {
-          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "AXIS CALIBRATION UNAVAILABLE", minimumObservedAt);
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "AXIS CALIBRATION UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
         }
         const secondScale = await captureAxisScale(signal, { minimumObservedAt, timeframe });
-        if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)) return false;
+        if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)
+          || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
         const secondNativeInterval = timeframeApi.maxStrikeInterval(intervalFromAxisScale(secondScale));
         if (!secondScale?.ok
           || !validPineSanity(secondScale)
           || !secondNativeInterval
           || secondNativeInterval !== firstNativeInterval
           || secondScale.observationSignature !== firstScale.observationSignature) {
-          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "AXIS CALIBRATION UNAVAILABLE", minimumObservedAt);
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "AXIS CALIBRATION UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
         }
         const membership = freezeMembership({
           timeframe,
@@ -525,15 +534,15 @@
           chainRows: chain.rows
         });
         if (!membership) {
-          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "13 EXACT CONTRACTS UNAVAILABLE", minimumObservedAt);
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "13 EXACT CONTRACTS UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
         }
         current = membership;
         lastSpot = Number(chain.spot);
         membershipRevision += 1;
         cachedAxisToY = axisPriceToY(secondScale.axisPairs);
         renderRows(current.rows, current);
-        if (!placeCached(current)) {
-          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "Exact strike positions are unavailable.", minimumObservedAt);
+        if (!placeCached(current, visualPlacementRevision)) {
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "Exact strike positions are unavailable.", minimumObservedAt, true, visualPlacementRevision);
         }
         dataStatus = hasCompleteMembershipRows(current, chain.rows) ? "LIVE" : "PARTIAL";
         setStatus(dataStatus);
@@ -545,7 +554,7 @@
         transitionMinimumObservedAt = 0;
         return true;
       } catch (error) {
-        return failRebuild(localGeneration, timeframe, requestedExpiry, signal, error?.message || "AXIS CALIBRATION UNAVAILABLE", minimumObservedAt);
+        return failRebuild(localGeneration, timeframe, requestedExpiry, signal, error?.message || "AXIS CALIBRATION UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
       } finally {
         if (localGeneration === generation) rebuilding = false;
       }
@@ -583,6 +592,7 @@
 
     async function refreshLtp() {
       if (!current || refreshing || rebuilding) return false;
+      const visualPlacementRevision = beginVisualPlacement();
       refreshing = true;
       const snapshot = current;
       let refreshOwnedMembership = snapshot;
@@ -597,7 +607,8 @@
         if (generation !== snapshotGeneration
           || localRefreshRevision !== refreshRevision
           || current !== snapshot
-          || snapshot.expiry !== expiry) return false;
+          || snapshot.expiry !== expiry
+          || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
         cachedChain = chain;
         const spot = Number(chain?.spot);
         const lowerMidpoint = snapshot.atm - snapshot.atmStep / 2;
@@ -630,7 +641,7 @@
         if (membershipChanged) membershipRevision += 1;
         dataStatus = pendingRecenter ? "RECENTER PENDING" : (complete ? "LIVE" : "PARTIAL");
         renderRows(current.rows, current);
-        const placed = placeCached(current);
+        const placed = placeCached(current, visualPlacementRevision);
         if (!placed) throw new Error("EXACT STRIKE POSITIONS UNAVAILABLE");
         if (placed) setStatus(dataStatus);
         return placed;
@@ -639,6 +650,7 @@
           && localRefreshRevision === refreshRevision
           && current === refreshOwnedMembership
           && snapshot.expiry === expiry
+          && isVisualPlacementCurrent(visualPlacementRevision)
           && error?.name !== "AbortError") {
           if (acceptedFreshData) {
             concealRows(error?.message || "EXACT STRIKE POSITIONS UNAVAILABLE");
@@ -657,9 +669,12 @@
       }
     }
 
-    async function place() {
+    async function place(visualPlacementRevision) {
       const snapshot = current;
       if (!snapshot || rebuilding || snapshot.expiry !== expiry || snapshot.timeframe !== desiredTimeframe) return false;
+      const localVisualPlacementRevision = visualPlacementRevision === undefined
+        ? beginVisualPlacement()
+        : visualPlacementRevision;
       clearCachedRiskPlacement();
       const placementGeneration = generation;
       const localPlacementRevision = ++placementRevision;
@@ -675,6 +690,7 @@
           || rebuilding
           || snapshot.expiry !== expiry
           || snapshot.timeframe !== desiredTimeframe
+          || !isVisualPlacementCurrent(localVisualPlacementRevision)
           || !current) return false;
         if (!scale?.ok || !validPineSanity(scale)) throw new Error("Axis calibration unavailable.");
         if (activeTimeframe() !== snapshot.timeframe) throw new Error("Timeframe changed during axis capture.");
@@ -683,7 +699,7 @@
         const toY = axisPriceToY(scale.axisPairs);
         if (!toY) throw new Error("Native axis map is unavailable.");
         cachedAxisToY = toY;
-        if (!placeCached(current)) throw new Error("Exact strike positions are unavailable.");
+        if (!placeCached(current, localVisualPlacementRevision)) throw new Error("Exact strike positions are unavailable.");
         if (Number.isFinite(Number(scale.observedAt))) {
           committedAxisObservedAt = Math.max(committedAxisObservedAt, Number(scale.observedAt));
         }
@@ -696,6 +712,7 @@
           || rebuilding
           || snapshot.expiry !== expiry
           || snapshot.timeframe !== desiredTimeframe
+          || !isVisualPlacementCurrent(localVisualPlacementRevision)
           || !current) return false;
         clearCachedRiskPlacement();
         concealRows(error?.message || "AXIS CALIBRATION UNAVAILABLE");
@@ -860,6 +877,7 @@
   let manualEditor = null;
   let manualEditorToken = 0;
   let manualLifecycleGeneration = 0;
+  let railVisualRevision = 0;
   let manualPersistTail = Promise.resolve();
   let manualRowsConcealed = false;
   let manualStorageEchoes = [];
@@ -891,6 +909,19 @@
 
   function manualEditorOriginIsCurrent(origin) {
     return manualLifecycleOriginIsCurrent(origin) && manualEditor?.token === origin.token;
+  }
+
+  function beginVisualPlacement() {
+    railVisualRevision += 1;
+    return railVisualRevision;
+  }
+
+  function invalidateVisualPlacements() {
+    railVisualRevision += 1;
+  }
+
+  function visualPlacementIsCurrent(revision) {
+    return revision === undefined || revision === railVisualRevision;
   }
 
   function focusManualRow(strike) {
@@ -926,6 +957,7 @@
   function clearManualTransientState({ restorePlanRails = false } = {}) {
     const hadEditor = Boolean(manualEditor);
     manualLifecycleGeneration += 1;
+    invalidateVisualPlacements();
     closeManualEditor();
     ensureManualInteraction()?.reset();
     if (restorePlanRails && hadEditor) restoreSavedManualPlanRails();
@@ -1053,24 +1085,30 @@
     });
   }
 
-  function clearBreakEvenRails() {
+  function clearBreakEvenRails(visualPlacementRevision) {
+    if (!visualPlacementIsCurrent(visualPlacementRevision)) return false;
     document.getElementById("nifty-break-even-rails")?.remove();
+    return true;
   }
 
-  function removeManualPlanRails() {
+  function removeManualPlanRails(visualPlacementRevision) {
+    if (!visualPlacementIsCurrent(visualPlacementRevision)) return false;
     document.getElementById("nifty-manual-plan-rails")?.remove();
+    return true;
   }
 
-  function clearManualPlanRails() {
-    removeManualPlanRails();
+  function clearManualPlanRails(visualPlacementRevision) {
+    if (!removeManualPlanRails(visualPlacementRevision)) return false;
     clearManualPayoffStatusOverride();
+    return true;
   }
 
   function restoreSavedManualPlanRails() {
-    clearManualPlanRails();
-    Promise.resolve(controller?.place?.()).then((placed) => {
-      if (!placed) clearManualPlanRails();
-    }).catch(() => clearManualPlanRails());
+    const visualPlacementRevision = beginVisualPlacement();
+    clearManualPlanRails(visualPlacementRevision);
+    Promise.resolve(controller?.place?.(visualPlacementRevision)).then((placed) => {
+      if (!placed) clearManualPlanRails(visualPlacementRevision);
+    }).catch(() => clearManualPlanRails(visualPlacementRevision));
   }
 
   function breakEvenRoot() {
@@ -1123,14 +1161,15 @@
     return placements.length && !placements.some(({ projection }) => !projection) ? placements : null;
   }
 
-  function placeManualPlanRails(toY, rect, labelRight, decorations) {
+  function placeManualPlanRails(toY, rect, labelRight, decorations, visualPlacementRevision) {
+    if (!visualPlacementIsCurrent(visualPlacementRevision)) return false;
     const payoff = manualLevels();
     if (payoff.status === "empty") {
-      clearManualPlanRails();
+      clearManualPlanRails(visualPlacementRevision);
       return false;
     }
     if (payoff.status === "flat") {
-      removeManualPlanRails();
+      removeManualPlanRails(visualPlacementRevision);
       showStatus("PLAN PAYOFF FLAT");
       return true;
     }
@@ -1138,14 +1177,14 @@
     const plotRight = Number(rect?.right);
     const placements = manualRailPlacements(toY, rect, payoff);
     if (!placements) {
-      clearManualPlanRails();
+      clearManualPlanRails(visualPlacementRevision);
       return false;
     }
     const labelDecorations = decorations === undefined
       ? breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2)
       : decorations;
     if (!labelDecorations) {
-      clearManualPlanRails();
+      clearManualPlanRails(visualPlacementRevision);
       return false;
     }
     const railRight = Math.max(plotLeft, Math.min(plotRight, Number.isFinite(labelRight) ? labelRight : plotRight));
@@ -1210,10 +1249,11 @@
     };
   }
 
-  function placeBreakEvenRails(toY, rect, labelRight, decorations) {
+  function placeBreakEvenRails(toY, rect, labelRight, decorations, visualPlacementRevision) {
+    if (!visualPlacementIsCurrent(visualPlacementRevision)) return false;
     const placements = quickRailPlacements(toY, rect);
     if (!placements) {
-      clearBreakEvenRails();
+      clearBreakEvenRails(visualPlacementRevision);
       return false;
     }
     const plotLeft = Number(rect?.left);
@@ -1223,10 +1263,10 @@
       ? breakEvenApi.layoutDecorations?.(placements, rect, BREAK_EVEN_LABEL_HEIGHT, 2)
       : decorations;
     if (!labelDecorations) {
-      clearBreakEvenRails();
+      clearBreakEvenRails(visualPlacementRevision);
       return false;
     }
-    clearBreakEvenRails();
+    clearBreakEvenRails(visualPlacementRevision);
     const rails = breakEvenRoot();
     placements.forEach(({ level, projection }, index) => {
       const element = document.createElement("div");
@@ -1615,7 +1655,8 @@
     return true;
   }
 
-  function placeRows(rows, membership, toY) {
+  function placeRows(rows, membership, toY, visualPlacementRevision) {
+    if (!visualPlacementIsCurrent(visualPlacementRevision)) return false;
     const canvas = chartCanvas();
     if (!canvas) {
       concealRows("TRADINGVIEW CHART UNAVAILABLE");
@@ -1666,14 +1707,14 @@
         .map(({ element }) => element);
       const labelRight = riskLabelLayout(laneZeroRows)?.labelRight ?? rect.right;
       const railDecorations = sharedRailDecorations(toY, rect);
-      placeBreakEvenRails(toY, rect, labelRight, railDecorations.quick);
-      placeManualPlanRails(toY, rect, labelRight, railDecorations.manual);
+      placeBreakEvenRails(toY, rect, labelRight, railDecorations.quick, visualPlacementRevision);
+      placeManualPlanRails(toY, rect, labelRight, railDecorations.manual, visualPlacementRevision);
       scaleFitAttempts = 0;
       scaleFitTimeframe = membership?.timeframe || scaleFitTimeframe;
       return { riskLayout: { labelRight } };
     } catch (error) {
-      clearBreakEvenRails();
-      clearManualPlanRails();
+      clearBreakEvenRails(visualPlacementRevision);
+      clearManualPlanRails(visualPlacementRevision);
       elements.forEach(({ element }) => { element.hidden = true; });
       throw error;
     } finally {
@@ -1840,6 +1881,8 @@
       expiry: settings.expiry,
       activeTimeframe: () => timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || ""),
       axisObservationAt,
+      beginVisualPlacement,
+      isVisualPlacementCurrent: visualPlacementIsCurrent,
       captureAxisScale,
       fetchChain,
       hideRows,
