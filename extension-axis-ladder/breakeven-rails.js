@@ -39,14 +39,24 @@
 
   function createSelectionController(onChange = () => {}) {
     let selected = null;
+    function clear() {
+      if (selected !== null) {
+        selected = null;
+        onChange(null);
+      }
+    }
     return {
-      clear() { if (selected !== null) { selected = null; onChange(null); } },
+      clear,
       current() { return selected; },
       select(row) {
-        if (!calculate(row)) { selected = null; onChange(null); return false; }
-        selected = { strike: Number(row.strike), call: Number(row.call), put: Number(row.put) };
+        const strike = finiteNonNegative(row?.strike);
+        if (strike === null) {
+          clear();
+          return false;
+        }
+        selected = { strike, call: row.call, put: row.put };
         onChange(selected);
-        return true;
+        return Boolean(calculate(selected));
       }
     };
   }

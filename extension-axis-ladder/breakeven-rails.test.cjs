@@ -42,8 +42,10 @@ test("selection replaces exact snapshot and clear removes it", () => {
   assert.deepEqual(changes, [first, second, null]);
 });
 
-test("invalid selection reports failure and keeps no snapshot", () => {
+test("invalid selection reports unavailable while retaining the clicked row until cleared", () => {
   const controller = api.createSelectionController(() => {});
   assert.equal(controller.select({ strike: 24300, call: null, put: 402 }), false);
+  assert.deepEqual(controller.current(), { strike: 24300, call: null, put: 402 });
+  controller.clear();
   assert.equal(controller.current(), null);
 });

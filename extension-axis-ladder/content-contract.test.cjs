@@ -1880,12 +1880,16 @@ test("rows alone accept input while fullscreen overlay remains pointer-transpare
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?pointer-events:\s*auto/);
 });
 
-function createBreakEvenLifecycleHarness({ plotRect = { left: 0, top: 0, right: 1200, bottom: 800 } } = {}) {
+function createBreakEvenLifecycleHarness({
+  plotRect = { left: 0, top: 0, right: 1200, bottom: 800 },
+  invalidRows = {}
+} = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const nodesById = new Map();
   const roots = [];
   const storageListeners = [];
   const runtimeListeners = [];
+  let fetchCalls = 0;
   const railApi = require("./breakeven-rails.js");
   let axisPairs = [
     { price: 24000, y: 100 },
@@ -1951,6 +1955,7 @@ function createBreakEvenLifecycleHarness({ plotRect = { left: 0, top: 0, right: 
           const strike = selector.match(/data-strike="(\d+)"/)?.[1];
           return descendants.filter((child) => child.classList.contains("nifty-axis-ladder__row") && child.dataset.strike === strike);
         }
+        if (selector.startsWith(".")) return descendants.filter((child) => child.classList.contains(selector.slice(1)));
         if (selector.startsWith("#")) return descendants.filter((child) => child.id === selector.slice(1));
         return [];
       },
@@ -1995,7 +2000,10 @@ function createBreakEvenLifecycleHarness({ plotRect = { left: 0, top: 0, right: 
     updatedAt: new Date().toISOString(),
     expiry: "2026-08-25",
     spot: 23767.45,
-    rows: Array.from({ length: 41 }, (_, index) => ({ strike: 22800 + index * 50, call: 100 + index, put: 200 + index }))
+    rows: Array.from({ length: 41 }, (_, index) => {
+      const strike = 22800 + index * 50;
+      return { strike, call: 100 + index, put: 200 + index, ...(invalidRows[strike] || {}) };
+    })
   };
   const sandbox = {
     AbortController,
@@ -2032,7 +2040,10 @@ function createBreakEvenLifecycleHarness({ plotRect = { left: 0, top: 0, right: 
       }
     },
     document,
-    fetch: async () => ({ ok: true, json: async () => ({ spot: snapshot.spot, rows: snapshot.rows }) }),
+    fetch: async () => {
+      fetchCalls += 1;
+      return { ok: true, json: async () => ({ spot: snapshot.spot, rows: snapshot.rows }) };
+    },
     setTimeout() { return 1; },
     clearTimeout() {},
     window: { innerWidth: 1600, innerHeight: 900 },
@@ -2050,13 +2061,19 @@ function createBreakEvenLifecycleHarness({ plotRect = { left: 0, top: 0, right: 
     roots,
     runtimeListeners,
     rails() { return document.getElementById("nifty-break-even-rails"); },
+    fetchCalls() { return fetchCalls; },
+    status() { return document.getElementById("nifty-axis-ladder")?.querySelector(".nifty-axis-ladder__status")?.textContent || null; },
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
     setProject(nextProject) { project = nextProject; },
-    select(strike = 23750) {
+    click(strike = 23750) {
       const root = document.getElementById("nifty-axis-ladder");
       const row = root?.querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`);
       assert.ok(row, "exact rendered row is available for selection");
       root.dispatch("click", { target: row });
+      return row;
+    },
+    select(strike = 23750) {
+      const row = this.click(strike);
       assert.equal(row.classList.contains("is-selected"), true);
       assert.equal(row.getAttribute("aria-selected"), "true");
       return row;
@@ -2138,6 +2155,77 @@ test("clicked selection creates exactly two in-plot rails ending at lane-zero cl
     assert.equal(line.children.length, 1);
     assert.equal(line.children[0].style.right, "1512px");
   });
+});
+
+test("switching valid rows removes old rails before the next asynchronous placement and never fetches quotes", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  harness.select(23750);
+  await harness.settle();
+  assert.equal(harness.rails().children.length, 2);
+  const fetchesBeforeClick = harness.fetchCalls();
+
+  const nextRow = harness.select(23800);
+  assert.equal(harness.rails(), null, "previous rails disappear in the click turn");
+  assert.equal(nextRow.getAttribute("aria-selected"), "true");
+  assert.equal(harness.fetchCalls(), fetchesBeforeClick, "row clicks only place cached rows");
+
+  await harness.settle();
+  assert.equal(harness.rails().children.length, 2);
+});
+
+test("clicking the selected row toggles its rails and selection off", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  const row = harness.select(23750);
+  await harness.settle();
+  assert.equal(harness.rails().children.length, 2);
+
+  harness.click(23750);
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(row.getAttribute("aria-selected"), "false");
+  assert.equal(harness.rails(), null);
+  assert.equal(harness.status(), "LIVE");
+});
+
+test("invalid-price row stays selected, draws no rails, and reports unavailable without fetching", async () => {
+  const harness = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
+  await harness.settle();
+  const fetchesBeforeClick = harness.fetchCalls();
+
+  const row = harness.click(23750);
+  assert.equal(row.classList.contains("is-selected"), true);
+  assert.equal(row.getAttribute("aria-selected"), "true");
+  assert.equal(harness.rails(), null);
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+  assert.equal(harness.fetchCalls(), fetchesBeforeClick);
+});
+
+test("clearing an unavailable selection restores the normal status", async () => {
+  const harness = createBreakEvenLifecycleHarness({ invalidRows: { 23750: { call: null } } });
+  await harness.settle();
+  const normalStatus = harness.status();
+  const row = harness.select(23750);
+  assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
+
+  harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(harness.rails(), null);
+  assert.equal(harness.status(), normalStatus);
+
+  harness.select(23750);
+  harness.document.dispatch("keydown", { key: "Escape", target: row });
+  assert.equal(harness.status(), normalStatus);
+
+  harness.select(23750);
+  harness.runtimeListeners[0]({ type: "REFRESH_OPTION_NUMBERS" }, null, () => {});
+  assert.equal(harness.status(), normalStatus);
+
+  harness.select(23750);
+  harness.storage({ expiry: { newValue: "2026-09-01" } });
+  assert.equal(row.classList.contains("is-selected"), false);
+  assert.equal(harness.rails(), null);
+  assert.equal(harness.status(), "MANUAL REFRESH REQUIRED");
 });
 
 test("off-screen rails pin top and bottom markers to plot edges before lane-zero rows", async () => {

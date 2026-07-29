@@ -817,6 +817,7 @@
   let scaleFitAttempts = 0;
   let scaleFitInFlight = false;
   let scaleFitTimeframe = null;
+  let normalStatus = "LIVE";
   let breakEvenSelection = breakEvenApi?.createSelectionController(() => renderBreakEvenSelection()) || {
     clear() {},
     current() { return null; },
@@ -836,6 +837,7 @@
 
   function showStatus(status) {
     const node = rootNode();
+    if (status !== "OPTION PRICE UNAVAILABLE") normalStatus = status;
     node.dataset.status = status;
     let statusNode = node.querySelector(".nifty-axis-ladder__status");
     if (!statusNode) {
@@ -977,10 +979,12 @@
   function clearBreakEvenSelection() {
     breakEvenSelection.clear();
     clearBreakEvenRails();
-    rootNode().querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
+    const node = rootNode();
+    node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
       row.classList.remove("is-selected");
       row.setAttribute("aria-selected", "false");
     });
+    if (node.dataset.status === "OPTION PRICE UNAVAILABLE") showStatus(normalStatus);
   }
 
   function riskRoot() {
@@ -1303,7 +1307,12 @@
     const rowElement = event.target?.closest?.(".nifty-axis-ladder__row");
     if (!rowElement) return;
     const strike = Number(rowElement.dataset.strike);
+    if (breakEvenSelection.current()?.strike === strike) {
+      clearBreakEvenSelection();
+      return;
+    }
     const snapshot = controller?.membership()?.rows.find((row) => row.strike === strike);
+    clearBreakEvenRails();
     if (!breakEvenSelection.select(snapshot)) {
       showStatus("OPTION PRICE UNAVAILABLE");
       return;
