@@ -1838,6 +1838,60 @@ test("axis capture returns timestamp belonging to submitted candidates", () => {
   assert.doesNotMatch(capture, /Date\.now\(\) - observedAt/);
 });
 
+test("TradingView status decorator loads before content and stays independent from ladder", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "manifest.json"), "utf8"));
+  const scripts = manifest.content_scripts.find((entry) => entry.js.includes("content.js")).js;
+  assert.ok(scripts.indexOf("tradingview-live-badge.js") < scripts.indexOf("content.js"));
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /NiftyTradingViewLiveBadge/);
+  assert.match(source, /stopLiveBadgeDecorator/);
+  assert.doesNotMatch(source, /if \(!.*LiveBadge.*\).*start\(/);
+});
+
+test("native status badge uses full green or red fill with white text", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(css, /\.nifty-tv-status-badge\.is-live\s*\{[\s\S]*?background(?:-color)?:\s*#(?:16a34a|15803d)/i);
+  assert.match(css, /\.nifty-tv-status-badge\.is-offline\s*\{[\s\S]*?background(?:-color)?:\s*#(?:dc2626|b91c1c)/i);
+  assert.match(css, /\.nifty-tv-status-badge\s*\{[\s\S]*?color:\s*#fff/i);
+});
+
+test("live badge installs once outside ladder state, isolates failure, and stops on unload", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  let installCalls = 0;
+  let stopCalls = 0;
+  let unload;
+  const run = (liveBadge) => {
+    let storageRead = false;
+    const sandbox = {
+      NiftyTradingViewLiveBadge: liveBadge,
+      NiftySellerViewIdentity: { normalizeStoredRiskViews(value) { return value; } },
+      MutationObserver: class {},
+      chrome: {
+        runtime: {},
+        storage: {
+          local: { get(_defaults, callback) { storageRead = true; callback({ enabled: false }); } },
+          onChanged: { addListener() {} }
+        }
+      },
+      document: { documentElement: {} },
+      addEventListener(type, listener) { if (type === "unload") unload = listener; },
+      setTimeout() { return 1; },
+      clearTimeout() {},
+      console
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(source, sandbox);
+    return storageRead;
+  };
+
+  assert.equal(run({ install() { installCalls += 1; return () => { stopCalls += 1; }; } }), true);
+  assert.equal(installCalls, 1);
+  assert.equal(typeof unload, "function");
+  unload();
+  assert.equal(stopCalls, 1);
+  assert.equal(run({ install() { throw new Error("decorator unavailable"); } }), true);
+});
+
 test("trusted scale fit waits for a fresh observer frame before retrying placement", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const request = source.match(/function requestScaleFit[\s\S]*?\n  \}/)?.[0] || "";

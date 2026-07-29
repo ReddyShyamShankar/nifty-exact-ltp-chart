@@ -27,6 +27,17 @@
   pointer-events: none;
 }
 
+.nifty-tv-status-badge {
+  color: #fff !important;
+  border: 0 !important;
+  border-radius: 3px !important;
+  padding: 2px 5px !important;
+  font-weight: 800 !important;
+}
+
+.nifty-tv-status-badge.is-live { background: #16a34a !important; }
+.nifty-tv-status-badge.is-offline { background: #dc2626 !important; }
+
 .nifty-break-even__line {
   position: fixed;
   height: 0;

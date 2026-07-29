@@ -28,6 +28,8 @@
     || (typeof module !== "undefined" && module.exports ? require("./seller-view-identity.js") : null);
   const breakEvenApi = root.NiftyBreakEvenRails
     || (typeof module !== "undefined" && module.exports ? require("./breakeven-rails.js") : null);
+  const liveBadgeApi = root.NiftyTradingViewLiveBadge
+    || (typeof module !== "undefined" && module.exports ? require("./tradingview-live-badge.js") : null);
 
   function quote(value) {
     if (typeof value === "boolean" || value === null || value === undefined) return null;
@@ -818,6 +820,25 @@
   let scaleFitInFlight = false;
   let scaleFitTimeframe = null;
   let normalStatus = "LIVE";
+  let stopLiveBadgeDecorator = () => {};
+  try {
+    stopLiveBadgeDecorator = liveBadgeApi?.install?.(document, MutationObserver) || (() => {});
+  } catch (_) {
+    stopLiveBadgeDecorator = () => {};
+  }
+
+  function teardownLiveBadgeDecorator() {
+    const stopDecorator = stopLiveBadgeDecorator;
+    stopLiveBadgeDecorator = () => {};
+    try {
+      stopDecorator();
+    } catch (_) {}
+  }
+
+  if (typeof root.addEventListener === "function") {
+    root.addEventListener("unload", teardownLiveBadgeDecorator, { once: true });
+  }
+
   let breakEvenSelection = breakEvenApi?.createSelectionController(() => renderBreakEvenSelection()) || {
     clear() {},
     current() { return null; },

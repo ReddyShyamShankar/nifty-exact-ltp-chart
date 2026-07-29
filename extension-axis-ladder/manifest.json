@@ -46,7 +46,7 @@
     },
     {
       "matches": ["https://tradingview.com/*", "https://www.tradingview.com/*"],
-      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "risk-overlay.js", "seller-view-identity.js", "breakeven-rails.js", "content.js"],
+      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "risk-overlay.js", "seller-view-identity.js", "breakeven-rails.js", "tradingview-live-badge.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }
