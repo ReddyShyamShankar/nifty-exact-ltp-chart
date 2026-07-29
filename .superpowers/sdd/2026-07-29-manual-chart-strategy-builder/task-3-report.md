@@ -32,3 +32,40 @@ Implemented and self-reviewed. Commit contains only `manual-interaction.js` and 
 ## Concerns
 
 Full listener-backed bridge coverage needs an environment permitting localhost server binds. Focused interaction coverage and static checks are green.
+
+## Round 1/5 Fix
+
+Added monotonic generation and scheduled-timer identity guards. Queued callbacks invalidated by double-click, reset, or later click now return before clearing state or invoking `onQuick`/`onFace`.
+
+Added regressions for an already-queued callback after double-click and an earlier callback invalidated by a later click.
+
+Exact commands and output:
+
+```text
+$ node --test extension-axis-ladder/manual-interaction.test.cjs
+TAP version 13
+# Subtest: double click cancels pending single click
+ok 1 - double click cancels pending single click
+# Subtest: double click ignores already-queued stale single callback
+ok 2 - double click ignores already-queued stale single callback
+# Subtest: later click ignores earlier already-queued callback
+ok 3 - later click ignores earlier already-queued callback
+# Subtest: saved entries cycle newest first then live
+ok 4 - saved entries cycle newest first then live
+# Subtest: outside and escape cancel timer and reset faces
+ok 5 - outside and escape cancel timer and reset faces
+1..5
+# tests 5
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+
+$ node --check extension-axis-ladder/manual-interaction.js
+
+$ node --check extension-axis-ladder/manual-interaction.test.cjs
+
+$ git diff --check
+```
+
+All commands exited with code `0`.

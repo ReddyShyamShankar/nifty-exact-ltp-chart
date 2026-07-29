@@ -3,16 +3,21 @@
 
   function createController(options) {
     let pending = null;
+    let generation = 0;
     const faces = new Map();
 
     function cancel() {
+      generation += 1;
       if (pending !== null) options.clearTimer(pending);
       pending = null;
     }
 
     function click(context) {
       cancel();
-      pending = options.setTimer(() => {
+      const scheduledGeneration = generation;
+      let timer = null;
+      timer = options.setTimer(() => {
+        if (generation !== scheduledGeneration || pending !== timer) return;
         pending = null;
         const entries = Array.isArray(context.entries) ? context.entries : [];
         if (!entries.length) return options.onQuick(context);
@@ -25,6 +30,7 @@
         else faces.delete(context.strike);
         options.onFace({ ...context, entryId: entry?.id || null });
       }, options.delay ?? 240);
+      pending = timer;
     }
 
     function doubleClick(context) {
