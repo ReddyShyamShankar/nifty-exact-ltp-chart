@@ -23,9 +23,15 @@ test("operator guide documents click-only single-leg break-even rails", () => {
 
 test("operator guide treats TradingView badge styling as cosmetic and fail-safe", () => {
   const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
-  assert.match(readme, /LIVE[^\n]*green[^\n]*OFFLINE[^\n]*red/i);
+  assert.match(readme, /LIVE[^\n]*green/i);
+  assert.match(readme, /OFFLINE[^\n]*red/i);
+  assert.match(readme, /disconnected[^\n]*red/i);
+  assert.match(readme, /both use white text/i);
   assert.match(readme, /TradingView-owned[^\n]*cosmetic/i);
-  assert.match(readme, /badge[^\n]*cannot[^\n]*ladder/i);
+  assert.match(readme, /TradingView changes[^\n]*or removes[^\n]*badge DOM[^\n]*leaves the page unchanged/i);
+  assert.match(readme, /badge styling cannot block the ladder/i);
+  assert.match(readme, /badge styling cannot block[^\n]*manual refresh/i);
+  assert.match(readme, /badge styling cannot block[^\n]*break-even rails/i);
 });
 
 function acceptedRiskView(overrides = {}) {
