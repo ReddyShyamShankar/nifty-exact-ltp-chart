@@ -63,6 +63,22 @@ test("malformed plan containers are quarantined intact through valid mutations",
   }]);
 });
 
+test("malformed top-level stores and plans containers survive valid mutations", () => {
+  const malformedStores = [
+    "raw-storage-text",
+    { version: 1, plans: "not-an-object", recoveryNote: "keep the whole store" }
+  ];
+
+  for (const rawStore of malformedStores) {
+    const normalized = plan.normalizeStore(rawStore);
+    const added = plan.upsertEntry(normalized, callEntry);
+
+    assert.equal(plan.invalidCount(added), 1);
+    assert.deepEqual(plan.invalidEntries(added), [{ planExpiry: null, raw: rawStore }]);
+    assert.deepEqual(plan.entriesFor(added, callEntry.expiry), [callEntry]);
+  }
+});
+
 test("real ISO dates and timestamps fail closed while opposite snapshot may stay null", () => {
   assert.deepEqual(plan.normalizeEntry({ ...callEntry, putSnapshot: null }), { ...callEntry, putSnapshot: null });
   assert.ok(plan.normalizeEntry({

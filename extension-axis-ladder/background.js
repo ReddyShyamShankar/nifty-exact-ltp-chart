@@ -69,8 +69,11 @@ function applyManualPlanMutation(store, mutation) {
 function enqueueManualPlanMutation(mutation) {
   const commit = async () => {
     const stored = await chrome.storage.local.get(manualPlanApi.STORAGE_KEY);
+    const rawStore = stored && Object.hasOwn(stored, manualPlanApi.STORAGE_KEY)
+      ? stored[manualPlanApi.STORAGE_KEY]
+      : manualPlanApi.emptyStore();
     const next = applyManualPlanMutation(
-      stored?.[manualPlanApi.STORAGE_KEY] || manualPlanApi.emptyStore(),
+      rawStore,
       mutation
     );
     await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: next });

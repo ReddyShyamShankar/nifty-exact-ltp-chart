@@ -174,6 +174,27 @@ test("background queue preserves concurrent remove and add without deleting quar
   assert.deepEqual(manualPlan.invalidEntries(initial)[0].raw, raw);
 });
 
+test("background queue preserves malformed top-level storage during a valid mutation", async () => {
+  for (const rawStore of [
+    "",
+    { version: 1, plans: "broken", recoveryNote: "do not erase" }
+  ]) {
+    const h = loadBackground({ manualPlans: rawStore });
+    const response = await sendManualMutation(h.listeners, 1, {
+      type: "upsert",
+      entry: manualEntry()
+    });
+
+    assert.equal(response.ok, true);
+    assert.equal(manualPlan.invalidCount(h.local.manualPlans), 1);
+    assert.deepEqual(manualPlan.invalidEntries(h.local.manualPlans), [{
+      planExpiry: null,
+      raw: rawStore
+    }]);
+    assert.deepEqual(manualPlan.entriesFor(h.local.manualPlans, "2026-08-25"), [manualEntry()]);
+  }
+});
+
 test("background installs tab-specific side panel without changing capture API", async () => {
   const { api, listeners, sidePanelCalls } = loadBackground();
   await new Promise((resolve) => setImmediate(resolve));

@@ -7,6 +7,7 @@
     ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
   const snapshot = (value) => { const number = finite(value); return number !== null && number >= 0 ? number : null; };
   const emptyStore = () => ({ version: VERSION, plans: {}, [QUARANTINE_KEY]: [] });
+  const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
   function cloneRaw(value) {
     if (Array.isArray(value)) return value.map(cloneRaw);
@@ -54,6 +55,11 @@
 
   function normalizeStore(input) {
     const next = emptyStore();
+    if (input === undefined) return next;
+    if (!isRecord(input) || !Object.hasOwn(input, "plans") || !isRecord(input.plans)) {
+      next[QUARANTINE_KEY].push({ planExpiry: null, raw: cloneRaw(input) });
+      return next;
+    }
     const existingQuarantine = Array.isArray(input?.[QUARANTINE_KEY]) ? input[QUARANTINE_KEY] : [];
     existingQuarantine.forEach((record) => {
       if (record && typeof record === "object" && Object.hasOwn(record, "raw")) {
@@ -65,7 +71,7 @@
         next[QUARANTINE_KEY].push({ planExpiry: null, raw: cloneRaw(record) });
       }
     });
-    for (const [expiry, plan] of Object.entries(input?.plans || {})) {
+    for (const [expiry, plan] of Object.entries(input.plans)) {
       if (!Array.isArray(plan?.entries)) {
         next[QUARANTINE_KEY].push({ planExpiry: expiry, raw: cloneRaw(plan) });
         continue;
