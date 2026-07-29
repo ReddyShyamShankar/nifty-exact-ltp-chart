@@ -2004,6 +2004,7 @@ function createBreakEvenLifecycleHarness({
   invalidRows = {},
   manualEntries = [],
   storageSetError = null,
+  deferStorage = false,
   spot = 23767.45
 } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
@@ -2018,6 +2019,9 @@ function createBreakEvenLifecycleHarness({
   let refreshNumbers = null;
   let activeElement = null;
   const storageWrites = [];
+  const pendingStorageWrites = [];
+  let renderManualError = null;
+  let nextManualEntryId = 1;
   const railApi = require("./breakeven-rails.js");
   const manualPlanApi = require("./manual-plan.js");
   const manualPayoffApi = require("./manual-payoff.js");
@@ -2170,7 +2174,13 @@ function createBreakEvenLifecycleHarness({
     NiftyManualPlan: manualPlanApi,
     NiftyManualPayoff: manualPayoffApi,
     NiftyManualInteraction: manualInteractionApi,
-    NiftyManualUi: manualUiApi,
+    NiftyManualUi: {
+      ...manualUiApi,
+      renderRow(...args) {
+        if (renderManualError) throw renderManualError;
+        return manualUiApi.renderRow(...args);
+      }
+    },
     NiftyRiskOverlay: require("./risk-overlay.js"),
     NiftySellerViewIdentity: viewIdentity,
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
@@ -2197,6 +2207,9 @@ function createBreakEvenLifecycleHarness({
           async set(value) {
             storageWrites.push(value);
             if (storageSetError) throw storageSetError;
+            if (deferStorage) {
+              await new Promise((resolve) => pendingStorageWrites.push({ value, resolve }));
+            }
             if (value[manualPlanApi.STORAGE_KEY]) storedManualPlans = value[manualPlanApi.STORAGE_KEY];
           }
         },
@@ -2218,7 +2231,7 @@ function createBreakEvenLifecycleHarness({
     },
     clearTimeout(id) { timers.delete(id); },
     window: { innerWidth: 1600, innerHeight: 900 },
-    crypto: { randomUUID() { return "new-manual-entry"; } },
+    crypto: { randomUUID() { return `new-manual-entry-${nextManualEntryId++}`; } },
     location,
     ...globalEvents,
     console
@@ -2246,6 +2259,13 @@ function createBreakEvenLifecycleHarness({
     editor(strike) { return this.row(strike)?.querySelector(".nifty-manual-editor"); },
     manualEntries() { return manualPlanApi.entriesFor(storedManualPlans, snapshot.expiry); },
     storageSetCalls() { return storageWrites.length; },
+    pendingStorageWriteCount() { return pendingStorageWrites.length; },
+    resolveStorageWrite() {
+      const pending = pendingStorageWrites.shift();
+      assert.ok(pending, "expected a pending storage write");
+      pending.resolve();
+    },
+    setRenderManualError(error) { renderManualError = error; },
     fetchCalls() { return fetchCalls; },
     status() { return document.getElementById("nifty-axis-ladder")?.querySelector(".nifty-axis-ladder__status")?.textContent || null; },
     setAxisPairs(nextPairs) { axisPairs = nextPairs; },
@@ -2257,6 +2277,10 @@ function createBreakEvenLifecycleHarness({
     navigateSpa(nextUrl) {
       location.href = nextUrl;
       globalEvents.dispatch("popstate", {});
+    },
+    mutateUrl(nextUrl) {
+      location.href = nextUrl;
+      mutationCallback?.([{ type: "childList" }]);
     },
     pagehide(persisted = false) { globalEvents.dispatch("pagehide", { persisted }); },
     async navigateTo(nextLabel) {
@@ -2321,6 +2345,38 @@ function chooseCallSellEditor(h, strike = 23750) {
   editor.children[5].dispatch("change", {});
 }
 
+function savedManualEntry(overrides = {}) {
+  return {
+    id: "entry-23750",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    strike: 23750,
+    optionType: "CALL",
+    direction: "SELL",
+    lots: 1,
+    premium: 119,
+    callSnapshot: 119,
+    putSnapshot: 219,
+    createdAt: "2026-07-29T10:00:00.000Z",
+    updatedAt: "2026-07-29T10:00:00.000Z",
+    ...overrides
+  };
+}
+
+function commitManualEditor(h, strike = 23750) {
+  const commit = h.editor(strike).querySelector(".nifty-manual-editor__commit");
+  assert.ok(commit, "manual editor has a commit control");
+  commit.dispatch("click", {});
+  return commit;
+}
+
+function removeManualEditor(h, strike = 23750) {
+  const remove = h.editor(strike).querySelector(".nifty-manual-editor__remove");
+  assert.ok(remove, "saved manual editor has a remove control");
+  remove.dispatch("click", {});
+  return remove;
+}
+
 test("manual refresh preserves saved entry snapshot", async () => {
   const h = createBreakEvenLifecycleHarness({ manualEntries: [{
     id: "e1", underlying: "NIFTY", expiry: "2026-08-25", strike: 24450,
@@ -2375,7 +2431,7 @@ test("editor add persists only exact row and restores focus without fetching", a
   assert.deepEqual(h.manualEntries().map((entry) => ({
     id: entry.id, strike: entry.strike, optionType: entry.optionType,
     direction: entry.direction, lots: entry.lots, premium: entry.premium
-  })), [{ id: "new-manual-entry", strike: 23750, optionType: "CALL", direction: "SELL", lots: 2, premium: 358 }]);
+  })), [{ id: "new-manual-entry-1", strike: 23750, optionType: "CALL", direction: "SELL", lots: 2, premium: 358 }]);
   assert.equal(h.storageSetCalls(), 1);
   assert.equal(h.editor(23750), null);
   assert.equal(h.document.activeElement, h.row(23750));
@@ -2395,6 +2451,172 @@ test("storage failure keeps exact editor draft open and old plan intact", async 
   assert.deepEqual(h.manualEntries(), []);
   assert.equal(h.storageSetCalls(), 1);
   assert.equal(h.status(), "PLAN NOT SAVED");
+});
+
+test("serialized overlapping manual commits preserve both explicit entries", async () => {
+  const h = createBreakEvenLifecycleHarness({ deferStorage: true });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  const firstCommit = commitManualEditor(h, 23750);
+  await h.settle();
+  assert.equal(firstCommit.disabled, true, "originating editor cannot commit twice while its write is pending");
+  assert.equal(h.storageSetCalls(), 1);
+
+  h.doubleClick(23800);
+  chooseCallSellEditor(h, 23800);
+  const secondCommit = commitManualEditor(h, 23800);
+  await h.settle();
+  assert.equal(secondCommit.disabled, true, "queued editor commit remains guarded");
+  assert.equal(h.storageSetCalls(), 1, "second updater waits for the first committed store");
+
+  h.resolveStorageWrite();
+  await h.settle();
+  assert.equal(h.storageSetCalls(), 2);
+  assert.ok(h.editor(23800), "older completion cannot close the newer editor");
+  assert.equal(h.document.activeElement, null, "older completion cannot focus its row");
+
+  h.resolveStorageWrite();
+  await h.settle();
+  assert.deepEqual(h.manualEntries().map(({ id, strike }) => ({ id, strike })), [
+    { id: "new-manual-entry-1", strike: 23750 },
+    { id: "new-manual-entry-2", strike: 23800 }
+  ]);
+  assert.equal(h.editor(23800), null);
+  assert.equal(h.document.activeElement, h.row(23800));
+});
+
+test("stale manual completion cannot restore UI after lifecycle reset", async () => {
+  const h = createBreakEvenLifecycleHarness({ deferStorage: true });
+  await h.settle();
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+  h.storage({ enabled: { newValue: false } });
+  assert.equal(h.document.getElementById("nifty-axis-ladder"), null);
+
+  h.resolveStorageWrite();
+  await h.settle();
+
+  assert.equal(h.document.getElementById("nifty-axis-ladder"), null, "late completion cannot recreate the ladder");
+  assert.equal(h.document.activeElement, null, "late completion cannot focus a removed row");
+  assert.equal(h.manualEntries().length, 1, "successful write remains committed after lifecycle reset");
+});
+
+test("post-write render failure keeps the committed plan and never reports PLAN NOT SAVED", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.setRenderManualError(new Error("render failed after storage write"));
+
+  h.doubleClick(23750);
+  chooseCallSellEditor(h, 23750);
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  assert.equal(h.manualEntries().length, 1);
+  assert.notEqual(h.status(), "PLAN NOT SAVED");
+  assert.equal(h.editor(23750), null, "a successful persistence still completes the editor action");
+});
+
+test("different-row interaction closes the current manual editor before quick rails", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+  h.doubleClick(23750);
+  assert.ok(h.editor(23750));
+
+  h.click(23800);
+  await h.settle();
+
+  assert.equal(h.editor(23750), null);
+  assert.ok(h.rails(), "the other row receives its existing quick break-even rails");
+});
+
+test("manual edit preserves identity and created timestamp while focusing its exact row", async () => {
+  const original = savedManualEntry();
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [original] });
+  await h.settle();
+
+  h.click(23750);
+  h.doubleClick(23750);
+  h.editor(23750).children[4].dispatch("click", {});
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  const [edited] = h.manualEntries();
+  assert.equal(edited.id, original.id);
+  assert.equal(edited.createdAt, original.createdAt);
+  assert.notEqual(edited.updatedAt, original.updatedAt);
+  assert.equal(edited.lots, 2);
+  assert.equal(h.document.activeElement, h.row(23750));
+});
+
+test("manual remove targets the active entry identity and focuses its exact row", async () => {
+  const removed = savedManualEntry();
+  const retained = savedManualEntry({
+    id: "entry-23800",
+    strike: 23800,
+    premium: 120,
+    callSnapshot: 120,
+    putSnapshot: 220,
+    createdAt: "2026-07-29T09:00:00.000Z",
+    updatedAt: "2026-07-29T09:00:00.000Z"
+  });
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [removed, retained] });
+  await h.settle();
+
+  h.click(23750);
+  h.doubleClick(23750);
+  removeManualEditor(h, 23750);
+  await h.settle();
+
+  assert.deepEqual(h.manualEntries().map((entry) => entry.id), [retained.id]);
+  assert.equal(h.document.activeElement, h.row(23750));
+});
+
+test("storage failure preserves a non-empty store and the editor draft", async () => {
+  const original = savedManualEntry();
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: [original],
+    storageSetError: new Error("write failed")
+  });
+  await h.settle();
+
+  h.click(23750);
+  h.doubleClick(23750);
+  h.editor(23750).children[4].dispatch("click", {});
+  commitManualEditor(h, 23750);
+  await h.settle();
+
+  assert.deepEqual(h.manualEntries(), [original]);
+  assert.equal(h.editor(23750).querySelector(".nifty-manual-editor__lots").textContent, "2");
+  assert.equal(h.status(), "PLAN NOT SAVED");
+});
+
+test("every manual lifecycle hook closes transient editor state", async () => {
+  const lifecycleCases = [
+    ["outside pointer", (h) => h.document.dispatch("pointerdown", { target: { closest() { return null; } } })],
+    ["Escape", (h) => h.document.dispatch("keydown", { key: "Escape", target: h.row(23750) })],
+    ["expiry change", (h) => h.storage({ expiry: { newValue: "2026-09-01" } })],
+    ["timeframe change", (h) => h.navigateTo("Chart for NSE_DLY:NIFTY, 1 day")],
+    ["SPA navigation", (h) => h.navigateSpa("https://www.tradingview.com/chart/next-layout/")],
+    ["runtime URL mutation", (h) => h.mutateUrl("https://www.tradingview.com/chart/mutated-layout/")],
+    ["pagehide", (h) => h.pagehide(true)],
+    ["stop", (h) => h.storage({ enabled: { newValue: false } })]
+  ];
+
+  for (const [name, trigger] of lifecycleCases) {
+    const h = createBreakEvenLifecycleHarness();
+    await h.settle();
+    h.doubleClick(23750);
+    assert.ok(h.editor(23750), `${name}: editor opens before lifecycle reset`);
+
+    await trigger(h);
+
+    assert.equal(h.editor(23750) ?? null, null, `${name}: editor closes`);
+  }
 });
 
 test("selected rows clear through outside input, Escape, dedicated refresh clear, and expiry change", async () => {

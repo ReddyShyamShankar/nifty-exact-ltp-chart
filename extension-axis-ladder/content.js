@@ -857,6 +857,9 @@
   };
   let manualInteraction = null;
   let manualEditor = null;
+  let manualEditorToken = 0;
+  let manualLifecycleGeneration = 0;
+  let manualPersistTail = Promise.resolve();
 
   function normalizeManualPlans(value) {
     return manualPlanApi.normalizeStore(value);
@@ -875,6 +878,16 @@
     manualEditor = null;
   }
 
+  function closeManualEditorForOtherRow(strike) {
+    if (manualEditor && manualEditor.strike !== Number(strike)) closeManualEditor();
+  }
+
+  function manualEditorOriginIsCurrent(origin) {
+    return Boolean(origin)
+      && manualLifecycleGeneration === origin.lifecycleGeneration
+      && manualEditor?.token === origin.token;
+  }
+
   function focusManualRow(strike) {
     rootNode().querySelector(`.nifty-axis-ladder__row[data-strike="${strike}"]`)?.focus?.();
   }
@@ -885,13 +898,18 @@
       delay: 240,
       setTimer: (callback, delay) => setTimeout(callback, delay),
       clearTimer: (timer) => clearTimeout(timer),
-      onQuick: ({ liveRow }) => handleQuickSelection(liveRow),
+      onQuick: ({ strike, liveRow }) => {
+        closeManualEditorForOtherRow(strike);
+        handleQuickSelection(liveRow);
+      },
       onFace: ({ strike }) => {
+        closeManualEditorForOtherRow(strike);
         clearBreakEvenSelection();
         renderManualRows([strike]);
         void controller?.place();
       },
       onEditor: (context) => {
+        closeManualEditorForOtherRow(context?.strike);
         clearBreakEvenSelection();
         openManualEditor(context);
       },
@@ -901,6 +919,7 @@
   }
 
   function clearManualTransientState() {
+    manualLifecycleGeneration += 1;
     closeManualEditor();
     ensureManualInteraction()?.reset();
   }
@@ -1115,13 +1134,39 @@
     clearBreakEvenStatusOverride();
   }
 
-  async function persistManualPlans(next) {
-    const normalized = manualPlanApi.normalizeStore(next);
-    await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: normalized });
-    settings.manualPlans = normalized;
-    renderManualRows();
-    await controller?.place();
-    return normalized;
+  function storageWriteFailure(cause) {
+    return { manualStorageWriteFailure: true, cause };
+  }
+
+  async function renderCommittedManualPlans(origin) {
+    if (!manualEditorOriginIsCurrent(origin)) return;
+    try {
+      renderManualRows();
+    } catch (_) {}
+    if (!manualEditorOriginIsCurrent(origin)) return;
+    try {
+      await controller?.place();
+    } catch (_) {}
+  }
+
+  function persistManualPlans(updater, origin) {
+    const commit = async () => {
+      const next = typeof updater === "function" ? updater(settings.manualPlans) : updater;
+      const normalized = manualPlanApi.normalizeStore(next);
+      try {
+        await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: normalized });
+      } catch (cause) {
+        throw storageWriteFailure(cause);
+      }
+      settings.manualPlans = normalized;
+      return normalized;
+    };
+    const storageCommit = manualPersistTail.then(commit, commit);
+    manualPersistTail = storageCommit.catch(() => {});
+    return storageCommit.then(async (normalized) => {
+      await renderCommittedManualPlans(origin);
+      return normalized;
+    });
   }
 
   function openManualEditor(context) {
@@ -1134,6 +1179,35 @@
     const entry = entries.find((item) => item.id === context?.entryId) || null;
     let draft = manualUiApi.createDraft({ expiry: settings.expiry, row: liveRow, entry });
     let editor = null;
+    let pendingCommit = false;
+    const origin = {
+      token: ++manualEditorToken,
+      lifecycleGeneration: manualLifecycleGeneration
+    };
+
+    function setCommitControlsDisabled(disabled) {
+      const commit = editor?.querySelector?.(".nifty-manual-editor__commit");
+      const remove = editor?.querySelector?.(".nifty-manual-editor__remove");
+      if (commit) commit.disabled = disabled;
+      if (remove) remove.disabled = disabled;
+    }
+
+    async function commitManualPlan(updater) {
+      if (pendingCommit) return;
+      pendingCommit = true;
+      setCommitControlsDisabled(true);
+      try {
+        await persistManualPlans(updater, origin);
+        if (!manualEditorOriginIsCurrent(origin)) return;
+        closeManualEditor();
+        focusManualRow(strike);
+      } catch (error) {
+        if (!manualEditorOriginIsCurrent(origin)) return;
+        pendingCommit = false;
+        setCommitControlsDisabled(false);
+        if (error?.manualStorageWriteFailure) showStatus("PLAN NOT SAVED");
+      }
+    }
 
     function renderEditor() {
       editor?.remove?.();
@@ -1156,28 +1230,17 @@
             id: draft.id || crypto.randomUUID(),
             now: new Date().toISOString()
           });
-          try {
-            await persistManualPlans(manualPlanApi.upsertEntry(settings.manualPlans, entryToSave));
-            closeManualEditor();
-            focusManualRow(strike);
-          } catch (_) {
-            showStatus("PLAN NOT SAVED");
-          }
+          await commitManualPlan((store) => manualPlanApi.upsertEntry(store, entryToSave));
         },
         async remove() {
           if (!draft.id) return;
-          try {
-            await persistManualPlans(manualPlanApi.removeEntry(settings.manualPlans, settings.expiry, draft.id));
-            closeManualEditor();
-            focusManualRow(strike);
-          } catch (_) {
-            showStatus("PLAN NOT SAVED");
-          }
+          await commitManualPlan((store) => manualPlanApi.removeEntry(store, draft.expiry, draft.id));
         },
         close: closeManualEditor
       });
       rowElement.append(editor);
-      manualEditor = { strike, element: editor };
+      manualEditor = { strike, element: editor, ...origin };
+      setCommitControlsDisabled(pendingCommit);
     }
 
     closeManualEditor();
@@ -1549,6 +1612,7 @@
     if (event.target?.closest?.(".nifty-manual-editor")) return;
     const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
     if (!context) return;
+    closeManualEditorForOtherRow(context.strike);
     const interaction = ensureManualInteraction();
     if (interaction) interaction.click(context); else handleQuickSelection(context.liveRow);
   }
@@ -1557,6 +1621,7 @@
     if (event.target?.closest?.(".nifty-manual-editor")) return;
     const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
     if (!context) return;
+    closeManualEditorForOtherRow(context.strike);
     ensureManualInteraction()?.doubleClick(context);
   }
 
