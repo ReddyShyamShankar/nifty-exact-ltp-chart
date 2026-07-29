@@ -10,6 +10,14 @@ const viewIdentity = require("./seller-view-identity.js");
 
 const RISK_EXPIRY = "2026-08-25";
 
+test("operator guide documents click-only single-leg break-even rails", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+  assert.match(readme, /click[^\n]*strike[^\n]*CALL BE[^\n]*PUT BE/i);
+  assert.match(readme, /outside click[^\n]*remove/i);
+  assert.match(readme, /single-leg[^\n]*expiry break-even/i);
+  assert.match(readme, /manual refresh[^\n]*click[^\n]*again/i);
+});
+
 function acceptedRiskView(overrides = {}) {
   const view = {
     version: viewIdentity.ACCEPTED_VIEW_VERSION,

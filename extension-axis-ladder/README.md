@@ -52,6 +52,10 @@ The full-height side panel retains the same UI design as version 0.4.0.
 - Weekly contracts keep their exact expiry date in canonical identity. Same strike/right contracts such as 04 Aug and 11 Aug never collide or merge with a monthly contract.
 - **WHY IT MOVED** compares immutable accepted normalized inputs and reports factual lot, premium/debit, breakeven, band, protection, short-exposure, and per-leg contribution changes. It gives no advice.
 
+## Clicked-strike break-evens
+
+Click one ladder strike to show its independent single-leg Call and Put expiry break-evens on chart. CALL BE is strike plus displayed Call premium; PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both. Manual refresh removes them; click a strike again to calculate from refreshed numbers. These are not combined short-straddle break-evens.
+
 ## Workflow
 
 1. Keep local NIFTY bridge running at `http://127.0.0.1:8787`.
