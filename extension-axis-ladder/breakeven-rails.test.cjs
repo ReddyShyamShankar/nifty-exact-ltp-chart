@@ -13,7 +13,7 @@ test("calculates rounded independent single-leg expiry break-evens", () => {
 });
 
 test("rejects missing non-numeric and negative premiums without zero substitution", () => {
-  for (const invalid of [null, undefined, "", "x", NaN, Infinity, -0.05]) {
+  for (const invalid of [null, undefined, "", " ", "\t", "x", NaN, Infinity, -0.05]) {
     assert.equal(api.calculate({ strike: 24300, call: invalid, put: 402 }), null);
     assert.equal(api.calculate({ strike: 24300, call: 219.2, put: invalid }), null);
   }
