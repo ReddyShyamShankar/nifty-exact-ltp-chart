@@ -59,6 +59,32 @@ test("choosing Call Sell fills Call quote and preserves both snapshots", () => {
   assert.deepEqual(initial, ui.createDraft({ expiry, row }));
 });
 
+test("switching an edited Call entry to Put starts a second position instead of overwriting Call", () => {
+  const saved = {
+    id: "call-entry",
+    expiry,
+    strike: 24450,
+    optionType: "CALL",
+    direction: "BUY",
+    lots: 2,
+    premium: 358,
+    callSnapshot: 358,
+    putSnapshot: 414.6,
+    createdAt: "2026-07-28T10:00:00.000Z"
+  };
+  const edited = ui.createDraft({ expiry, row, entry: saved });
+  const second = ui.chooseAction(edited, "PUT", "SELL");
+
+  assert.equal(second.id, null);
+  assert.equal(second.createdAt, null);
+  assert.equal(second.optionType, "PUT");
+  assert.equal(second.direction, "SELL");
+  assert.equal(second.lots, 1);
+  assert.equal(second.premium, 409.8);
+  assert.equal(second.callSnapshot, 223.4);
+  assert.equal(second.putSnapshot, 409.8);
+});
+
 test("edited traded premium replaces only selected snapshot", () => {
   let draft = actionDraft();
   draft = ui.setPremium(ui.setLots(draft, 2), 358);
@@ -148,6 +174,19 @@ test("row model shows one face and exact compact copy", () => {
     "Sell Call, 2 lots, Call snapshot 358.00, Put snapshot 414.60, strike 24,450, saved entry 1 of 1");
 });
 
+test("row model exposes separate Call and Put lot badges for same-strike positions", () => {
+  const entries = [
+    { id: "call", strike: 24450, direction: "BUY", optionType: "CALL", lots: 2, callSnapshot: 223.4, putSnapshot: 409.8 },
+    { id: "put", strike: 24450, direction: "SELL", optionType: "PUT", lots: 3, callSnapshot: 223.4, putSnapshot: 409.8 }
+  ];
+  const model = ui.rowModel({ liveRow: row, isAtm: false, entries, activeEntryId: null });
+
+  assert.deepEqual(model.badges, [
+    { optionType: "CALL", label: "C2" },
+    { optionType: "PUT", label: "P3" }
+  ]);
+});
+
 test("row model ignores mixed-strike entries for active face and count", () => {
   const entries = [
     { id: "same", strike: 24450, direction: "BUY", optionType: "PUT", lots: 2, callSnapshot: 223.4, putSnapshot: 409.8 },
@@ -193,19 +232,38 @@ test("editor model contains two staged menus and no strike or flip icon", () => 
   assert.equal(model.validationLabel, "CHOOSE LEG");
 });
 
-test("renderRow replaces children with safe cells and optional count dot", () => {
+test("renderRow replaces children with safe cells and omits badges for incomplete legacy data", () => {
   const document = fakeDocument();
   const element = document.createElement("div");
   element.append(document.createElement("i"));
   ui.renderRow(document, element, { liveRow: row, isAtm: false, entries: [{ id: "e1", strike: 24450 }], activeEntryId: null });
-  assert.equal(element.children.length, 4);
-  assert.deepEqual(element.children.slice(0, 3).map((child) => [child.className, child.textContent]), [
+  assert.equal(element.children.length, 3);
+  assert.deepEqual(element.children.map((child) => [child.className, child.textContent]), [
     ["nifty-axis-ladder__cell", "C 223.40"],
     ["nifty-axis-ladder__cell", "P 409.80"],
     ["nifty-axis-ladder__cell", "24,450"]
   ]);
-  assert.deepEqual([element.children[3].className, element.children[3].textContent], ["nifty-axis-ladder__count", "1"]);
   assert.equal(element.getAttribute("aria-label"), "Call 223.40, Put 409.80, strike 24,450, 1 saved entry");
+});
+
+test("renderRow places separate lot badges before price cells", () => {
+  const document = fakeDocument();
+  const element = document.createElement("div");
+  ui.renderRow(document, element, {
+    liveRow: row,
+    isAtm: false,
+    entries: [
+      { id: "call", strike: 24450, direction: "BUY", optionType: "CALL", lots: 2 },
+      { id: "put", strike: 24450, direction: "SELL", optionType: "PUT", lots: 3 }
+    ],
+    activeEntryId: null
+  });
+
+  assert.equal(element.children[0].className, "nifty-axis-ladder__badges");
+  assert.deepEqual(element.children[0].children.map((badge) => [badge.dataset.optionType, badge.textContent]), [
+    ["CALL", "C2"],
+    ["PUT", "P3"]
+  ]);
 });
 
 test("renderRow emphasizes only traded snapshot cell without visible trade words", () => {
@@ -217,12 +275,12 @@ test("renderRow emphasizes only traded snapshot cell without visible trade words
     entries: [{ id: "e1", strike: 24450, direction: "SELL", optionType: "PUT", lots: 3, callSnapshot: 223.4, putSnapshot: 409.8 }],
     activeEntryId: "e1"
   });
-  assert.deepEqual(element.children.slice(0, 3).map((child) => child.className), [
+  assert.deepEqual(element.children.slice(1, 4).map((child) => child.className), [
     "nifty-axis-ladder__cell",
     "nifty-axis-ladder__cell is-traded",
     "nifty-axis-ladder__cell"
   ]);
-  assert.deepEqual(element.children.slice(0, 3).map((child) => child.textContent),
+  assert.deepEqual(element.children.slice(1, 4).map((child) => child.textContent),
     ["C 223.40", "P 409.80 ×3", "24,450"]);
 });
 

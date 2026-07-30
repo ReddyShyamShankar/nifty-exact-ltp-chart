@@ -78,8 +78,16 @@
 
   function chooseAction(draft, optionType, direction) {
     const quote = optionType === "CALL" ? draft.liveCall : optionType === "PUT" ? draft.livePut : null;
+    const changingSavedSide = Boolean(draft.id && draft.optionType && draft.optionType !== optionType);
     return {
       ...draft,
+      ...(changingSavedSide ? {
+        id: null,
+        createdAt: null,
+        lots: 1,
+        callSnapshot: draft.liveCall,
+        putSnapshot: draft.livePut
+      } : {}),
       optionType,
       direction,
       premium: quote,
@@ -143,13 +151,24 @@
     return entries.map((item, itemIndex) => itemIndex === index ? entry : item);
   }
 
+  function lotBadges(entries) {
+    return OPTION_TYPES.map((optionType) => {
+      const lots = entries
+        .filter((entry) => entry?.optionType === optionType && Number.isInteger(entry?.lots) && entry.lots > 0)
+        .reduce((sum, entry) => sum + entry.lots, 0);
+      return lots ? { optionType, label: `${optionType[0]}${lots}` } : null;
+    }).filter(Boolean);
+  }
+
   function rowModel({ liveRow, isAtm, entries = [], activeEntryId = null } = {}) {
     const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.strike === liveRow?.strike);
+    const badges = lotBadges(list);
     const active = list.find((entry) => entry.id === activeEntryId) || null;
     if (!active) return {
       columns: [`C ${money(liveRow?.call)}`, `P ${money(liveRow?.put)}`, strikeLabel(liveRow?.strike)],
       className: isAtm ? "is-atm" : "",
       count: list.length,
+      badges,
       tradedCellIndex: null,
       accessibleName: `Call ${money(liveRow?.call)}, Put ${money(liveRow?.put)}, strike ${strikeLabel(liveRow?.strike)}, ${savedCountLabel(list.length)}`,
       visibleFaceCount: 1
@@ -161,6 +180,7 @@
       columns: [call, put, strikeLabel(active.strike ?? liveRow?.strike)],
       className: `is-manual-entry is-${String(active.direction || "").toLowerCase()}`,
       count: list.length,
+      badges,
       tradedCellIndex: active.optionType === "CALL" ? 0 : active.optionType === "PUT" ? 1 : null,
       accessibleName: `${word(active.direction)} ${word(active.optionType)}, ${active.lots} ${active.lots === 1 ? "lot" : "lots"}, Call snapshot ${money(active.callSnapshot)}, Put snapshot ${money(active.putSnapshot)}, strike ${strikeLabel(active.strike ?? liveRow?.strike)}, saved entry ${activeIndex + 1} of ${list.length}`,
       visibleFaceCount: 1
@@ -203,11 +223,17 @@
       cell.textContent = value;
       return cell;
     });
-    if (model.count > 0) {
-      const count = document.createElement("span");
-      count.className = "nifty-axis-ladder__count";
-      count.textContent = String(model.count);
-      cells.push(count);
+    if (model.badges.length) {
+      const badges = document.createElement("span");
+      badges.className = "nifty-axis-ladder__badges";
+      model.badges.forEach((modelBadge) => {
+        const badge = document.createElement("span");
+        badge.className = "nifty-axis-ladder__badge";
+        badge.dataset.optionType = modelBadge.optionType;
+        badge.textContent = modelBadge.label;
+        badges.append(badge);
+      });
+      cells.unshift(badges);
     }
     element.replaceChildren(...cells);
     element.setAttribute("aria-label", model.accessibleName);
@@ -348,6 +374,7 @@
     validateDraft,
     entryFromDraft,
     previewEntries,
+    lotBadges,
     rowModel,
     editorModel,
     renderRow,

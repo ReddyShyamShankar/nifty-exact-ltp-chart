@@ -20,6 +20,24 @@ test("approved lot changes move combined break-evens", () => {
   assert.deepEqual(payoff.breakEvens([twoCalls, put]).points.map(Math.round), [23578, 24733]);
 });
 
+test("individual position P&L uses its own entry, live premium, direction, and lots", () => {
+  assert.equal(payoff.positionPnl(
+    leg({ optionType: "CALL", direction: "SELL", lots: 2, premium: 358 }),
+    { strike: 24100, call: 418, put: 183 },
+    65
+  ), -7800);
+  assert.equal(payoff.positionPnl(
+    leg({ optionType: "PUT", direction: "BUY", strike: 24000, lots: 3, premium: 183 }),
+    { strike: 24000, call: 500, put: 200 },
+    65
+  ), 3315);
+  assert.equal(payoff.positionPnl(
+    leg({ optionType: "PUT", direction: "BUY", strike: 24000, lots: 3, premium: 183 }),
+    { strike: 24000, call: 500, put: 0 },
+    65
+  ), null);
+});
+
 test("solver returns every root and detects fully flat payoff", () => {
   const butterfly = [leg({ strike: 24000, optionType: "CALL", direction: "BUY", premium: 300 }),
     leg({ strike: 24100, optionType: "CALL", direction: "SELL", lots: 2, premium: 220 }),

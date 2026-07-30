@@ -17,6 +17,18 @@
     return entries.reduce((sum, entry) => sum + legPayoff(entry, underlyingPrice), 0);
   }
 
+  function positionPnl(entry, liveRow, lotSize = 65) {
+    const entryPremium = Number(entry?.premium);
+    const lots = Number(entry?.lots);
+    const contractSize = Number(lotSize);
+    const livePremium = Number(entry?.optionType === "CALL" ? liveRow?.call : entry?.optionType === "PUT" ? liveRow?.put : NaN);
+    if (![entryPremium, lots, contractSize, livePremium].every(Number.isFinite)
+      || entryPremium < 0 || livePremium <= 0 || lots <= 0 || contractSize <= 0
+      || !["BUY", "SELL"].includes(entry?.direction)) return null;
+    const points = entry.direction === "BUY" ? livePremium - entryPremium : entryPremium - livePremium;
+    return points * lots * contractSize;
+  }
+
   function lineForPoints(entries, first, second) {
     const firstValue = payoffAt(entries, first);
     const secondValue = payoffAt(entries, second);
@@ -95,7 +107,7 @@
     };
   }
 
-  const api = { legPayoff, payoffAt, breakEvens, levels };
+  const api = { legPayoff, payoffAt, positionPnl, breakEvens, levels };
   root.NiftyManualPayoff = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

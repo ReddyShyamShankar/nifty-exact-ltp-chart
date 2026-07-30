@@ -35,11 +35,13 @@ test("0.5.0 guides document exact manual-only strategy workflow and keyboard par
     assert.match(guide, /Double-click[^.\n]*row[^.\n]*add/i, `${name}: add gesture`);
     assert.match(guide, /CALL ▾[^.\n]*PUT ▾[^.\n]*Buy[^.\n]*Sell/i, `${name}: staged menus`);
     assert.match(guide, /positive whole-number lots[^.\n]*editable premium/i, `${name}: lot and premium controls`);
-    assert.match(guide, /count dot[^.\n]*saved entries[^.\n]*not lots/i, `${name}: count meaning`);
-    assert.match(guide, /black `#111315`[^.\n]*orange `#ff9f0a`[^.\n]*green `#34d399`[^.\n]*red `#f87171`/i,
+    assert.match(guide, /top-left `C2`[^.\n]*`P3`[^.\n]*Call[^.\n]*Put lots/i, `${name}: lot badge meaning`);
+    assert.match(guide, /black `#111315`[^.\n]*orange `#ff9f0a`[^.\n]*blue `#3b82f6`[^.\n]*red `#f87171`/i,
       `${name}: exact row tokens`);
     assert.match(guide, /single-click[^.\n]*newest-first[^.\n]*live/i, `${name}: entry cycle`);
     assert.match(guide, /PLAN BE[^.\n]*combined[^.\n]*expiry payoff[^.\n]*zero/i, `${name}: combined break-even meaning`);
+    assert.match(guide, /rails span[^.\n]*both directions/i, `${name}: rail direction`);
+    assert.match(guide, /individual position P&L[^.\n]*never combined/i, `${name}: P&L meaning`);
     assert.match(guide, /manual refresh[^.\n]*live values[^.\n]*saved snapshots[^.\n]*unchanged/i,
       `${name}: refresh boundary`);
     assert.match(guide, /Shift\+Enter[^.\n]*editor[^.\n]*Enter[^.\n]*Space[^.\n]*single-click[^.\n]*Escape[^.\n]*live/i,
@@ -1801,7 +1803,7 @@ test("manual row states use exact markup tokens and no new semantic color", () =
   assert.match(css, /--ladder-line:\s*#2c3238/);
   assert.match(css, /--ladder-ink:\s*#f4f4f5/);
   assert.match(css, /--ladder-atm:\s*#ff9f0a/);
-  assert.match(css, /--ladder-buy:\s*#34d399/);
+  assert.match(css, /--ladder-buy:\s*#3b82f6/);
   assert.match(css, /--ladder-sell:\s*#f87171/);
   assert.match(css, /\.nifty-axis-ladder__row\.is-atm\s*\{[^}]*background:\s*var\(--ladder-atm\)/);
   assert.match(css, /\.nifty-axis-ladder__row\.is-manual-entry\.is-buy\s*\{[^}]*background:\s*var\(--ladder-buy\)/);
@@ -1822,12 +1824,16 @@ test("entry faces contain exact compact copy without redundant trade words or ic
   assert.match(source, /×\$\{active\.lots\}/);
 });
 
-test("count dot and inline editor use neutral tokens without moving row geometry", () => {
+test("top-left lot badges and inline editor use neutral tokens without moving row geometry", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
-  const count = css.match(/\.nifty-axis-ladder__count\s*\{([^}]+)\}/)?.[1] || "";
+  const badges = css.match(/\.nifty-axis-ladder__badges\s*\{([^}]+)\}/)?.[1] || "";
+  const badge = css.match(/\.nifty-axis-ladder__badge\s*\{([^}]+)\}/)?.[1] || "";
   const editor = css.match(/\.nifty-manual-editor\s*\{([^}]+)\}/)?.[1] || "";
-  assert.match(count, /background:\s*var\(--ladder-surface\)/);
-  assert.match(count, /color:\s*var\(--ladder-ink\)/);
+  assert.match(badges, /position:\s*absolute/);
+  assert.match(badges, /left:\s*4px/);
+  assert.match(badges, /top:\s*-9px/);
+  assert.match(badge, /background:\s*var\(--ladder-surface\)/);
+  assert.match(badge, /color:\s*var\(--ladder-ink\)/);
   assert.match(editor, /position:\s*fixed/);
   assert.match(editor, /z-index:\s*[3-9]/);
   assert.match(editor, /top:\s*50%/);
@@ -2704,7 +2710,7 @@ for (const [name, dismiss] of [
 
     assert.equal(h.manualEntries().find((entry) => entry.id === "call-entry").lots, 2);
     assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,578", "PLAN BE 24,733"]);
-    assert.equal(h.row(24100).querySelector(".nifty-axis-ladder__count").textContent, "1");
+    assert.equal(h.row(24100).querySelector(".nifty-axis-ladder__badge").textContent, "C2");
     h.document.dispatch("keydown", { key: "Escape", target: h.row(24100) });
     h.click(24100);
     assert.match(h.row(24100).getAttribute("aria-label"), /2 lots/);
@@ -2868,6 +2874,25 @@ test("saved manual plan draws every neutral break-even through native axis", asy
   assert.deepEqual(rails.children.map((node) => node.textContent), ["PLAN BE 23,698", "PLAN BE 25,007"]);
   assert.equal(rails.children.every((node) => node.classList.contains("is-plan")), true);
   assert.equal(h.rails(), null, "manual plan never creates quick single-leg rails");
+});
+
+test("each manual break-even label flips only through individual position P&L for its side", async () => {
+  const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
+  h.setProject((level) => ({ mode: "line", y: level.exact < 24000 ? 180 : 220 }));
+  await h.settle();
+
+  const rails = h.manualRails();
+  const lower = rails.children[0].children[0];
+  const upper = rails.children[1].children[0];
+  lower.dispatch("click", { stopPropagation() {} });
+  upper.dispatch("click", { stopPropagation() {} });
+
+  assert.equal(lower.textContent, "P 24,000 SELL ×3 · P&L ≈ -₹7,995");
+  assert.equal(upper.textContent, "C 24,100 SELL ×1 · P&L ≈ +₹15,080");
+
+  lower.dispatch("click", { stopPropagation() {} });
+  upper.dispatch("click", { stopPropagation() {} });
+  assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
 });
 
 test("valid draft previews changed lots without saving", async () => {
@@ -3867,7 +3892,7 @@ test("stop clears selected rows and re-enable restores one listener set", async 
   harness.select();
 });
 
-test("clicked selection creates two right-only rails from the label edge to the plot edge", async () => {
+test("clicked selection creates two rails across the full plot behind the label", async () => {
   const harness = createBreakEvenLifecycleHarness();
   await harness.settle();
   harness.select();
@@ -3878,8 +3903,8 @@ test("clicked selection creates two right-only rails from the label edge to the 
   assert.equal(rails.children.length, 2);
   rails.children.forEach((line) => {
     assert.equal(line.classList.contains("nifty-break-even__line"), true);
-    assert.equal(line.style.left, "88px");
-    assert.equal(line.style.width, "1112px");
+    assert.equal(line.style.left, "0px");
+    assert.equal(line.style.width, "1200px");
     assert.equal(line.children.length, 1);
     assert.equal(line.children[0].style.right, "1512px");
   });

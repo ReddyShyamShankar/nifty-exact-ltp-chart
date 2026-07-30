@@ -1171,15 +1171,64 @@
     };
   }
 
-  function manualLevels() {
+  function manualDisplayEntries() {
     const saved = manualEntriesForExpiry();
     const draft = manualEditor?.draft || null;
     const validDraft = Boolean(draft && manualUiApi?.validateDraft?.(draft).ok);
-    const entries = validDraft
+    return validDraft
       ? manualUiApi.previewEntries(saved, draft, manualDraftIdentity(draft))
       : saved;
+  }
+
+  function manualLevels() {
+    const entries = manualDisplayEntries();
+    const validDraft = Boolean(manualEditor?.draft && manualUiApi?.validateDraft?.(manualEditor.draft).ok);
     return manualPayoffApi?.levels?.(entries, validDraft ? "PREVIEW BE" : "PLAN BE")
       || { status: "empty", levels: [] };
+  }
+
+  function signedApproxRupees(value) {
+    if (!Number.isFinite(value)) return "—";
+    const rounded = Math.round(value);
+    const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
+    return `${sign}₹${Math.abs(rounded).toLocaleString("en-IN")}`;
+  }
+
+  function manualPositionPnlLabels(levelIndex, levelCount) {
+    const optionType = levelCount === 1 ? null
+      : levelIndex === 0 ? "PUT"
+        : levelIndex === levelCount - 1 ? "CALL" : null;
+    const membershipRows = controller?.membership()?.rows || [];
+    return manualDisplayEntries()
+      .filter((entry) => !optionType || entry.optionType === optionType)
+      .map((entry) => {
+        const row = membershipRows.find((candidate) => candidate.strike === entry.strike);
+        const pnl = manualPayoffApi?.positionPnl?.(entry, row, 65);
+        const side = entry.optionType === "CALL" ? "C" : "P";
+        return `${side} ${Number(entry.strike).toLocaleString("en-IN")} ${entry.direction} ×${entry.lots} · P&L ≈ ${signedApproxRupees(pnl)}`;
+      });
+  }
+
+  function makeManualRailFlippable(label, breakEvenLabel, pnlLabels) {
+    if (!label || !pnlLabels.length) return;
+    const faces = [breakEvenLabel, ...pnlLabels];
+    let faceIndex = 0;
+    const advance = (event) => {
+      event?.stopPropagation?.();
+      faceIndex = (faceIndex + 1) % faces.length;
+      label.textContent = faces[faceIndex];
+      label.setAttribute("aria-label", `${faces[faceIndex]}. Click to show next rail detail.`);
+    };
+    label.classList.add("is-flippable");
+    label.setAttribute("role", "button");
+    label.setAttribute("tabindex", "0");
+    label.setAttribute("aria-label", `${breakEvenLabel}. Click to show individual position P and L.`);
+    label.addEventListener("click", advance);
+    label.addEventListener("keydown", (event) => {
+      if (!["Enter", " "].includes(event?.key)) return;
+      event.preventDefault?.();
+      advance(event);
+    });
   }
 
   function manualRailPlacements(toY, rect, payoff = manualLevels()) {
@@ -1229,19 +1278,21 @@
       element.className = `nifty-manual-plan__${className} is-plan`;
       element.style.top = `${projection.y}px`;
       if (projection.mode === "line") {
-        element.style.left = `${railRight}px`;
-        element.style.width = `${plotRight - railRight}px`;
+        element.style.left = `${plotLeft}px`;
+        element.style.width = `${plotRight - plotLeft}px`;
         const label = document.createElement("span");
         label.className = "nifty-manual-plan__label is-plan";
         label.style.right = `${window.innerWidth - railRight}px`;
         label.style.top = `${labelDecorations[index].top}px`;
         label.textContent = level.label;
+        makeManualRailFlippable(label, level.label, manualPositionPnlLabels(index, placements.length));
         element.append(label);
       } else {
         element.classList.add(`is-${projection.edge}`);
         element.style.right = `${window.innerWidth - railRight}px`;
         element.style.top = `${labelDecorations[index].top}px`;
         element.textContent = level.label;
+        makeManualRailFlippable(element, level.label, manualPositionPnlLabels(index, placements.length));
       }
       rails.append(element);
     });
@@ -1307,8 +1358,8 @@
       element.className = `nifty-break-even__${className} is-${level.kind}`;
       element.style.top = `${projection.y}px`;
       if (projection.mode === "line") {
-        element.style.left = `${railRight}px`;
-        element.style.width = `${plotRight - railRight}px`;
+        element.style.left = `${plotLeft}px`;
+        element.style.width = `${plotRight - plotLeft}px`;
         const label = document.createElement("span");
         label.className = `nifty-break-even__label is-${level.kind}`;
         label.style.right = `${window.innerWidth - railRight}px`;

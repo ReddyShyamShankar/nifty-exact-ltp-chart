@@ -7,10 +7,11 @@ Version 0.5.0 adds a manual NIFTY options strategy builder directly to the Tradi
 - Double-click any visible ladder row to add a manual Call or Put entry at that exact strike.
 - Use `CALL ▾` or `PUT ▾`, then choose Buy or Sell from that staged menu.
 - Set positive whole-number lots and an editable premium; the displayed premium is only the starting value.
-- The count dot reports saved entries at that strike, not lots.
-- Live rows are black `#111315`, ATM live is orange `#ff9f0a`, Buy snapshots are green `#34d399`, and Sell snapshots are red `#f87171`.
+- Separate top-left `C2` and `P3` badges report saved Call and Put lots at that strike.
+- Live rows are black `#111315`, ATM live is orange `#ff9f0a`, Buy snapshots are blue `#3b82f6`, and Sell snapshots are red `#f87171`.
 - With saved entries, single-click cycles newest-first through one snapshot at a time, then returns to live.
 - `PLAN BE` marks every exact price where the combined same-expiry payoff is zero after all saved legs are combined.
+- Break-even rails span the plot in both directions. Click a plan rail label to flip through individual position P&L for that side; values are approximate and never combined.
 - A manual refresh changes live values only; saved snapshots remain unchanged.
 - Add and Save stay disabled until the selected Call/Put side has a valid non-negative premium and positive whole-number lot count; typing previews payoff without closing or rebuilding the editor.
 - Keyboard: `Shift+Enter` opens the focused row editor; `Enter` or `Space` keeps single-click behavior; `Escape` closes the editor or returns the row to live.
