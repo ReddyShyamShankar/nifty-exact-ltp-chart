@@ -19,7 +19,7 @@ Version 0.5.0 adds a manual NIFTY options strategy builder directly to the Tradi
 
 Plans stay in local extension storage, keyed by exact expiry. The background service worker serializes mutations across tabs so one valid edit cannot overwrite another. Entry premiums and captured snapshots remain fixed through refresh, reload, timeframe changes, zoom, pan, and side-panel activity; an unavailable opposite-side snapshot remains unavailable. Malformed stored entries are quarantined for recovery and reported as `MANUAL ENTRY NEEDS REVIEW` instead of being discarded. Invalid axis data fails closed.
 
-Extension never changes TradingView price scale or Auto-fit state and requests no Chrome debugger access. Every exact strike that fits current viewport safely remains visible; only individually clipped strikes hide. Zoom guidance appears only when no strike can be shown safely.
+Extension never changes TradingView price scale or Auto-fit state and requests no Chrome debugger access. Visible ladder rows use one column and follow TradingView's current native right-axis ticks; timeframe-specific 50/100/250/500 rules are not used. True ATM stays included. Zoom and pan remap cached rows without requesting option data.
 
 ## Setup
 

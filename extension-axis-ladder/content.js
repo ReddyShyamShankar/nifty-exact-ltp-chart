@@ -5,7 +5,6 @@
   const API = "http://127.0.0.1:8787";
   const LABELS_ID = "nifty-axis-ladder";
   const MAX_LANES = 13;
-  const MINIMUM_ROW_GAP = 22;
   const RISK_LABEL_GAP_PX = 12;
   const BREAK_EVEN_LABEL_HEIGHT = 15;
   const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
@@ -80,31 +79,7 @@
     if (entries.some((entry) => !entry) || !entries.some((entry) => entry.strike === center)) return null;
     if (new Set(entries.map((entry) => entry.strike)).size !== entries.length) return null;
 
-    const ordered = entries.slice().sort((a, b) => a.strike - b.strike);
-    const atmRank = ordered.findIndex((entry) => entry.strike === center);
-    for (let laneCount = 1; laneCount <= Math.min(MAX_LANES, entries.length); laneCount += 1) {
-      const atmLane = atmRank % laneCount;
-      const lanes = Array(entries.length);
-      ordered.forEach((entry, rank) => {
-        const rawLane = rank % laneCount;
-        const lane = rawLane === atmLane ? 0 : (rawLane === 0 ? atmLane : rawLane);
-        lanes[entry.index] = lane;
-      });
-      const fits = Array.from({ length: laneCount }, (_, lane) => entries
-        .filter((entry) => lanes[entry.index] === lane)
-        .map((entry) => entry.y)
-        .sort((a, b) => a - b))
-        .every((laneY) => laneY.slice(1)
-          .every((value, index) => value - laneY[index] >= MINIMUM_ROW_GAP));
-      if (fits) {
-        return {
-          mode: laneCount === 1 ? "single" : (laneCount === 2 ? "double" : "multi"),
-          laneCount,
-          lanes
-        };
-      }
-    }
-    return null;
+    return { mode: "single", laneCount: 1, lanes: Array(entries.length).fill(0) };
   }
 
   function visibleRowIndexes(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
@@ -183,8 +158,8 @@
     return priceDelta / pixelDelta * gap;
   }
 
-  function freezeMembership({ timeframe, expiry, interval, nativeInterval = interval, spot, chainRows, tieDirection = "up" }) {
-    const selection = timeframeApi.selectExactThirteen(chainRows, spot, interval, tieDirection);
+  function freezeMembership({ timeframe, expiry, interval, nativeInterval = interval, axisPrices, spot, chainRows, tieDirection = "up" }) {
+    const selection = timeframeApi.selectExactThirteen(chainRows, spot, 50, tieDirection);
     if (!selection) return null;
     const rows = selection.rows.map((row) => Object.freeze({
       strike: Number(row.strike),
@@ -192,16 +167,21 @@
       put: quote(row.put)
     }));
     const strikes = rows.map((row) => row.strike);
+    const axisSelection = timeframeApi.selectAxisAlignedRows(chainRows, spot, axisPrices, MAX_LANES, tieDirection);
+    const visibleStrikeSet = new Set(axisSelection?.rows.map((row) => Number(row.strike)) || []);
+    visibleStrikeSet.add(selection.center);
+    const visibleStrikes = strikes.filter((strike) => visibleStrikeSet.has(strike));
     return Object.freeze({
       timeframe,
       expiry,
-      nativeInterval: timeframeApi.maxStrikeInterval(nativeInterval),
-      preferredInterval: timeframeApi.maxStrikeInterval(interval),
+      nativeInterval: timeframeApi.snapStrikeInterval(nativeInterval),
+      axisPrices: Object.freeze((Array.isArray(axisPrices) ? axisPrices : []).map(Number).filter(Number.isFinite)),
       interval: selection.interval,
       atmStep: selection.atmStep,
       center: selection.center,
       atm: selection.center,
       strikes: Object.freeze(strikes.slice()),
+      visibleStrikes: Object.freeze(visibleStrikes),
       rows: Object.freeze(rows)
     });
   }
@@ -383,7 +363,9 @@
         isAtm: row.strike === membership.atm,
         y: toY(row.strike)
       }));
-      return positioned.length === 13 && positioned.every((row) => Number.isFinite(row.y)) ? positioned : null;
+      return positioned.length >= 1
+        && positioned.length <= MAX_LANES
+        && positioned.every((row) => Number.isFinite(row.y)) ? positioned : null;
     }
 
     function clearCachedRiskPlacement() {
@@ -527,15 +509,14 @@
         const firstScale = await captureAxisScale(signal, { minimumObservedAt, timeframe });
         if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)
           || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
-        const firstNativeInterval = timeframeApi.maxStrikeInterval(intervalFromAxisScale(firstScale));
-        const preferredInterval = timeframeApi.preferredIntervalForTimeframe(timeframe);
-        if (!firstScale?.ok || !validPineSanity(firstScale) || !firstNativeInterval || !preferredInterval || !Number.isFinite(Number(chain?.spot))) {
+        const firstNativeInterval = timeframeApi.snapStrikeInterval(intervalFromAxisScale(firstScale));
+        if (!firstScale?.ok || !validPineSanity(firstScale) || !firstNativeInterval || !Number.isFinite(Number(chain?.spot))) {
           return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "AXIS CALIBRATION UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
         }
         const secondScale = await captureAxisScale(signal, { minimumObservedAt, timeframe });
         if (!isCurrentRequest(localGeneration, timeframe, requestedExpiry, signal)
           || !isVisualPlacementCurrent(visualPlacementRevision)) return false;
-        const secondNativeInterval = timeframeApi.maxStrikeInterval(intervalFromAxisScale(secondScale));
+        const secondNativeInterval = timeframeApi.snapStrikeInterval(intervalFromAxisScale(secondScale));
         if (!secondScale?.ok
           || !validPineSanity(secondScale)
           || !secondNativeInterval
@@ -546,13 +527,14 @@
         const membership = freezeMembership({
           timeframe,
           expiry: requestedExpiry,
-          interval: preferredInterval,
+          interval: secondNativeInterval,
           nativeInterval: secondNativeInterval,
+          axisPrices: secondScale.axisPairs.map((pair) => Number(pair.price)),
           spot: Number(chain.spot),
           chainRows: chain.rows
         });
         if (!membership) {
-          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "13 EXACT CONTRACTS UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
+          return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "VISIBLE AXIS CONTRACTS UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
         }
         current = membership;
         lastSpot = Number(chain.spot);
@@ -642,8 +624,9 @@
         const recentered = shouldRecenter ? freezeMembership({
           timeframe: snapshot.timeframe,
           expiry: snapshot.expiry,
-          interval: snapshot.preferredInterval,
+          interval: snapshot.nativeInterval,
           nativeInterval: snapshot.nativeInterval,
+          axisPrices: snapshot.axisPrices,
           spot,
           chainRows: chain?.rows,
           tieDirection: direction
@@ -719,8 +702,20 @@
           && Number(scale.observedAt) < committedAxisObservedAt) throw new Error("Stale axis observation.");
         const toY = axisPriceToY(scale.axisPairs);
         if (!toY) throw new Error("Native axis map is unavailable.");
+        const nativeInterval = timeframeApi.snapStrikeInterval(intervalFromAxisScale(scale));
+        const latestMembership = current;
+        const axisMembership = freezeMembership({
+          timeframe: latestMembership.timeframe,
+          expiry: latestMembership.expiry,
+          interval: nativeInterval,
+          nativeInterval,
+          axisPrices: scale.axisPairs.map((pair) => Number(pair.price)),
+          spot: latestMembership.atm,
+          chainRows: latestMembership.rows
+        });
+        if (!axisMembership) throw new Error("Visible axis contracts are unavailable.");
         cachedAxisToY = toY;
-        if (!placeCached(current, localVisualPlacementRevision)) throw new Error("Exact strike positions are unavailable.");
+        if (!placeCached(axisMembership, localVisualPlacementRevision)) throw new Error("Exact strike positions are unavailable.");
         if (Number.isFinite(Number(scale.observedAt))) {
           committedAxisObservedAt = Math.max(committedAxisObservedAt, Number(scale.observedAt));
         }
@@ -1723,6 +1718,7 @@
       });
       const laneOffset = Math.ceil(Math.max(...dimensions.map(({ width }) => width))) + 10;
       const baseRight = Math.max(0, window.innerWidth - rect.right + 7);
+      const axisVisibleStrikes = new Set(membership?.visibleStrikes || [membership?.atm]);
       const visibleIndexes = visibleRowIndexes(
         rows,
         dimensions,
@@ -1731,7 +1727,7 @@
         baseRight,
         layout.lanes,
         laneOffset
-      );
+      ).filter((index) => axisVisibleStrikes.has(rows[index].strike));
       if (!visibleIndexes.length) {
         throw new Error(priceScaleFailure("outside"));
       }

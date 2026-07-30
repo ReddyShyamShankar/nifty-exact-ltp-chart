@@ -91,26 +91,22 @@ function chain(spot, delta = 0) {
 function scale() {
   return {
     ok: true,
-    gridGapPx: 20,
-    axisPairs: [
-      { price: 24000, y: 100 },
-      { price: 23900, y: 120 },
-      { price: 23800, y: 140 },
-      { price: 23700, y: 160 }
-    ]
+    gridGapPx: 10,
+    axisPairs: Array.from({ length: 13 }, (_, index) => ({
+      price: 23450 + index * 50,
+      y: 210 - index * 10
+    }))
   };
 }
 
 function invertedScale() {
   return {
     ok: true,
-    gridGapPx: 20,
-    axisPairs: [
-      { price: 23700, y: 100 },
-      { price: 23800, y: 120 },
-      { price: 23900, y: 140 },
-      { price: 24000, y: 160 }
-    ]
+    gridGapPx: 10,
+    axisPairs: Array.from({ length: 13 }, (_, index) => ({
+      price: 23450 + index * 50,
+      y: 50 + index * 10
+    }))
   };
 }
 
@@ -181,7 +177,7 @@ test("controller rebuild succeeds and places exact contracts on an inverted Trad
   assert.equal(placements.at(-1).find((row) => row.strike === 23750).y, 110);
 });
 
-test("controller membership follows timeframe profile instead of mutable native axis interval", async () => {
+test("controller records snapped native axis interval without a timeframe preference", async () => {
   const denseChain = {
     spot: 23767.45,
     rows: Array.from({ length: 101 }, (_, index) => ({
@@ -200,8 +196,8 @@ test("controller membership follows timeframe profile instead of mutable native 
   });
 
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
-  assert.equal(controller.membership().nativeInterval, 200);
-  assert.equal(controller.membership().preferredInterval, 50);
+  assert.equal(controller.membership().nativeInterval, 250);
+  assert.equal(controller.membership().preferredInterval, undefined);
   assert.equal(controller.membership().interval, 50);
 });
 
@@ -576,7 +572,7 @@ test("controller uses its own two-capture stability check without requiring obse
   assert.equal(controller.membership().timeframe, "1W");
 });
 
-test("timeframe changes keep independent contract spacing after prior scale changes", async () => {
+test("timeframe changes keep contract membership driven by unchanged native axis", async () => {
   const denseChain = {
     spot: 23767.45,
     rows: Array.from({ length: 121 }, (_, index) => ({
@@ -597,9 +593,10 @@ test("timeframe changes keep independent contract spacing after prior scale chan
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 15 minutes"), true);
   assert.equal(controller.membership().interval, 50);
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 week"), true);
-  assert.equal(controller.membership().interval, 250);
+  assert.equal(controller.membership().interval, 50);
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 month"), true);
-  assert.equal(controller.membership().interval, 500);
+  assert.equal(controller.membership().interval, 50);
+  assert.equal(controller.membership().nativeInterval, 50);
 });
 
 test("controller accepts stable 25-point native ticks and selects real 50-point contracts", async () => {
@@ -632,7 +629,7 @@ test("controller accepts stable 25-point native ticks and selects real 50-point 
   assert.equal(controller.membership().interval, 50);
 });
 
-test("monthly production membership uses widest complete exact range and never edge substitutions", () => {
+test("production membership keeps thirteen exact interaction rows independent from timeframe", () => {
   const rows = Array.from({ length: 101 }, (_, index) => ({
     strike: 21300 + index * 50,
     call: index,
@@ -646,12 +643,12 @@ test("monthly production membership uses widest complete exact range and never e
     chainRows: rows
   });
 
-  assert.equal(membership.interval, 400);
+  assert.equal(membership.interval, 50);
   assert.equal(membership.center, 23750);
   assert.equal(membership.atmStep, 50);
   assert.deepEqual(membership.strikes, [
-    21350, 21750, 22150, 22550, 22950, 23350, 23750,
-    24150, 24550, 24950, 25350, 25750, 26150
+    23450, 23500, 23550, 23600, 23650, 23700, 23750,
+    23800, 23850, 23900, 23950, 24000, 24050
   ]);
   assert.equal(api.freezeMembership({
     timeframe: "1M",
@@ -772,7 +769,7 @@ test("LTP refresh recenters at the exact interval midpoint without another axis 
   assert.equal(placements.at(-1).find((row) => row.strike === 23800).isAtm, true);
 });
 
-test("LTP refresh recenters on true contract midpoint, not wide display interval midpoint", async () => {
+test("LTP refresh recenters on true contract midpoint while axis controls visible rows", async () => {
   let spot = 23767.45;
   const denseRows = Array.from({ length: 101 }, (_, index) => ({
     strike: 21300 + index * 50,
@@ -795,7 +792,8 @@ test("LTP refresh recenters on true contract midpoint, not wide display interval
 
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 month");
   assert.equal(controller.membership().atm, 23750);
-  assert.equal(controller.membership().interval, 400);
+  assert.equal(controller.membership().interval, 50);
+  assert.deepEqual(controller.membership().visibleStrikes, [23750, 24000]);
   assert.equal(controller.membership().atmStep, 50);
 
   spot = 23774.99;
@@ -837,7 +835,7 @@ test("LTP refresh recenters downward at exact lower midpoint and remains stable"
   assert.equal(controller.membership().atm, 23700);
 });
 
-test("ATM recenter always retries from timeframe preference instead of ratcheting to a smaller fallback", async () => {
+test("ATM recenter keeps exact contract rows while native axis remains independent", async () => {
   const wide = (spot) => ({
     spot,
     rows: Array.from({ length: 101 }, (_, index) => ({
@@ -870,12 +868,12 @@ test("ATM recenter always retries from timeframe preference instead of ratchetin
 
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 month");
   assert.equal(controller.membership().nativeInterval, 350);
-  assert.equal(controller.membership().preferredInterval, 500);
-  assert.equal(controller.membership().interval, 400);
+  assert.equal(controller.membership().preferredInterval, undefined);
+  assert.equal(controller.membership().interval, 50);
   await controller.refreshLtp();
   assert.equal(controller.membership().interval, 100);
   await controller.refreshLtp();
-  assert.equal(controller.membership().interval, 350, "recovered chain must choose widest complete exact range from timeframe preference");
+  assert.equal(controller.membership().interval, 50, "recovered dense chain restores exact 50-point interaction rows");
 });
 
 test("partial chain preserves membership but never reports LIVE", async () => {
@@ -1352,7 +1350,7 @@ test("failed timeframe transition keeps its observation floor when user chooses 
   assert.equal(controller.membership().timeframe, "1W");
 });
 
-test("row layout selects the minimum deterministic lane count without changing exact y", () => {
+test("row layout always keeps one column without changing exact y", () => {
   const normalRows = [
     { strike: 23700, y: 100.375 },
     { strike: 23750, y: 124.375 },
@@ -1367,9 +1365,9 @@ test("row layout selects the minimum deterministic lane count without changing e
     strike: 23450 + index * 50,
     y: 100.375 + index * 14
   })), 23750, 50);
-  assert.equal(dense.mode, "double");
-  assert.equal(dense.laneCount, 2);
-  assert.deepEqual(dense.lanes, [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]);
+  assert.equal(dense.mode, "single");
+  assert.equal(dense.laneCount, 1);
+  assert.deepEqual(dense.lanes, Array(13).fill(0));
 
   const inverted = api.rowLaneLayout(Array.from({ length: 13 }, (_, index) => ({
     strike: 23450 + index * 50,
@@ -1378,39 +1376,24 @@ test("row layout selects the minimum deterministic lane count without changing e
   assert.deepEqual(inverted, dense);
 });
 
-test("3M and 6M density expands deterministically through thirteen lanes", () => {
+test("dense and coincident rows never expand beyond one column", () => {
   const compressed = Array.from({ length: 13 }, (_, index) => ({
     strike: 23450 + index * 50,
     y: 200.25 + index * 5
   }));
   const fiveLane = api.rowLaneLayout(compressed, 23750, 50);
   assert.deepEqual(fiveLane, {
-    mode: "multi",
-    laneCount: 5,
-    lanes: [1, 0, 2, 3, 4, 1, 0, 2, 3, 4, 1, 0, 2]
+    mode: "single",
+    laneCount: 1,
+    lanes: Array(13).fill(0)
   });
   assert.equal(fiveLane.lanes[6], 0, "ATM remains in the right-axis lane");
 
-  const reversedRows = compressed.slice().reverse();
-  const reversed = api.rowLaneLayout(reversedRows, 23750, 50);
-  const byStrike = new Map(compressed.map((row, index) => [row.strike, fiveLane.lanes[index]]));
-  reversedRows.forEach((row, index) => {
-    assert.equal(reversed.lanes[index], byStrike.get(row.strike));
-  });
-
-  for (let expected = 1; expected <= 13; expected += 1) {
-    const gap = expected === 1
-      ? 22
-      : (22 / expected + 22 / (expected - 1)) / 2;
-    const rows = compressed.map((row, index) => ({ ...row, y: 300.5 + index * gap }));
-    assert.equal(api.rowLaneLayout(rows, 23750, 50).laneCount, expected);
-  }
-
   const coincident = compressed.map((row) => ({ ...row, y: 300.5 }));
   assert.deepEqual(api.rowLaneLayout(coincident, 23750, 50), {
-    mode: "multi",
-    laneCount: 13,
-    lanes: [6, 1, 2, 3, 4, 5, 0, 7, 8, 9, 10, 11, 12]
+    mode: "single",
+    laneCount: 1,
+    lanes: Array(13).fill(0)
   });
 
   assert.equal(api.rowLaneLayout([
@@ -2112,12 +2095,10 @@ function createBreakEvenLifecycleHarness({
   );
   let storedManualPlans = initialManualPlans;
   let manualMutationTail = Promise.resolve();
-  let axisPairs = [
-    { price: 24000, y: 100 },
-    { price: 23900, y: 120 },
-    { price: 23800, y: 140 },
-    { price: 23700, y: 160 }
-  ];
+  let axisPairs = Array.from({ length: 21 }, (_, index) => ({
+    price: 23450 + index * 50,
+    y: 210 - index * 10
+  }));
   let project = railApi.project;
 
   function dispatchStorage(changes) {
@@ -2254,7 +2235,7 @@ function createBreakEvenLifecycleHarness({
   function axisCaptureResult() {
     return {
       ok: true,
-      gridGapPx: 20,
+      gridGapPx: 10,
       axisPairs
     };
   }

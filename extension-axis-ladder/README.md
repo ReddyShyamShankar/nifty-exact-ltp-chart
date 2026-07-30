@@ -21,9 +21,9 @@ Add or Save sends one mutation to the background service worker, which serialize
 
 ## Ladder and quick break-evens
 
-The ladder shows 13 exact contracts: six below ATM, ATM, and six above. Row order stays `C <Call> | P <Put> | <strike>`, and every row stays anchored to its exact TradingView right-axis coordinate.
+The ladder keeps 13 exact interaction contracts around true ATM, then shows only the subset matching TradingView's current native right-axis ticks plus ATM. Row order stays `C <Call> | P <Put> | <strike>`. Every visible row stays in one right-edge column at its exact price coordinate.
 
-The extension never double-clicks or drags TradingView's price scale and does not request Chrome debugger access. TradingView Auto-fit remains under user control. Every exact strike that fits current viewport safely remains visible; only individually clipped strikes hide. Zoom guidance appears only when no strike can be shown safely.
+The extension never double-clicks or drags TradingView's price scale and does not request Chrome debugger access. TradingView Auto-fit remains under user control. Timeframe-specific 50/100/250/500 spacing rules are not used. Zoom and pan read fresh native ticks, remap cached rows, and make no option-chain request. Zoom guidance appears only when no row can be shown safely.
 
 Click one ladder strike without saved entries to show independent single-leg expiry break-evens. CALL BE is strike plus displayed Call premium. PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both break-even rails. Manual refresh removes both break-even rails; click a strike again to calculate from refreshed numbers. These are independent single-leg expiry break-evens, not combined short-straddle break-evens.
 

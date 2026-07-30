@@ -14,19 +14,6 @@
     ["6 months", "6M"]
   ]);
 
-  const PREFERRED_INTERVALS = new Map([
-    ["1m", 50],
-    ["5m", 50],
-    ["15m", 50],
-    ["1h", 50],
-    ["4h", 100],
-    ["1D", 100],
-    ["1W", 250],
-    ["1M", 500],
-    ["3M", 1000],
-    ["6M", 2000]
-  ]);
-
   function timeframeKey(label) {
     const text = String(label || "");
     const match = text.match(/\b(\d+)\s+(minutes?|hours?|days?|weeks?|months?)\b/i);
@@ -34,10 +21,6 @@
     const unit = match[2].toLowerCase();
     const normalized = `${match[1]} ${unit}`;
     return SUPPORTED_TIMEFRAMES.get(normalized) || null;
-  }
-
-  function preferredIntervalForTimeframe(timeframe) {
-    return PREFERRED_INTERVALS.get(String(timeframe || "")) || null;
   }
 
   function snapStrikeInterval(raw) {
@@ -75,6 +58,52 @@
       .filter(Number.isFinite));
     const canonical = thirteenStrikes(price, 50, tieDirection)[6];
     return strikes.has(canonical) ? canonical : null;
+  }
+
+  function nativeAxisInterval(axisPrices) {
+    const prices = Array.from(new Set((Array.isArray(axisPrices) ? axisPrices : [])
+      .map(Number)
+      .filter(Number.isFinite)))
+      .sort((left, right) => left - right);
+    const gaps = prices.slice(1)
+      .map((price, index) => price - prices[index])
+      .filter((gap) => gap > 0)
+      .sort((left, right) => left - right);
+    if (!gaps.length) return 50;
+    const midpoint = Math.floor(gaps.length / 2);
+    const median = gaps.length % 2
+      ? gaps[midpoint]
+      : (gaps[midpoint - 1] + gaps[midpoint]) / 2;
+    return snapStrikeInterval(median);
+  }
+
+  function selectAxisAlignedRows(rows, spot, axisPrices, maximumRows = 13, tieDirection = "up") {
+    if (!Array.isArray(rows)) return null;
+    const limit = Math.max(1, Math.floor(Number(maximumRows)) || 13);
+    const byStrike = new Map();
+    for (const row of rows) {
+      const strike = Number(row?.strike);
+      if (Number.isFinite(strike) && !byStrike.has(strike)) byStrike.set(strike, row);
+    }
+    const center = nearestAvailableStrike(rows, spot, tieDirection);
+    if (!Number.isFinite(center)) return null;
+    const aligned = Array.from(new Set((Array.isArray(axisPrices) ? axisPrices : [])
+      .map(Number)
+      .filter((price) => Number.isFinite(price) && byStrike.has(price))));
+    if (!aligned.includes(center)) aligned.push(center);
+    const selected = aligned.length <= limit
+      ? aligned
+      : aligned
+        .slice()
+        .sort((left, right) => Math.abs(left - center) - Math.abs(right - center) || left - right)
+        .slice(0, limit);
+    selected.sort((left, right) => left - right);
+    return {
+      interval: nativeAxisInterval(axisPrices),
+      center,
+      atmStep: availableStrikeStep(rows),
+      rows: selected.map((strike) => byStrike.get(strike))
+    };
   }
 
   function availableStrikeStep(rows) {
@@ -116,9 +145,9 @@
     };
   }
 
-  function selectExactThirteen(rows, spot, preferredInterval, tieDirection = "up") {
+  function selectExactThirteen(rows, spot, maximumInterval, tieDirection = "up") {
     if (!Array.isArray(rows)) return null;
-    const widestInterval = maxStrikeInterval(preferredInterval);
+    const widestInterval = maxStrikeInterval(maximumInterval);
     if (!widestInterval) return null;
     const byStrike = new Map();
     for (const row of rows) {
@@ -144,8 +173,9 @@
   const api = {
     availableStrikeStep,
     maxStrikeInterval,
+    nativeAxisInterval,
     nearestAvailableStrike,
-    preferredIntervalForTimeframe,
+    selectAxisAlignedRows,
     timeframeKey,
     snapStrikeInterval,
     strikesFromCenter,

@@ -20,18 +20,31 @@ test("returns null for unsupported timeframe labels", () => {
   assert.equal(api.timeframeKey(""), null);
 });
 
-test("uses stable strike spacing for each supported timeframe", () => {
-  assert.equal(api.preferredIntervalForTimeframe("1m"), 50);
-  assert.equal(api.preferredIntervalForTimeframe("5m"), 50);
-  assert.equal(api.preferredIntervalForTimeframe("15m"), 50);
-  assert.equal(api.preferredIntervalForTimeframe("1h"), 50);
-  assert.equal(api.preferredIntervalForTimeframe("4h"), 100);
-  assert.equal(api.preferredIntervalForTimeframe("1D"), 100);
-  assert.equal(api.preferredIntervalForTimeframe("1W"), 250);
-  assert.equal(api.preferredIntervalForTimeframe("1M"), 500);
-  assert.equal(api.preferredIntervalForTimeframe("3M"), 1000);
-  assert.equal(api.preferredIntervalForTimeframe("6M"), 2000);
-  assert.equal(api.preferredIntervalForTimeframe("2h"), null);
+test("selects native right-axis strikes plus true ATM without timeframe rules", () => {
+  const rows = Array.from({ length: 81 }, (_, index) => ({
+    strike: 22000 + index * 50,
+    call: index,
+    put: index + 100
+  }));
+
+  const selection = api.selectAxisAlignedRows(rows, 24295.05, [23400, 23700, 24000]);
+
+  assert.equal(api.preferredIntervalForTimeframe, undefined);
+  assert.equal(selection.center, 24300);
+  assert.deepEqual(selection.rows.map((row) => row.strike), [23400, 23700, 24000, 24300]);
+  assert.equal(selection.interval, 300);
+});
+
+test("native right-axis zoom controls row density while ATM stays present", () => {
+  const rows = Array.from({ length: 81 }, (_, index) => ({ strike: 22000 + index * 50 }));
+
+  const zoomedIn = api.selectAxisAlignedRows(rows, 24276.65, [24100, 24200, 24300, 24400, 24500]);
+  const zoomedOut = api.selectAxisAlignedRows(rows, 24276.65, [23700, 24000, 24300]);
+
+  assert.deepEqual(zoomedIn.rows.map((row) => row.strike), [24100, 24200, 24300, 24400, 24500]);
+  assert.deepEqual(zoomedOut.rows.map((row) => row.strike), [23700, 24000, 24300]);
+  assert.equal(zoomedIn.interval, 100);
+  assert.equal(zoomedOut.interval, 300);
 });
 
 test("snaps scale intervals to 50-point grid with a 50-point minimum", () => {
