@@ -2,18 +2,18 @@
 
 ## STATE
 
-Options Ladder v0.5.0 is loaded from `.worktrees/timeframe-axis-ladder/extension-axis-ladder` and remains isolated on `codex/timeframe-axis-ladder` for user testing. Manual refresh, side panel, exact-axis ladder, clicked-strike break-evens, manual what-if positions, side-specific lot badges, full-width plan rails, and individual-position P&L flips are implemented. GitHub holds both `codex/timeframe-axis-ladder` and `codex/timeframe-axis-ladder-base`; full suite passes 450/450.
+Options Ladder v0.5.0 is loaded from `.worktrees/timeframe-axis-ladder/extension-axis-ladder` on `codex/arbdesk-theme-system`; prior checkpoint remains preserved separately. D17 universal axis-grid membership remains foundation, and D18 adds one explicit real-ATM reference: nearest available ATM strike stays present only while its exact price lies inside visible chart range. Fixed row count, ATM-centered range selection, and timeframe-specific spacing remain removed; light ATM uses ARB Desk brown and dark ATM uses ARB Desk orange.
 
 ## NEXT_LINE
 
-Create a separate worktree/branch for the next approved UI change; keep `codex/timeframe-axis-ladder` unchanged as the tested checkpoint until user accepts it.
+Reload D18 build in Chrome and visually confirm pinned ATM at coarse axis spacing in both light and dark themes.
 
 ## MEMORY_KEY
 
-Options Ladder v0.5.0 manual-first checkpoint: explicit refresh, TradingView side panel, exact-axis 13-row ladder, clicked-strike BE rails, double-click plan editor, C/P lot badges, and individual P&L flips; live positions deferred.
+Universal foundation: real selected-instrument/expiry strikes intersect TradingView's stable visible price grid; one real nearest-available ATM reference is added when inside visible chart range. No fixed row count, no ATM-centered range, and no timeframe-specific spacing. Covered live-price slot uses inferred rounded grid value such as 24,300. NIFTY is test case only.
 
 ## OPEN_QUESTIONS
-- Which UI correction should start in the next isolated thread?
+- Does user approve D17 visual density at fine, medium, and far zoom after live verification?
 - Does the 0.00 option-LTP state reproduce after a healthy bridge refresh, and should zero upstream quotes fail closed visibly?
 - When should live Zerodha positions graduate from deferred foundation to chart-visible workflow?
 - When should `codex/timeframe-axis-ladder` merge into the primary branch after user testing?

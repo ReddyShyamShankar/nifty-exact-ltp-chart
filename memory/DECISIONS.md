@@ -1,3 +1,5 @@
+> **FIRST RULE — UNIVERSAL PRODUCT:** Options Ladder must work from instrument metadata and TradingView axis evidence for any optionable pair, instrument, or index worldwide. NIFTY is only current test case; no core membership rule may be NIFTY-specific.
+
 # DECISIONS — append-only, numbered
 ## D1 — 2026-07-24
 
@@ -98,4 +100,17 @@ Use Upstox as option and candle data source, after proving the account's live ma
 **Alternatives considered:**
 - Right-only rails — superseded after chart review.
 - Combined plan P&L on both rails — rejected as misleading for position-level inspection.
+**Status:** ACTIVE
+
+## D17 — 2026-07-30
+**Decision:** Build visible ladder membership from real strikes available for selected instrument and expiry, intersected with TradingView's stable visible price-axis grid. Remove fixed row counts, 13-strike windows, ATM-centered membership, and timeframe-specific strike-spacing rules. ATM remains a visual highlight only. When TradingView's live-price marker covers an expected grid label, infer that rounded grid value from surrounding stable axis cadence; for example, `24,296.60` covering its slot resolves to `24,300`.
+**Why:** Same system must work on any optionable pair, instrument, or index worldwide. Instrument metadata defines which strikes truly exist; TradingView axis defines which density is readable at current zoom. NIFTY is current test case, not product architecture.
+**Supersedes:** D2 market-scope and membership limits, D7, D9, D10 thirteen-row intent, D11, and D12 auto-fit behavior.
+**Status:** ACTIVE
+
+## D18 — 2026-07-30
+
+**Decision:** Keep one real nearest-available ATM strike visible when its exact strike price lies inside TradingView's visible chart range, even when that strike does not intersect the printed axis grid. All non-ATM rows remain real-strike intersections with TradingView's stable visible grid. ATM does not control range, density, or spacing. Light mode uses ARB Desk brown warning styling; dark mode uses ARB Desk orange warning styling.
+**Why:** ATM is a primary trading reference and must remain recognizable through coarse zoom, but forcing an ATM-centered window would undo universal axis-driven density.
+**Supersedes:** D17 statement that ATM changes styling only and never membership; all other D17 rules remain active.
 **Status:** ACTIVE

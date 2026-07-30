@@ -89,3 +89,22 @@ Buy uses blue, Sell uses red, ATM keeps existing orange, and selected rows use y
 Verified and published checkpoint branches
 
 Chrome reload confirmed new build with `C2`, `P3`, and `P1` badges plus correct Buy/Sell tokens and flippable plan rails. Full suite passes 450/450; base bridge and feature branches were committed and pushed to GitHub, with temporary brainstorm runtime files ignored.
+
+## #15 — 2026-07-30 — feat
+Built universal TradingView-axis ladder membership
+
+- Made universal product architecture first rule in `DECISIONS.md` and `CLAUDE.md`; NIFTY remains current test case only.
+- Removed fixed 13-row membership, ATM-centered membership, and timeframe-specific spacing. ATM now changes styling only.
+- Visible rows now equal real selected-expiry strikes intersecting TradingView's stable visible axis grid, with no artificial row cap.
+- Added robust cadence detection so a live-price marker such as `24,296.60` cannot distort or erase inferred rounded slot `24,300`.
+- Removed final ATM-relative layout validation found during live fine-grid zoom.
+- Chrome verification passed at fine, medium, and far zoom; rows followed 40/100/250-point TradingView grids through valid instrument-strike intersections and stayed `LIVE`.
+- Full extension suite passes 431/431; `git diff --check` passes.
+
+## #16 — 2026-07-30 — feat
+
+- Added one explicit pinned ATM reference without restoring ATM-centered range selection.
+- ATM comes only from nearest real strike in selected instrument/expiry chain and appears only when exact strike lies inside visible TradingView range.
+- ATM moves to new real strike during live spot refresh; old non-grid ATM reference is removed.
+- Preserved theme-specific styling: ARB Desk brown in light mode, orange in dark mode.
+- Added focused membership, controller, live-recenter, and outside-range regression coverage.
