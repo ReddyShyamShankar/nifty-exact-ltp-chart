@@ -23,7 +23,7 @@ Add or Save sends one mutation to the background service worker, which serialize
 
 The ladder shows 13 exact contracts: six below ATM, ATM, and six above. Row order stays `C <Call> | P <Put> | <strike>`, and every row stays anchored to its exact TradingView right-axis coordinate.
 
-The extension never double-clicks or drags TradingView's price scale and does not request Chrome debugger access. TradingView Auto-fit remains under user control. If all 13 exact rows cannot fit safely, the ladder conceals them and reports `ZOOM IN` for overlapping rows or `ZOOM OUT` for rows outside the visible price range.
+The extension never double-clicks or drags TradingView's price scale and does not request Chrome debugger access. TradingView Auto-fit remains under user control. Every exact strike that fits current viewport safely remains visible; only individually clipped strikes hide. Zoom guidance appears only when no strike can be shown safely.
 
 Click one ladder strike without saved entries to show independent single-leg expiry break-evens. CALL BE is strike plus displayed Call premium. PUT BE is strike minus displayed Put premium. Values are rounded to whole NIFTY points. An outside click removes both break-even rails. Manual refresh removes both break-even rails; click a strike again to calculate from refreshed numbers. These are independent single-leg expiry break-evens, not combined short-straddle break-evens.
 

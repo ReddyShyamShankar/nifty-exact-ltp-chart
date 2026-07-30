@@ -107,28 +107,33 @@
     return null;
   }
 
-  function rowsFitPlot(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
-    if (!Array.isArray(rows) || !Array.isArray(dimensions) || rows.length !== dimensions.length) return false;
-    if (!Array.isArray(lanes) || lanes.length !== rows.length) return false;
+  function visibleRowIndexes(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
+    if (!Array.isArray(rows) || !Array.isArray(dimensions) || rows.length !== dimensions.length) return [];
+    if (!Array.isArray(lanes) || lanes.length !== rows.length) return [];
     const top = Number(plotRect?.top);
     const bottom = Number(plotRect?.bottom);
     const left = Number(plotRect?.left);
     const width = Number(viewportWidth);
     const rightInset = Number(baseRight);
     const offset = Number(laneOffset);
-    if (![top, bottom, left, width, rightInset, offset].every(Number.isFinite) || bottom <= top || width <= left) return false;
-    return rows.every((row, index) => {
+    if (![top, bottom, left, width, rightInset, offset].every(Number.isFinite) || bottom <= top || width <= left) return [];
+    return rows.map((row, index) => {
       const y = Number(row?.y);
       const rowWidth = Number(dimensions[index]?.width);
       const rowHeight = Number(dimensions[index]?.height);
       const lane = Number(lanes[index]);
       if (![y, rowWidth, rowHeight, lane].every(Number.isFinite)
-        || rowWidth <= 0 || rowHeight <= 0 || lane < 0) return false;
+        || rowWidth <= 0 || rowHeight <= 0 || lane < 0) return null;
       const rowLeft = width - (rightInset + lane * offset) - rowWidth;
       return y - rowHeight / 2 >= top
         && y + rowHeight / 2 <= bottom
-        && rowLeft >= left;
-    });
+        && rowLeft >= left ? index : null;
+    }).filter((index) => index !== null);
+  }
+
+  function rowsFitPlot(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
+    if (!Array.isArray(rows)) return false;
+    return visibleRowIndexes(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset).length === rows.length;
   }
 
   function priceScaleFailure(kind) {
@@ -846,6 +851,7 @@
     riskLabelLayout,
     rowLaneLayout,
     rowsFitPlot,
+    visibleRowIndexes,
     priceScaleFailure
   };
   root.NiftyAxisLadderContent = api;
@@ -1717,10 +1723,22 @@
       });
       const laneOffset = Math.ceil(Math.max(...dimensions.map(({ width }) => width))) + 10;
       const baseRight = Math.max(0, window.innerWidth - rect.right + 7);
-      if (!rowsFitPlot(rows, dimensions, rect, window.innerWidth, baseRight, layout.lanes, laneOffset)) {
+      const visibleIndexes = visibleRowIndexes(
+        rows,
+        dimensions,
+        rect,
+        window.innerWidth,
+        baseRight,
+        layout.lanes,
+        laneOffset
+      );
+      if (!visibleIndexes.length) {
         throw new Error(priceScaleFailure("outside"));
       }
+      const visibleIndexSet = new Set(visibleIndexes);
       elements.forEach(({ row, element }, index) => {
+        element.hidden = !visibleIndexSet.has(index);
+        if (element.hidden) return;
         const lane = layout.lanes[index];
         element.dataset.lane = String(lane);
         element.style.setProperty("--nifty-lane-offset", `${laneOffset}px`);
@@ -1730,7 +1748,7 @@
       });
       positionManualEditor();
       const laneZeroRows = elements
-        .filter((_entry, index) => layout.lanes[index] === 0)
+        .filter(({ element }, index) => !element.hidden && layout.lanes[index] === 0)
         .map(({ element }) => element);
       const labelRight = riskLabelLayout(laneZeroRows)?.labelRight ?? rect.right;
       const railDecorations = sharedRailDecorations(toY, rect);

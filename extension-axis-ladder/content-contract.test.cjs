@@ -1429,6 +1429,17 @@ test("viewport fit rejects clipped rows and accepts exact visible price coordina
   assert.equal(api.rowsFitPlot(rows, dimensions, { ...rect, left: 600 }, 1000, 57, [0, 2, 0], 230), false);
 });
 
+test("viewport filtering keeps visible exact strikes when sibling strikes are clipped", () => {
+  const rows = [{ y: 90 }, { y: 120 }, { y: 180 }, { y: 270 }];
+  const dimensions = rows.map(() => ({ width: 220, height: 22 }));
+  const rect = { left: 50, top: 100, right: 950, bottom: 260 };
+
+  assert.deepEqual(
+    api.visibleRowIndexes(rows, dimensions, rect, 1000, 57, [0, 0, 0, 0], 230),
+    [1, 2]
+  );
+});
+
 test("returning to committed A cancels an in-flight B request and rebuilds desired A", async () => {
   let resolveB;
   const bCapture = new Promise((resolve) => { resolveB = resolve; });
@@ -2570,6 +2581,19 @@ function createBreakEvenLifecycleHarness({
   };
 
 }
+
+test("production ladder shows visible strikes while clipped siblings stay hidden", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    plotRect: { left: 0, top: 100, right: 1200, bottom: 160 }
+  });
+  await h.settle();
+
+  assert.equal(h.status(), "LIVE");
+  assert.equal(h.row(23900).hidden, false);
+  assert.equal(h.row(23800).hidden, false);
+  assert.equal(h.row(24000).hidden, true);
+  assert.equal(h.row(23700).hidden, true);
+});
 
 function chooseCallSellEditor(h, strike = 23750) {
   let editor = h.editor(strike);
