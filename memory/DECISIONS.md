@@ -67,3 +67,35 @@ Use Upstox as option and candle data source, after proving the account's live ma
 **Decision:** Native-axis capture must fail closed and retry bounded auto-fit rather than guess coordinates from invalid or incomplete TradingView marker clusters.
 **Why:** Wrong price anchoring is worse than a temporary loading state; current capture logic now rejects moving markers, accepts sparse valid axes, and selects the latest complete canvas paint burst.
 **Status:** ACTIVE
+
+## D13 — 2026-07-30T11:09:53+05:30
+**Decision:** Use a light TradingView-only Chrome side panel named Options Ladder while preserving chart-native ladder rows.
+**Why:** Popup scrolling slowed the main refresh action; a full-height side panel keeps controls accessible without leaving the chart.
+**Alternatives considered:**
+- Large extension popup — rejected because repeated scrolling made core actions slow.
+- Separate dashboard — rejected because user's strongest decision surface is the TradingView chart.
+**Status:** ACTIVE
+
+## D14 — 2026-07-30T11:09:53+05:30
+**Decision:** Finish manual what-if planning before connecting live broker positions to chart risk lines.
+**Why:** User wants to understand every strike, lot, premium, and break-even visually before trusting live-position automation.
+**Alternatives considered:**
+- Import live positions immediately — deferred to a later phase.
+- Keep using external strategy builder — rejected as primary workflow because it is too detached from chart reading.
+**Status:** ACTIVE
+
+## D15 — 2026-07-30T11:09:53+05:30
+**Decision:** Manual positions open by double-click at the selected strike and preserve separate Call and Put entries with aggregated side-specific lot badges.
+**Why:** In-place editing minimizes eye travel, allows both sides at one strike, and makes existing exposure visible at a glance without growing every ladder row.
+**Alternatives considered:**
+- Persistent bottom tray — rejected.
+- One combined count badge — rejected because Call and Put lots can differ.
+**Status:** ACTIVE
+
+## D16 — 2026-07-30T11:09:53+05:30
+**Decision:** Manual plan break-even rails span the full plot and each rail flips through individual position P&L for its own option side.
+**Why:** Full-width levels read naturally on charts, while individual P&L answers which saved position is winning or losing without hiding differences inside one combined number.
+**Alternatives considered:**
+- Right-only rails — superseded after chart review.
+- Combined plan P&L on both rails — rejected as misleading for position-level inspection.
+**Status:** ACTIVE
