@@ -7,6 +7,7 @@
 })(globalThis, () => {
   const PANEL_PATH = "popup.html";
   const ACTIVE_TABS_KEY = "niftySidePanelActiveTabs";
+  const OPEN_CONTROLS_MENU_ID = "open-options-ladder-controls";
   const HOSTS = new Set(["tradingview.com", "www.tradingview.com"]);
 
   function isTradingViewUrl(value) {
@@ -68,8 +69,50 @@
       return activationQueue;
     }
 
+    async function setRefreshStatus(tabId, text, color, title) {
+      await Promise.all([
+        chromeApi.action.setBadgeText({ tabId, text }),
+        chromeApi.action.setBadgeBackgroundColor({ tabId, color }),
+        chromeApi.action.setTitle({ tabId, title })
+      ]);
+    }
+
+    async function refreshLadder(tab) {
+      const tabId = Number(tab?.id);
+      if (!Number.isInteger(tabId) || tabId <= 0 || !isTradingViewUrl(tab?.url)) return false;
+      await setRefreshStatus(tabId, "…", "#64748b", "Options Ladder · refreshing ladder");
+      try {
+        const result = await chromeApi.tabs.sendMessage(tabId, { type: "REFRESH_OPTION_NUMBERS" });
+        if (!result?.ok) throw new Error(result?.error || "Ladder refresh failed.");
+        await setRefreshStatus(tabId, "OK", "#15803d", "Options Ladder · ladder refreshed");
+        return true;
+      } catch (error) {
+        await setRefreshStatus(tabId, "!", "#dc2626", `Options Ladder · ${error?.message || "refresh failed"}`);
+        return false;
+      }
+    }
+
+    async function createActionMenu() {
+      try { await chromeApi.contextMenus.remove(OPEN_CONTROLS_MENU_ID); } catch (_) { /* first install */ }
+      chromeApi.contextMenus.create({
+        id: OPEN_CONTROLS_MENU_ID,
+        title: "Open Options Ladder controls",
+        contexts: ["action"]
+      });
+    }
+
+    async function openControls(info, tab) {
+      const tabId = Number(tab?.id);
+      if (info?.menuItemId !== OPEN_CONTROLS_MENU_ID
+        || !Number.isInteger(tabId)
+        || tabId <= 0
+        || !isTradingViewUrl(tab?.url)) return false;
+      await chromeApi.sidePanel.open({ tabId });
+      return true;
+    }
+
     async function initialize() {
-      await chromeApi.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+      await chromeApi.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
       const tabs = await chromeApi.tabs.query({});
       await Promise.all(tabs.map(configureTab));
       const activeTabs = {};
@@ -81,7 +124,15 @@
       await chromeApi.storage.session.set({ [ACTIVE_TABS_KEY]: activeTabs });
     }
 
-    return { configureTab, handleActivated, initialize, reportOnce };
+    return {
+      configureTab,
+      createActionMenu,
+      handleActivated,
+      initialize,
+      openControls,
+      refreshLadder,
+      reportOnce
+    };
   }
 
   function install(chromeApi, options) {
@@ -91,16 +142,22 @@
       lifecycleQueue = lifecycleQueue.then(operation, operation).catch(controller.reportOnce);
       return lifecycleQueue;
     };
-    chromeApi.runtime.onInstalled.addListener(() => run(() => controller.initialize()));
-    chromeApi.runtime.onStartup.addListener(() => run(() => controller.initialize()));
+    const initialize = () => run(async () => {
+      await controller.initialize();
+      await controller.createActionMenu();
+    });
+    chromeApi.runtime.onInstalled.addListener(initialize);
+    chromeApi.runtime.onStartup.addListener(initialize);
     chromeApi.tabs.onCreated.addListener((tab) => run(() => controller.configureTab(tab)));
     chromeApi.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
       if (changeInfo.url || changeInfo.status === "loading") run(() => controller.configureTab(tab));
     });
     chromeApi.tabs.onActivated.addListener((info) => run(() => controller.handleActivated(info)));
-    run(() => controller.initialize());
+    chromeApi.action.onClicked.addListener((tab) => controller.refreshLadder(tab).catch(controller.reportOnce));
+    chromeApi.contextMenus.onClicked.addListener((info, tab) => controller.openControls(info, tab).catch(controller.reportOnce));
+    initialize();
     return controller;
   }
 
-  return { ACTIVE_TABS_KEY, PANEL_PATH, createController, install, isTradingViewUrl };
+  return { ACTIVE_TABS_KEY, OPEN_CONTROLS_MENU_ID, PANEL_PATH, createController, install, isTradingViewUrl };
 });

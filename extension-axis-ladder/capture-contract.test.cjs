@@ -22,16 +22,27 @@ function loadBackground({ manualPlans = manualPlan.emptyStore() } = {}) {
       onUpdated: { addListener(listener) { listeners.updated = listener; } },
       onActivated: { addListener(listener) { listeners.activated = listener; } },
       async query() { return []; },
-      async get() { return undefined; }
+      async get() { return undefined; },
+      async sendMessage() { return { ok: true }; }
     },
     sidePanel: {
       async setPanelBehavior(value) { sidePanelCalls.push(["behavior", value]); },
       async setOptions(value) { sidePanelCalls.push(["options", value]); },
-      async close(value) { sidePanelCalls.push(["close", value]); }
+      async close(value) { sidePanelCalls.push(["close", value]); },
+      async open(value) { sidePanelCalls.push(["open", value]); }
     },
     action: {
+      onClicked: { addListener(listener) { listeners.action = listener; } },
       async enable() {},
-      async disable() {}
+      async disable() {},
+      async setBadgeText() {},
+      async setBadgeBackgroundColor() {},
+      async setTitle() {}
+    },
+    contextMenus: {
+      onClicked: { addListener(listener) { listeners.menu = listener; } },
+      async remove() {},
+      create() {}
     },
     storage: {
       session: {
@@ -210,7 +221,7 @@ test("background installs tab-specific side panel without changing capture API",
   assert.equal(typeof listeners.created, "function");
   assert.equal(typeof listeners.updated, "function");
   assert.equal(typeof listeners.activated, "function");
-  assert.deepEqual(sidePanelCalls[0], ["behavior", { openPanelOnActionClick: true }]);
+  assert.deepEqual(sidePanelCalls[0], ["behavior", { openPanelOnActionClick: false }]);
   assert.equal(typeof api.captureAxisScale, "function");
 });
 

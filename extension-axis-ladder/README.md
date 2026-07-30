@@ -47,15 +47,15 @@ The TradingView-owned compact status badge is cosmetic. LIVE uses green; OFFLINE
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Choose **Load unpacked** and select this `extension-axis-ladder` directory.
-4. Open a logged-in TradingView NIFTY chart, select one exact expiry, and use the existing explicit refresh to load option values.
+4. Open a logged-in TradingView NIFTY chart, select one exact expiry, and left-click the pinned Options Ladder icon to load or refresh option values.
 
 Existing Pine-sync extension v0.14.0 remains a separate untouched backup.
 
-## Existing read-only seller-safety baseline
+## Toolbar refresh and read-only seller-safety baseline
 
-Click the pinned NIFTY extension icon on a TradingView tab to open the full-height side panel. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes it.
+Left-click the pinned NIFTY extension icon on a TradingView tab to refresh ladder option numbers without opening or closing the side panel. The icon badge shows `…` while refreshing, `OK` after success, or `!` after failure. Right-click the icon and choose **Open Options Ladder controls** only when the full-height side panel is needed. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes an open panel.
 
-Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
+Toolbar refresh updates ladder option numbers only. Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
 
 The seller-safety baseline remains independent from manual plans:
 

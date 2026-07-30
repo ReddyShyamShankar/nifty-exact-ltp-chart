@@ -23,14 +23,14 @@ Extension never changes TradingView price scale or Auto-fit state and requests n
 
 ## Setup
 
-Load [`extension-axis-ladder`](extension-axis-ladder) as an unpacked extension in Chrome 141 or newer. Open a logged-in TradingView NIFTY chart, select the exact expiry, and use the existing explicit refresh to populate live option values. Double-click a row to start the manual plan.
+Load [`extension-axis-ladder`](extension-axis-ladder) as an unpacked extension in Chrome 141 or newer. Open a logged-in TradingView NIFTY chart, select the exact expiry, and left-click the pinned extension icon to populate or refresh live ladder values. Double-click a row to start the manual plan.
 
 No automatic option refresh, full option-chain table, bottom tray, Greeks, probability, margin, or recommendation path is added. Existing broker and seller-safety code remains independent from manual-plan storage and was not changed by this candidate.
 
-## Existing read-only side panel
+## Toolbar refresh and read-only side panel
 
-Click the pinned NIFTY extension icon on a TradingView tab to open the full-height side panel. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes it.
+Left-click the pinned NIFTY extension icon on a TradingView tab to refresh ladder option numbers without opening or closing the side panel. The icon badge shows `…` while refreshing, `OK` after success, or `!` after failure. Right-click the icon and choose **Open Options Ladder controls** only when the full-height side panel is needed. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes an open panel.
 
-Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually. This existing read-only workflow remains separate from manual strategy entries and has no-order capability.
+Toolbar refresh updates ladder option numbers only. Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually. This existing read-only workflow remains separate from manual strategy entries and has no-order capability.
 
 See the [extension guide](extension-axis-ladder/README.md) for exact row behavior, independent quick break-evens, combined plan break-evens, failure boundaries, and keyboard controls.
