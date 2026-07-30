@@ -183,7 +183,7 @@
 
   function freezeMembership({ timeframe, expiry, interval, nativeInterval = interval, axisPrices, spot, chainRows, tieDirection = "up" }) {
     const selection = timeframeApi.selectAxisAlignedRows(chainRows, spot, axisPrices, undefined, tieDirection);
-    if (!selection) return null;
+    if (!selection?.rows?.length) return null;
     const rows = selection.rows.map((row) => Object.freeze({
       strike: Number(row.strike),
       call: quote(row.call),
@@ -2604,9 +2604,15 @@
   });
 
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
-    if (!["CLEAR_BREAK_EVEN_SELECTION", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS", "GET_STRATEGY_PREVIEW_STATE"].includes(message?.type)) return false;
+    if (!["CLEAR_BREAK_EVEN_SELECTION", "CLEAR_STRATEGY_PREVIEW", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS", "GET_STRATEGY_PREVIEW_STATE"].includes(message?.type)) return false;
     if (message.type === "CLEAR_BREAK_EVEN_SELECTION") {
       clearBreakEvenSelection();
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (message.type === "CLEAR_STRATEGY_PREVIEW") {
+      clearStrategyPreview();
+      void controller?.place();
       sendResponse({ ok: true });
       return false;
     }

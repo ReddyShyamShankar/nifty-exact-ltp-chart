@@ -1,8 +1,8 @@
-# Options Ladder — Manual Strategy Builder
+# Options Ladder — Chart Strategy Builder
 
-Version 0.5.0 is a chart-first options planning candidate for TradingView. NIFTY is current connector and test case, while core design remains instrument-neutral: selected instrument/expiry supplies real strikes and TradingView axis supplies visible density.
+Version 0.6.0 is a chart-first options planning candidate for TradingView. NIFTY is current connector and test case, while core design remains instrument-neutral: selected instrument/expiry supplies real strikes and TradingView axis supplies visible density.
 
-## Manual strategy workflow
+## Strategy workflow
 
 - Double-click any visible ladder row to add a manual Call or Put entry at that exact strike.
 - Use `CALL ▾` or `PUT ▾`, then choose Buy or Sell from that staged menu.
@@ -11,15 +11,23 @@ Version 0.5.0 is a chart-first options planning candidate for TradingView. NIFTY
 - One saved ARB Desk theme controls popup, side panel, and chart ladder together. Dark is default; the header sun/moon toggle switches every surface to the exact light token set.
 - Live rows use the active ARB Desk panel tokens, ATM and selected rows use warning tokens with black text, Buy snapshots use accent tokens, and Sell snapshots use danger tokens.
 - Original Options Ladder logo stays unchanged. Control icons follow ARB Desk. Geist Sans and Geist Mono are bundled locally, so extension typography never falls back or needs network access.
-- With saved entries, single-click cycles newest-first through one snapshot at a time, then returns to live.
-- `PLAN BE` marks every exact price where the combined same-expiry payoff is zero after all saved Buy/Sell legs, premiums, strikes, and lots are combined. `PREVIEW BE` uses the valid unsaved draft before Add or Save.
-- Break-even rails span the plot in both directions. Click a plan rail label to flip through individual position P&L for that side; values are approximate and never combined.
+- Saving a new leg asks which compatible strategy owns it, or whether to create next strategy. Product never guesses ownership.
+- Each strategy may contain any mix of Call/Put and Buy/Sell legs. Same contract may be entered again later as separate leg with its own premium, time, lots, and ownership.
+- `T1 BE`, `T2 BE`, and later labels mark every exact expiry break-even for each strategy. Click label to open only that strategy's positions and live P&L.
+- Adjacent 16-pixel square is independent selection control. Filled square includes whole strategy in temporary combined preview; label click never changes selection.
+- Selecting two or more compatible strategies shows combined break-even rails. Original rails hide by default; **Compare** restores originals beside combined rails.
+- Temporary preview never changes ownership or history. Refresh, reload, expiry/instrument change, or **Cancel** clears preview only.
+- Off-screen roots remain available as exact `↑` or `↓` edge markers. Close cards stack for readability while connector returns to exact financial rail.
+- Permanent **Save preview** in side panel always asks whether to create new strategy or merge into chosen existing strategy. Successful merge archives source strategies instead of deleting them.
+- Side panel supports explicit leg split, manual archive, immutable version history, and restore. Restore creates new current version; old history never changes.
+- Expired strategies move automatically into **Ledger History**. Last active strategy reopens for same instrument and exact expiry.
+- Known charges affect P&L and break-evens. Missing charges show `EXCLUDING UNKNOWN CHARGES`; stale or missing quotes suppress combined economics until manual refresh.
 - A manual refresh changes live values only; saved snapshots remain unchanged.
 - Add and Save stay disabled until the selected Call/Put side has a valid non-negative premium and positive whole-number lot count; typing updates `PREVIEW BE` without closing or rebuilding the editor.
 - Keyboard: `Shift+Enter` opens the focused row editor; `Enter` or `Space` keeps single-click behavior; `Escape` closes the editor or returns the row to live.
-- The manual-only builder does not import broker positions or tradebooks and cannot place, modify, or cancel orders.
+- Strategy builder cannot place, modify, cancel, convert, or exit orders.
 
-Add or Save sends one mutation to the background service worker, which serializes writes from every open TradingView tab before updating exact-expiry local storage. Remove deletes only the selected entry. Close, outside click, or `Escape` cancels an unsaved draft. Reload, timeframe changes, zoom, and pan rebuild saved plan rails from local snapshots and TradingView's validated native price axis.
+Add, edit, remove, merge, split, archive, and restore each send one atomic mutation to background service worker, which serializes writes from every open TradingView tab before updating exact-expiry local storage. Storage failure preserves current version and temporary preview. Duplicate command does not duplicate strategy. Close, outside click, or `Escape` cancels unsaved draft. Reload, timeframe changes, zoom, and pan rebuild strategy rails from local evidence and TradingView's validated native price axis.
 
 ## Ladder and quick break-evens
 
@@ -31,11 +39,11 @@ Click one ladder strike without saved entries to show independent single-leg exp
 
 ## Data and failure boundaries
 
-- Plans are keyed by instrument and one exact expiry. NIFTY is current test case, not architectural scope.
+- Strategies are keyed by instrument and one exact expiry. NIFTY is current test case, not architectural scope.
 - Live numbers change only after existing explicit manual refresh.
 - Saved premiums and captured Call/Put snapshots never update from refresh, side-panel activity, timeframe changes, zoom, pan, or reload.
 - Only the selected side needs a captured snapshot; an unavailable opposite-side snapshot remains shown as `—` and is never backfilled.
-- Malformed stored entries are quarantined for recovery and exposed through `MANUAL ENTRY NEEDS REVIEW`; valid edits do not erase that recovery data.
+- Malformed stored entries are quarantined for recovery; valid edits do not erase recovery data.
 - Missing quotes, unsupported timeframes, nonlinear scales, incomplete strike ranges, and invalid native-axis observations fail closed.
 - No automatic option refresh, bottom tray, full option-chain table, Greeks, probability, margin, or recommendation engine is added.
 - Chrome 141 or newer is required.
@@ -49,7 +57,7 @@ The TradingView-owned compact status badge is cosmetic. LIVE uses green; OFFLINE
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Choose **Load unpacked** and select this `extension-axis-ladder` directory.
-4. Open a logged-in TradingView NIFTY chart, select one exact expiry, click the pinned Options Ladder icon, then choose **Refresh ladder**.
+4. Open logged-in TradingView NIFTY chart, select one exact expiry, click pinned Options Ladder icon, then choose **Refresh ladder**.
 
 Existing Pine-sync extension v0.14.0 remains a separate untouched backup.
 

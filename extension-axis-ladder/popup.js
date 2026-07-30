@@ -163,6 +163,17 @@ async function mutateVersionedStrategies(command) {
   return response.strategyBook;
 }
 
+async function clearChartStrategyPreview() {
+  strategyPreviewState = { ...strategyPreviewState, selectedIds: [], compare: false };
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.startsWith("https://www.tradingview.com/")) return;
+    await chrome.tabs.sendMessage(tab.id, { type: "CLEAR_STRATEGY_PREVIEW" });
+  } catch (_) {
+    // Permanent save already succeeded; chart cleanup may resume when chart becomes active.
+  }
+}
+
 async function beginPermanentSave() {
   try {
     const preview = await readChartStrategyPreview();
@@ -195,6 +206,7 @@ async function confirmPermanentSave() {
         : { mode: "EXISTING", strategyId }
     });
     await mutateVersionedStrategies(command);
+    await clearChartStrategyPreview();
     activeVersionedStrategyId = strategyId;
     await rememberVersionedSelection(strategyId);
     $("#strategy-save-decision").hidden = true;

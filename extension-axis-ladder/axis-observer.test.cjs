@@ -270,6 +270,34 @@ test("observer keeps latest complete paint burst during animated scale transitio
   assert.equal(envelope.signature.includes("24500"), true);
 });
 
+test("observer combines separately published major and minor labels from the same visible axis", () => {
+  const sourceLabel = "Chart for NSE_DLY:NIFTY, 1 day";
+  const canvasRect = { left: 1605, top: 42, right: 1679, bottom: 715 };
+  const candidate = (price, capturedAt) => ({
+    price,
+    x: 1640,
+    y: 80 + (24700 - price) * 0.4,
+    sourceLabel,
+    canvasRect,
+    capturedAt
+  });
+  const minor = [24500, 24300, 24100, 23900, 23700, 23500, 23300, 23100]
+    .map((price, index) => candidate(price, 100 + index));
+  const major = [24600, 24400, 24200, 24000, 23800, 23600, 23400, 23200, 23000]
+    .map((price, index) => candidate(price, 120 + index));
+
+  const minorEnvelope = observer.observationEnvelope(minor, null, 150);
+  const envelope = observer.observationEnvelope(major, minorEnvelope, 200);
+
+  assert.deepEqual(
+    envelope.candidates.map((entry) => entry.price).sort((left, right) => right - left),
+    [24600, 24500, 24400, 24300, 24200, 24100, 24000, 23900, 23800, 23700, 23600, 23500, 23400, 23300, 23200, 23100, 23000]
+  );
+  assert.equal(envelope.signature.includes("23700"), true);
+  assert.equal(envelope.signature.includes("23500"), true);
+  assert.equal(envelope.signature.includes("23300"), true);
+});
+
 test("observer keeps untimed candidates for deterministic callers", () => {
   const candidates = [{ price: 3 }, { price: 2 }, { price: 1 }];
   assert.equal(observer.latestAxisPaintBurst(candidates), candidates);

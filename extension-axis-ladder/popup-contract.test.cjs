@@ -56,6 +56,7 @@ test("side panel exposes permanent strategy save, versions, split, restore, arch
   assert.match(js, /OptionsStrategyPanel\.commandForRestore/);
   assert.match(js, /MUTATE_STRATEGY_BOOK/);
   assert.match(js, /GET_STRATEGY_PREVIEW_STATE/);
+  assert.match(js, /CLEAR_STRATEGY_PREVIEW/);
   assert.match(js, /lastSelectedStrategyByContext/);
   assert.match(js, /OptionsStrategyStore\.resolveLastSelected/);
   assert.match(read("content.js"), /type:\s*"EXPIRE_DUE"/);

@@ -13,7 +13,7 @@ const RISK_EXPIRY = "2026-08-25";
 
 test("operator guide documents click-only single-leg break-even rails", () => {
   const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
-  assert.match(readme, /^Version 0\.5\.0\b/m);
+  assert.match(readme, /^Version 0\.6\.0\b/m);
   readme.split("\n").filter((line) => /0\.4\.0/.test(line)).forEach((line) => {
     assert.match(line, /baseline/i, `0.4.0 reference must be explicit baseline wording: ${line}`);
   });
@@ -26,29 +26,30 @@ test("operator guide documents click-only single-leg break-even rails", () => {
   assert.match(readme, /independent single-leg expiry break-evens, not combined short-straddle break-evens/i);
 });
 
-test("0.5.0 guides document exact manual-only strategy workflow and keyboard parity", () => {
+test("0.6.0 guides document exact chart strategy workflow and keyboard parity", () => {
   const guides = [
     ["extension", fs.readFileSync(path.join(__dirname, "README.md"), "utf8")],
     ["root", fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8")]
   ];
   for (const [name, guide] of guides) {
-    assert.match(guide, /^Version 0\.5\.0\b/m, `${name}: candidate version`);
+    assert.match(guide, /^Version 0\.6\.0\b/m, `${name}: candidate version`);
     assert.match(guide, /Double-click[^.\n]*row[^.\n]*add/i, `${name}: add gesture`);
     assert.match(guide, /CALL ▾[^.\n]*PUT ▾[^.\n]*Buy[^.\n]*Sell/i, `${name}: staged menus`);
     assert.match(guide, /positive whole-number lots[^.\n]*editable premium/i, `${name}: lot and premium controls`);
     assert.match(guide, /top-left `C2`[^.\n]*`P3`[^.\n]*Call[^.\n]*Put lots/i, `${name}: lot badge meaning`);
     assert.match(guide, /ARB Desk panel tokens[^.\n]*warning tokens[^.\n]*black text[^.\n]*accent tokens[^.\n]*danger tokens/i,
       `${name}: exact shared row tokens`);
-    assert.match(guide, /single-click[^.\n]*newest-first[^.\n]*live/i, `${name}: entry cycle`);
-    assert.match(guide, /PLAN BE[^.\n]*combined[^.\n]*expiry payoff[^.\n]*zero/i, `${name}: combined break-even meaning`);
-    assert.match(guide, /rails span[^.\n]*both directions/i, `${name}: rail direction`);
-    assert.match(guide, /individual position P&L[^.\n]*never combined/i, `${name}: P&L meaning`);
+    assert.match(guide, /new leg[^.\n]*explicit strategy ownership|Saving a new leg[^.\n]*strategy owns/i, `${name}: explicit ownership`);
+    assert.match(guide, /strategy label[^.\n]*P&L|Click label[^.\n]*positions[^.\n]*P&L/i, `${name}: label action`);
+    assert.match(guide, /Adjacent[^\n]*square[^\n]*temporary[^\n]*preview/i, `${name}: square action`);
+    assert.match(guide, /two or more[^.\n]*combined break-even rails|Selecting two or more[^.\n]*combined break-even rails/i,
+      `${name}: combined break-even meaning`);
+    assert.match(guide, /Compare[^.\n]*original|Compare[^.\n]*individual rails/i, `${name}: compare behavior`);
     assert.match(guide, /manual refresh[^.\n]*live values[^.\n]*saved snapshots[^.\n]*unchanged/i,
       `${name}: refresh boundary`);
     assert.match(guide, /Shift\+Enter[^.\n]*editor[^.\n]*Enter[^.\n]*Space[^.\n]*single-click[^.\n]*Escape[^.\n]*live/i,
       `${name}: keyboard workflow`);
-    assert.match(guide, /manual-only[^.\n]*does not import broker positions or tradebooks[^.\n]*cannot place, modify, or cancel orders/i,
-      `${name}: broker and order boundary`);
+    assert.match(guide, /cannot place, modify, cancel, convert, or exit orders/i, `${name}: order boundary`);
   }
 });
 
@@ -642,6 +643,35 @@ test("controller accepts stable 25-point native ticks and selects real 50-point 
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 15 minutes"), true);
   assert.equal(controller.membership().nativeInterval, 50);
   assert.equal(controller.membership().interval, 50);
+});
+
+test("axis grid with no real contract never replaces last valid membership", async () => {
+  let currentScale = scale();
+  const invalidScale = {
+    ok: true,
+    gridGapPx: 10,
+    axisPairs: Array.from({ length: 13 }, (_, index) => ({
+      price: 24004 + index * 4,
+      y: 210 - index * 10
+    }))
+  };
+  const controller = api.createLadderController({
+    expiry: "2026-08-25",
+    fetchChain: async () => chain(23767.45),
+    captureAxisScale: async () => currentScale,
+    renderRows: () => {},
+    placeRows: () => true
+  });
+
+  assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  const validStrikes = controller.membership().strikes.slice();
+  currentScale = invalidScale;
+  assert.equal(await controller.place(), false);
+  assert.deepEqual(controller.membership().strikes, validStrikes);
+
+  currentScale = scale();
+  assert.equal(await controller.place(), true);
+  assert.deepEqual(controller.membership().strikes, validStrikes);
 });
 
 test("production membership uses axis intersections plus real ATM inside visible range", () => {
@@ -2782,6 +2812,30 @@ test("side panel reads temporary chart strategy selection without mutating it", 
   });
   assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__selector")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
+});
+
+test("permanent save can clear stale temporary chart strategy selection", async () => {
+  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  await h.settle();
+  let rails = h.strategyRails();
+  rails.querySelectorAll(".nifty-strategy__selector")[0].dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
+  rails.querySelectorAll(".nifty-strategy__selector")
+    .find((node) => node.getAttribute("aria-pressed") === "false")
+    .dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  assert.ok(h.strategyRails().querySelector(".nifty-strategy-preview"));
+
+  let response = null;
+  const handled = h.runtimeListeners[0]({ type: "CLEAR_STRATEGY_PREVIEW" }, null, (value) => { response = value; });
+  assert.equal(handled, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), { ok: true });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(rails.querySelector(".nifty-strategy-preview"), null);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__selector")
+    .every((node) => node.getAttribute("aria-pressed") === "false"), true);
 });
 
 test("new leg waits for explicit chart strategy ownership before any write", async () => {

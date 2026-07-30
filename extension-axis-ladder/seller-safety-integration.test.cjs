@@ -701,12 +701,12 @@ test("standalone whole-trade bands render without blessing blocked current-risk 
   ]);
 });
 
-test("release artifacts preserve the workflow in the side panel at version 0.5.0", () => {
+test("release artifacts preserve the workflow in the side panel at version 0.6.0", () => {
   const html = fs.readFileSync(path.join(__dirname, "popup.html"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "popup.css"), "utf8");
   const rootReadme = fs.readFileSync(path.join(__dirname, "../README.md"), "utf8");
   const bridgePackage = JSON.parse(fs.readFileSync(path.join(__dirname, "../data-bridge/package.json"), "utf8"));
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.6.0");
   assert.equal(bridgePackage.version, "0.4.1");
   assert.match(css, /body\s*\{[\s\S]*width:\s*100%/);
   assert.match(css, /body\s*\{[\s\S]*min-height:\s*100vh/);
@@ -715,7 +715,7 @@ test("release artifacts preserve the workflow in the side panel at version 0.5.0
   assert.equal((html.match(/id="refresh-all"/g) || []).length, 1);
   assert.doesNotMatch(html, /OPEN FULL CHAIN|id="chain-panel"|id="chain"|<table/i);
   assert.equal(bridgePackage.scripts.test, "node --test ../extension-axis-ladder/*.test.cjs ./*.test.js");
-  assert.match(rootReadme, /NIFTY Axis Ladder[\s\S]*Seller Safety Map/i);
+  assert.match(rootReadme, /Options Ladder[\s\S]*Seller Safety Map/i);
   assert.doesNotMatch(rootReadme, /SYNC PINE INPUTS|ten exact option symbols/i);
 });
 
