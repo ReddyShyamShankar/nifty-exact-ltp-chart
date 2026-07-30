@@ -88,3 +88,13 @@ test("levels preserve exact roots and format rounded Indian labels", () => {
   ]);
   assert.equal(result.levels[0].exact, 24020);
 });
+
+test("fixed charge offset moves roots without changing leg premiums", () => {
+  const short = [
+    leg({ id: "c", strike: 100, optionType: "CALL", direction: "SELL", premium: 10 }),
+    leg({ id: "p", strike: 100, optionType: "PUT", direction: "SELL", premium: 10 })
+  ];
+  assert.deepEqual(payoff.breakEvens(short).points, [80, 120]);
+  assert.deepEqual(payoff.breakEvens(short, 4).points, [84, 116]);
+  assert.equal(payoff.payoffAt(short, 100, 4), 16);
+});
