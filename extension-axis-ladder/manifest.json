@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "141",
   "name": "Options Ladder",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
   "permissions": ["storage", "activeTab", "sidePanel"],
   "host_permissions": [
@@ -47,7 +47,7 @@
     },
     {
       "matches": ["https://tradingview.com/*", "https://www.tradingview.com/*"],
-      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "risk-overlay.js", "seller-view-identity.js", "breakeven-rails.js", "tradingview-live-badge.js", "manual-plan.js", "manual-payoff.js", "manual-interaction.js", "manual-ui.js", "content.js"],
+      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "risk-overlay.js", "seller-view-identity.js", "breakeven-rails.js", "tradingview-live-badge.js", "manual-plan.js", "manual-payoff.js", "manual-interaction.js", "manual-ui.js", "strategy-store.js", "strategy-preview.js", "strategy-chart.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }

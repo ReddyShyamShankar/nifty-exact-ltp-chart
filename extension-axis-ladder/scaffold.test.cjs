@@ -6,7 +6,7 @@ const manifest = require("./manifest.json");
 
 test("new extension has independent identity", () => {
   assert.equal(manifest.name, "Options Ladder");
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.6.0");
   assert.equal(manifest.minimum_chrome_version, "141");
   assert.equal(manifest.permissions.includes("debugger"), false);
   assert.equal(manifest.permissions.includes("sidePanel"), true);
@@ -31,13 +31,16 @@ test("extension card and toolbar preserve original Options Ladder logo", () => {
   }
 });
 
-test("manual modules load before content in dependency order", () => {
+test("manual and strategy modules load before content in dependency order", () => {
   const scripts = manifest.content_scripts.find((entry) => entry.js.includes("content.js")).js;
-  assert.deepEqual(scripts.slice(-5), [
+  assert.deepEqual(scripts.slice(-8), [
     "manual-plan.js",
     "manual-payoff.js",
     "manual-interaction.js",
     "manual-ui.js",
+    "strategy-store.js",
+    "strategy-preview.js",
+    "strategy-chart.js",
     "content.js"
   ]);
 });
@@ -45,9 +48,12 @@ test("manual modules load before content in dependency order", () => {
 test("manual plan mutations are owned by the manifest service worker", () => {
   const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8");
 
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.6.0");
   assert.equal(manifest.background.service_worker, "background.js");
   assert.equal(manifest.permissions.includes("storage"), true);
   assert.match(background, /importScripts\([^)]*"manual-plan\.js"/);
   assert.match(background, /MUTATE_MANUAL_PLANS/);
+  assert.match(background, /importScripts\([^)]*"strategy-store\.js"/);
+  assert.match(background, /MUTATE_STRATEGY_BOOK/);
+  assert.match(background, /MIGRATE_MANUAL_PLANS/);
 });

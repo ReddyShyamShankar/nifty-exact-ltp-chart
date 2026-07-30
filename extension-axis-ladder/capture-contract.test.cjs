@@ -4,13 +4,23 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const manualPlan = require("./manual-plan.js");
+const strategyStore = require("./strategy-store.js");
 
-function loadBackground({ manualPlans = manualPlan.emptyStore(), fetchImpl = global.fetch } = {}) {
+function loadBackground({
+  manualPlans = manualPlan.emptyStore(),
+  strategyBook = strategyStore.emptyBook(),
+  fetchImpl = global.fetch,
+  failStrategyWrite = false
+} = {}) {
   const listeners = {};
   const sidePanelCalls = [];
   const session = {};
-  const local = { [manualPlan.STORAGE_KEY]: manualPlans };
+  const local = {
+    [manualPlan.STORAGE_KEY]: manualPlans,
+    [strategyStore.STORAGE_KEY]: strategyBook
+  };
   const manualWrites = [];
+  const strategyWrites = [];
   global.chrome = {
     runtime: {
       onMessage: { addListener(listener) { listeners.message = listener; } },
@@ -55,8 +65,12 @@ function loadBackground({ manualPlans = manualPlan.emptyStore(), fetchImpl = glo
           return { ...key, ...local };
         },
         async set(values) {
+          if (failStrategyWrite && Object.hasOwn(values, strategyStore.STORAGE_KEY)) {
+            throw new Error("strategy storage unavailable");
+          }
           Object.assign(local, values);
           if (Object.hasOwn(values, manualPlan.STORAGE_KEY)) manualWrites.push(values[manualPlan.STORAGE_KEY]);
+          if (Object.hasOwn(values, strategyStore.STORAGE_KEY)) strategyWrites.push(values[strategyStore.STORAGE_KEY]);
         }
       }
     }
@@ -66,26 +80,122 @@ function loadBackground({ manualPlans = manualPlan.emptyStore(), fetchImpl = glo
       if (file === "overlay-utils.js") global.NiftyOverlay = require("./overlay-utils.js");
       if (file === "side-panel.js") global.NiftySidePanel = require("./side-panel.js");
       if (file === "manual-plan.js") global.NiftyManualPlan = manualPlan;
+      if (file === "strategy-store.js") global.OptionsStrategyStore = strategyStore;
     }
   };
   global.fetch = fetchImpl;
   const filename = path.join(__dirname, "background.js");
   delete require.cache[filename];
-  return { api: require(filename), listeners, sidePanelCalls, local, manualWrites };
+  return { api: require(filename), listeners, sidePanelCalls, local, manualWrites, strategyWrites };
 }
 
 test("exports native-axis capture and single-writer manual mutation API", () => {
   const { api } = loadBackground();
   assert.deepEqual(Object.keys(api).sort(), [
     "applyManualPlanMutation", "axisPairsFromCandidates", "captureAxisScale",
-    "enqueueManualPlanMutation", "extractAxisPrices", "fetchNiftyChain",
+    "enqueueManualPlanMutation", "enqueueStrategyMigration", "enqueueStrategyMutation",
+    "extractAxisPrices", "fetchNiftyChain",
     "isCaptureMessage", "isChainFetchMessage", "isManualPlanMutationMessage",
-    "isolateAxisCandidates"
+    "isStrategyMigrationMessage", "isStrategyMutationMessage", "isolateAxisCandidates"
   ]);
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), false);
   assert.equal(api.isManualPlanMutationMessage("MUTATE_MANUAL_PLANS"), true);
   assert.equal(api.isChainFetchMessage("FETCH_NIFTY_CHAIN"), true);
+  assert.equal(api.isStrategyMutationMessage("MUTATE_STRATEGY_BOOK"), true);
+  assert.equal(api.isStrategyMigrationMessage("MIGRATE_MANUAL_PLANS"), true);
+});
+
+function createStrategyCommand(id, strategyId) {
+  return {
+    id,
+    type: "CREATE_STRATEGY",
+    strategyId,
+    versionId: `${strategyId}-v1`,
+    label: strategyId.toUpperCase(),
+    instrumentKey: "NSE_INDEX|NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25"
+  };
+}
+
+function sendStrategyMessage(listeners, tabId, message, url = `https://www.tradingview.com/chart/tab-${tabId}/`) {
+  return new Promise((resolve) => {
+    const handled = listeners.message(message, { tab: { id: tabId }, url }, resolve);
+    assert.equal(handled, true);
+  });
+}
+
+test("strategy mutation accepts TradingView and rejects foreign senders", async () => {
+  const h = loadBackground();
+  const accepted = await sendStrategyMessage(h.listeners, 1, {
+    type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("create-1", "s1")
+  });
+  assert.equal(accepted.ok, true);
+  assert.equal(strategyStore.strategyById(h.local.strategyBook, "s1").label, "S1");
+
+  const rejected = await new Promise((resolve) => {
+    h.listeners.message(
+      { type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("create-2", "s2") },
+      { tab: { id: 2 }, url: "https://example.com/" },
+      resolve
+    );
+  });
+  assert.deepEqual(rejected, { ok: false, error: "Strategy mutations are limited to TradingView tabs." });
+  assert.equal(strategyStore.strategyById(h.local.strategyBook, "s2"), null);
+});
+
+test("strategy queue serializes concurrent commands without lost updates", async () => {
+  const h = loadBackground();
+  const [first, second] = await Promise.all([
+    sendStrategyMessage(h.listeners, 1, {
+      type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("create-1", "s1")
+    }),
+    sendStrategyMessage(h.listeners, 2, {
+      type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("create-2", "s2")
+    })
+  ]);
+  assert.equal(first.ok && second.ok, true);
+  assert.deepEqual(strategyStore.activeStrategies(h.local.strategyBook).map((item) => item.id), ["s1", "s2"]);
+  assert.equal(h.strategyWrites.length, 2);
+});
+
+test("duplicate strategy command remains idempotent through service worker", async () => {
+  const h = loadBackground();
+  const message = { type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("same", "s1") };
+  const first = await sendStrategyMessage(h.listeners, 1, message);
+  const second = await sendStrategyMessage(h.listeners, 1, message);
+  assert.deepEqual(second.strategyBook, first.strategyBook);
+  assert.equal(strategyStore.activeStrategies(h.local.strategyBook).length, 1);
+});
+
+test("strategy storage failure returns error and preserves prior book", async () => {
+  let initial = strategyStore.emptyBook();
+  initial = strategyStore.applyCommand(initial, createStrategyCommand("initial", "existing"), "2026-07-31T10:00:00.000Z");
+  const h = loadBackground({ strategyBook: initial, failStrategyWrite: true });
+  const response = await sendStrategyMessage(h.listeners, 1, {
+    type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("new", "new-strategy")
+  });
+  assert.deepEqual(response, { ok: false, error: "strategy storage unavailable" });
+  assert.deepEqual(h.local.strategyBook, initial);
+  assert.equal(h.strategyWrites.length, 0);
+});
+
+test("legacy manual plans migrate once while legacy rollback data remains", async () => {
+  const legacy = manualPlan.upsertEntry(manualPlan.emptyStore(), manualEntry());
+  const h = loadBackground({ manualPlans: legacy });
+  const request = {
+    type: "MIGRATE_MANUAL_PLANS",
+    instrumentKey: "NSE_INDEX|NIFTY",
+    underlying: "NIFTY",
+    at: "2026-07-31T10:00:00.000Z"
+  };
+  const first = await sendStrategyMessage(h.listeners, 1, request);
+  const second = await sendStrategyMessage(h.listeners, 1, request);
+  assert.equal(first.ok && second.ok, true);
+  assert.equal(strategyStore.activeStrategies(h.local.strategyBook).length, 1);
+  assert.deepEqual(h.local.manualPlans, legacy);
+  assert.equal(h.strategyWrites.length, 2);
 });
 
 test("background owns bridge chain fetch for TradingView content scripts", async () => {

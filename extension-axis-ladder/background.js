@@ -1,14 +1,18 @@
 "use strict";
 
-importScripts("overlay-utils.js", "side-panel.js", "manual-plan.js");
+importScripts("overlay-utils.js", "side-panel.js", "manual-plan.js", "strategy-store.js");
 
 NiftySidePanel.install(chrome);
 
 const manualPlanApi = globalThis.NiftyManualPlan;
+const strategyStoreApi = globalThis.OptionsStrategyStore;
 const MANUAL_PLAN_MUTATION = "MUTATE_MANUAL_PLANS";
+const STRATEGY_BOOK_MUTATION = "MUTATE_STRATEGY_BOOK";
+const STRATEGY_BOOK_MIGRATION = "MIGRATE_MANUAL_PLANS";
 const CHAIN_FETCH = "FETCH_NIFTY_CHAIN";
 const BRIDGE_API = "http://127.0.0.1:8787";
 let manualPlanMutationTail = Promise.resolve();
+let strategyMutationTail = Promise.resolve();
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -55,6 +59,14 @@ function isManualPlanMutationMessage(type) {
 
 function isChainFetchMessage(type) {
   return type === CHAIN_FETCH;
+}
+
+function isStrategyMutationMessage(type) {
+  return type === STRATEGY_BOOK_MUTATION;
+}
+
+function isStrategyMigrationMessage(type) {
+  return type === STRATEGY_BOOK_MIGRATION;
 }
 
 function isTradingViewSender(sender) {
@@ -106,6 +118,37 @@ function enqueueManualPlanMutation(mutation) {
   const result = manualPlanMutationTail.then(commit, commit);
   manualPlanMutationTail = result.catch(() => {});
   return result;
+}
+
+function enqueueStrategyCommit(commit) {
+  const write = async () => {
+    const stored = await chrome.storage.local.get([
+      strategyStoreApi.STORAGE_KEY,
+      manualPlanApi.STORAGE_KEY
+    ]);
+    const rawBook = stored && Object.hasOwn(stored, strategyStoreApi.STORAGE_KEY)
+      ? stored[strategyStoreApi.STORAGE_KEY]
+      : strategyStoreApi.emptyBook();
+    const next = commit(rawBook, stored?.[manualPlanApi.STORAGE_KEY]);
+    await chrome.storage.local.set({ [strategyStoreApi.STORAGE_KEY]: next });
+    return next;
+  };
+  const result = strategyMutationTail.then(write, write);
+  strategyMutationTail = result.catch(() => {});
+  return result;
+}
+
+function enqueueStrategyMutation(command) {
+  return enqueueStrategyCommit((book) => strategyStoreApi.applyCommand(book, command));
+}
+
+function enqueueStrategyMigration({ instrumentKey, underlying, at }) {
+  const timestamp = typeof at === "string" && at ? at : new Date().toISOString();
+  return enqueueStrategyCommit((book, manualPlans) => strategyStoreApi.migrateManualPlans(
+    book,
+    manualPlans,
+    { instrumentKey, underlying, at: timestamp }
+  ));
 }
 
 function uniqueAxisCandidates(candidates) {
@@ -276,20 +319,31 @@ async function captureAxisScale(_sender, message) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const manualMutation = isManualPlanMutationMessage(message?.type);
   const chainFetch = isChainFetchMessage(message?.type);
-  if (!isCaptureMessage(message?.type) && !manualMutation && !chainFetch) return;
+  const strategyMutation = isStrategyMutationMessage(message?.type);
+  const strategyMigration = isStrategyMigrationMessage(message?.type);
+  if (!isCaptureMessage(message?.type) && !manualMutation && !chainFetch
+    && !strategyMutation && !strategyMigration) return;
   if (!isTradingViewSender(sender)) {
     sendResponse({
       ok: false,
       error: chainFetch
         ? "Option-chain refresh is limited to TradingView tabs."
+        : strategyMutation || strategyMigration
+        ? "Strategy mutations are limited to TradingView tabs."
         : manualMutation
         ? "Manual plan mutations are limited to TradingView tabs."
         : "Axis capture is limited to TradingView tabs."
     });
-    return chainFetch || undefined;
+    return chainFetch || strategyMutation || strategyMigration || undefined;
   }
   const operation = chainFetch
     ? fetchNiftyChain(message.expiry).then((chain) => ({ ok: true, chain }))
+    : strategyMutation
+    ? enqueueStrategyMutation(message.command)
+      .then((strategyBook) => ({ ok: true, strategyBook }))
+    : strategyMigration
+    ? enqueueStrategyMigration(message)
+      .then((strategyBook) => ({ ok: true, strategyBook }))
     : manualMutation
     ? enqueueManualPlanMutation(message.mutation)
       .then((manualPlans) => ({ ok: true, manualPlans }))
@@ -311,6 +365,10 @@ if (typeof module !== "undefined" && module.exports) {
     isCaptureMessage,
     isChainFetchMessage,
     isManualPlanMutationMessage,
-    isolateAxisCandidates
+    isolateAxisCandidates,
+    isStrategyMigrationMessage,
+    isStrategyMutationMessage,
+    enqueueStrategyMigration,
+    enqueueStrategyMutation
   };
 }
