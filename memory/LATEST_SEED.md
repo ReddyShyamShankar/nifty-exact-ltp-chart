@@ -1,18 +1,19 @@
-# LATEST SEED — Options Indicator
+# LATEST SEED — Options Ladder
 
 ## STATE
 
-NIFTY Axis LTP Ladder v0.3.8 is loaded in Chrome from `.worktrees/timeframe-axis-ladder/extension-axis-ladder`; original NIFTY Chain LTP Overlay v0.14.0 remains disabled and untouched as backup. New extension displays thirteen exact Call/Put rows at TradingView native right-axis price coordinates and follows timeframe, zoom, and inverse-scale transforms. Live verification passed on 4-hour and Monthly charts, including return from Monthly to 4-hour.
+Options Ladder v0.5.0 is loaded from `.worktrees/timeframe-axis-ladder/extension-axis-ladder` and remains isolated on `codex/timeframe-axis-ladder` for user testing. Manual refresh, side panel, exact-axis ladder, clicked-strike break-evens, manual what-if positions, side-specific lot badges, full-width plan rails, and individual-position P&L flips are implemented. GitHub holds both `codex/timeframe-axis-ladder` and `codex/timeframe-axis-ladder-base`; full suite passes 450/450.
 
 ## NEXT_LINE
 
-Use Axis Ladder v0.3.8 across live-market timeframes and report visual or loading feedback; keep original v0.14.0 disabled until final product choice.
+Create a separate worktree/branch for the next approved UI change; keep `codex/timeframe-axis-ladder` unchanged as the tested checkpoint until user accepts it.
 
 ## MEMORY_KEY
 
-Current candidate is independent Axis Ladder v0.3.8: Upstox chain -> thirteen exact strikes -> TradingView native axis capture -> same right-axis coordinates through timeframe, zoom, and inverse-scale changes; original Pine-sync v0.14.0 stays as backup.
+Options Ladder v0.5.0 manual-first checkpoint: explicit refresh, TradingView side panel, exact-axis 13-row ladder, clicked-strike BE rails, double-click plan editor, C/P lot badges, and individual P&L flips; live positions deferred.
 
 ## OPEN_QUESTIONS
-- Should Axis Ladder become primary product after live-market trial, or should original Pine-sync flow remain primary?
-- Should ATM and thirteen-strike membership update automatically at each 100-point crossing?
-- What is final product name and logo?
+- Which UI correction should start in the next isolated thread?
+- Does the 0.00 option-LTP state reproduce after a healthy bridge refresh, and should zero upstream quotes fail closed visibly?
+- When should live Zerodha positions graduate from deferred foundation to chart-visible workflow?
+- When should `codex/timeframe-axis-ladder` merge into the primary branch after user testing?

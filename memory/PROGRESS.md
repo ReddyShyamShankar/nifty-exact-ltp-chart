@@ -59,3 +59,33 @@ Product deployment remains blocked by Advanced Charts access and verified Upstox
 - Fixed timeframe auto-fit retries, invalid-marker cluster rejection, sparse native-axis capture, equal-price marker precedence, latest canvas-paint selection, and repeated layout-read overhead.
 - Full extension suite passes 124/124; syntax checks and `git diff --check` pass.
 - Live browser verification passed on 4-hour and Monthly timeframes, including Monthly-to-4-hour return; inverse-scale and zoom tests preserved strike membership while correctly changing row direction or coordinates.
+
+## #9 — 2026-07-30T11:09:53+05:30 — feat
+Shipped manual refresh and TradingView side panel
+
+Renamed product to Options Ladder, moved workflow into a light TradingView-only Chrome side panel, and kept refresh immediately accessible. Chain requests now run only from explicit refresh and concurrent or near-duplicate requests share one upstream response.
+
+## #10 — 2026-07-30T11:09:53+05:30 — feat
+Built read-only seller evidence foundation
+
+Added Zerodha read-only login, positions, trades, immutable evidence, strategy allocation, CSV import, and deterministic seller payoff calculations. No order API exists; user deferred live-position workflow until manual chart planning feels clear.
+
+## #11 — 2026-07-30T11:09:53+05:30 — feat
+Added clicked-strike break-even rails
+
+Single-clicking one ladder strike highlights its full row and draws exact Call and Put single-leg expiry break-evens. Rails clear on outside click, use full chart width, and stay tied to native TradingView price coordinates.
+
+## #12 — 2026-07-30T11:09:53+05:30 — feat
+Added chart-native manual strategy builder
+
+Double-clicking a strike opens an in-place editor for Call or Put, Buy or Sell, lots, and entry premium. Saved positions keep separate Call and Put entries, frozen entry snapshots, and aggregated top-left `C<n>` / `P<n>` lot badges.
+
+## #13 — 2026-07-30T11:09:53+05:30 — fix
+Refined manual plan chart interactions
+
+Buy uses blue, Sell uses red, ATM keeps existing orange, and selected rows use yellow fill. Plan break-even rails span left and right; each rail label flips through approximate individual position P&L rather than one combined plan value.
+
+## #14 — 2026-07-30T11:09:53+05:30 — note
+Verified and published checkpoint branches
+
+Chrome reload confirmed new build with `C2`, `P3`, and `P1` badges plus correct Buy/Sell tokens and flippable plan rails. Full suite passes 450/450; base bridge and feature branches were committed and pushed to GitHub, with temporary brainstorm runtime files ignored.
