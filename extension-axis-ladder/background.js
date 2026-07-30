@@ -47,10 +47,6 @@ function isCaptureMessage(type) {
   return type === "CAPTURE_AXIS_SCALE";
 }
 
-function isFitMessage(type) {
-  return type === "FIT_AXIS_SCALE";
-}
-
 function isManualPlanMutationMessage(type) {
   return type === MANUAL_PLAN_MUTATION;
 }
@@ -82,84 +78,6 @@ function enqueueManualPlanMutation(mutation) {
   const result = manualPlanMutationTail.then(commit, commit);
   manualPlanMutationTail = result.catch(() => {});
   return result;
-}
-
-const fittingTabs = new Set();
-
-async function dispatchScaleDrag(debuggee, x, startY, endY) {
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mouseMoved", x, y: startY
-  });
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mousePressed", x, y: startY, button: "left", buttons: 1, clickCount: 1
-  });
-  const steps = 6;
-  for (let step = 1; step <= steps; step += 1) {
-    const y = startY + (endY - startY) * step / steps;
-    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mouseMoved", x, y, button: "left", buttons: 1
-    });
-  }
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mouseReleased", x, y: endY, button: "left", buttons: 0, clickCount: 1
-  });
-}
-
-async function dispatchScaleDoubleClick(debuggee, x, y) {
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mouseMoved", x, y
-  });
-  for (const clickCount of [1, 2]) {
-    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mousePressed", x, y, button: "left", buttons: 1, clickCount
-    });
-    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount
-    });
-  }
-}
-
-async function fitAxisScale(sender, message) {
-  const tabId = Number(sender?.tab?.id);
-  const plot = normalizedRect(message?.plotRect);
-  const viewportWidth = finiteNumber(message?.viewportWidth);
-  const viewportHeight = finiteNumber(message?.viewportHeight);
-  const attempt = Number(message?.attempt);
-  const direction = message?.direction === "in" ? "in" : "out";
-  if (!Number.isInteger(tabId) || tabId <= 0 || !plot || viewportWidth === null || viewportHeight === null) {
-    return { ok: false, error: "Invalid price-scale fit request." };
-  }
-  if (fittingTabs.has(tabId)) return { ok: false, error: "Price-scale fit already running." };
-
-  const x = Math.min(viewportWidth - 8, plot.right + 18);
-  const startY = Math.max(plot.top + 24, plot.top + (plot.bottom - plot.top) * 0.50);
-  const dragMagnitude = message?.timeframe === "1m" ? 96 : 48;
-  const dragDelta = direction === "in" ? -dragMagnitude : dragMagnitude;
-  const endY = Math.max(plot.top + 24, Math.min(plot.bottom - 24, startY + dragDelta));
-  if (![x, startY, endY].every(Number.isFinite) || x <= plot.right || endY === startY) {
-    return { ok: false, error: "TradingView price scale is unavailable." };
-  }
-
-  const debuggee = { tabId };
-  fittingTabs.add(tabId);
-  let attached = false;
-  try {
-    await chrome.debugger.attach(debuggee, "1.3");
-    attached = true;
-    if (!Number.isFinite(attempt) || attempt <= 1 || message?.direction === "reset") {
-      await dispatchScaleDoubleClick(debuggee, x, startY);
-    } else {
-      await dispatchScaleDrag(debuggee, x, startY, endY);
-    }
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error?.message || "Trusted price-scale gesture failed." };
-  } finally {
-    if (attached) {
-      try { await chrome.debugger.detach(debuggee); } catch { /* Tab may have closed. */ }
-    }
-    fittingTabs.delete(tabId);
-  }
 }
 
 function uniqueAxisCandidates(candidates) {
@@ -329,7 +247,7 @@ async function captureAxisScale(_sender, message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const manualMutation = isManualPlanMutationMessage(message?.type);
-  if (!isCaptureMessage(message?.type) && !isFitMessage(message?.type) && !manualMutation) return;
+  if (!isCaptureMessage(message?.type) && !manualMutation) return;
   if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
     sendResponse({
       ok: false,
@@ -342,7 +260,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const operation = manualMutation
     ? enqueueManualPlanMutation(message.mutation)
       .then((manualPlans) => ({ ok: true, manualPlans }))
-    : isFitMessage(message?.type) ? fitAxisScale(sender, message) : captureAxisScale(sender, message);
+    : captureAxisScale(sender, message);
   operation
     .then(sendResponse)
     .catch((error) => sendResponse({ ok: false, error: error.message }));
@@ -354,12 +272,9 @@ if (typeof module !== "undefined" && module.exports) {
     applyManualPlanMutation,
     axisPairsFromCandidates,
     captureAxisScale,
-    dispatchScaleDrag,
     enqueueManualPlanMutation,
     extractAxisPrices,
-    fitAxisScale,
     isCaptureMessage,
-    isFitMessage,
     isManualPlanMutationMessage,
     isolateAxisCandidates
   };

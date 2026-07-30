@@ -8,7 +8,7 @@ test("new extension has independent identity", () => {
   assert.equal(manifest.name, "Options Ladder");
   assert.equal(manifest.version, "0.5.0");
   assert.equal(manifest.minimum_chrome_version, "141");
-  assert.equal(manifest.permissions.includes("debugger"), true);
+  assert.equal(manifest.permissions.includes("debugger"), false);
   assert.equal(manifest.permissions.includes("sidePanel"), true);
   assert.deepEqual(manifest.side_panel, { default_path: "popup.html" });
   assert.equal(Object.hasOwn(manifest.action, "default_popup"), false);

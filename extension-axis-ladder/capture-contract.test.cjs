@@ -48,11 +48,6 @@ function loadBackground({ manualPlans = manualPlan.emptyStore() } = {}) {
           if (Object.hasOwn(values, manualPlan.STORAGE_KEY)) manualWrites.push(values[manualPlan.STORAGE_KEY]);
         }
       }
-    },
-    debugger: {
-      async attach() {},
-      async detach() {},
-      async sendCommand() {}
     }
   };
   global.importScripts = (...files) => {
@@ -70,14 +65,26 @@ function loadBackground({ manualPlans = manualPlan.emptyStore() } = {}) {
 test("exports native-axis capture and single-writer manual mutation API", () => {
   const { api } = loadBackground();
   assert.deepEqual(Object.keys(api).sort(), [
-    "applyManualPlanMutation", "axisPairsFromCandidates", "captureAxisScale", "dispatchScaleDrag",
-    "enqueueManualPlanMutation", "extractAxisPrices", "fitAxisScale", "isCaptureMessage",
-    "isFitMessage", "isManualPlanMutationMessage", "isolateAxisCandidates"
+    "applyManualPlanMutation", "axisPairsFromCandidates", "captureAxisScale",
+    "enqueueManualPlanMutation", "extractAxisPrices", "isCaptureMessage",
+    "isManualPlanMutationMessage", "isolateAxisCandidates"
   ]);
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), false);
-  assert.equal(api.isFitMessage("FIT_AXIS_SCALE"), true);
   assert.equal(api.isManualPlanMutationMessage("MUTATE_MANUAL_PLANS"), true);
+});
+
+test("background ignores synthetic price-scale gesture requests", () => {
+  const { listeners } = loadBackground();
+  let responses = 0;
+  const handled = listeners.message(
+    { type: "FIT_AXIS_SCALE" },
+    { tab: { id: 7 }, url: "https://www.tradingview.com/chart/test/" },
+    () => { responses += 1; }
+  );
+
+  assert.equal(handled, undefined);
+  assert.equal(responses, 0);
 });
 
 function manualEntry(overrides = {}) {
@@ -205,72 +212,6 @@ test("background installs tab-specific side panel without changing capture API",
   assert.equal(typeof listeners.activated, "function");
   assert.deepEqual(sidePanelCalls[0], ["behavior", { openPanelOnActionClick: true }]);
   assert.equal(typeof api.captureAxisScale, "function");
-  assert.equal(typeof api.fitAxisScale, "function");
-});
-
-test("first trusted scale fit resets TradingView price scale and detaches", async () => {
-  const { api } = loadBackground();
-  const calls = [];
-  global.chrome.debugger.attach = async (...args) => calls.push(["attach", ...args]);
-  global.chrome.debugger.sendCommand = async (...args) => calls.push(["command", ...args]);
-  global.chrome.debugger.detach = async (...args) => calls.push(["detach", ...args]);
-
-  assert.deepEqual(await api.fitAxisScale({ tab: { id: 7 } }, {
-    plotRect: { left: 50, top: 40, right: 1000, bottom: 740 },
-    viewportWidth: 1120,
-    viewportHeight: 800,
-    attempt: 1,
-    direction: "out"
-  }), { ok: true });
-  assert.deepEqual(calls[0], ["attach", { tabId: 7 }, "1.3"]);
-  const commands = calls.filter(([kind]) => kind === "command");
-  assert.equal(commands.length, 5);
-  assert.deepEqual(commands.slice(1).map(([, , , params]) => [params.type, params.clickCount]), [
-    ["mousePressed", 1], ["mouseReleased", 1], ["mousePressed", 2], ["mouseReleased", 2]
-  ]);
-  assert.equal(commands[1][3].x, 1018);
-  assert.deepEqual(calls.at(-1), ["detach", { tabId: 7 }]);
-});
-
-test("later trusted scale fit uses a gentle bounded drag", async () => {
-  const { api } = loadBackground();
-  const calls = [];
-  global.chrome.debugger.attach = async (...args) => calls.push(["attach", ...args]);
-  global.chrome.debugger.sendCommand = async (...args) => calls.push(["command", ...args]);
-  global.chrome.debugger.detach = async (...args) => calls.push(["detach", ...args]);
-
-  assert.deepEqual(await api.fitAxisScale({ tab: { id: 7 } }, {
-    plotRect: { left: 50, top: 40, right: 1000, bottom: 740 },
-    viewportWidth: 1120,
-    viewportHeight: 800,
-    attempt: 2,
-    direction: "out"
-  }), { ok: true });
-  const pressed = calls.find(([, , method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed");
-  const released = calls.find(([, , method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mouseReleased");
-  assert.equal(pressed[3].x, 1018);
-  assert.equal(released[3].y - pressed[3].y, 48);
-  assert.deepEqual(calls.at(-1), ["detach", { tabId: 7 }]);
-});
-
-test("1-minute scale fit uses a stronger bounded drag", async () => {
-  const { api } = loadBackground();
-  const calls = [];
-  global.chrome.debugger.attach = async (...args) => calls.push(["attach", ...args]);
-  global.chrome.debugger.sendCommand = async (...args) => calls.push(["command", ...args]);
-  global.chrome.debugger.detach = async (...args) => calls.push(["detach", ...args]);
-
-  assert.deepEqual(await api.fitAxisScale({ tab: { id: 7 } }, {
-    plotRect: { left: 50, top: 40, right: 1000, bottom: 740 },
-    viewportWidth: 1120,
-    viewportHeight: 800,
-    attempt: 2,
-    direction: "out",
-    timeframe: "1m"
-  }), { ok: true });
-  const pressed = calls.find(([, , method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed");
-  const released = calls.find(([, , method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mouseReleased");
-  assert.equal(released[3].y - pressed[3].y, 96);
 });
 
 test("native-axis extractor accepts only plain comma-formatted axis labels", () => {

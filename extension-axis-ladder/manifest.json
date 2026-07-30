@@ -4,7 +4,7 @@
   "name": "Options Ladder",
   "version": "0.5.0",
   "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
-  "permissions": ["storage", "activeTab", "debugger", "sidePanel"],
+  "permissions": ["storage", "activeTab", "sidePanel"],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
     "https://tradingview.com/*",

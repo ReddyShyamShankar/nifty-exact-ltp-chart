@@ -576,7 +576,7 @@ test("controller uses its own two-capture stability check without requiring obse
   assert.equal(controller.membership().timeframe, "1W");
 });
 
-test("timeframe changes keep independent contract spacing after prior scale auto-fit", async () => {
+test("timeframe changes keep independent contract spacing after prior scale changes", async () => {
   const denseChain = {
     spot: 23767.45,
     rows: Array.from({ length: 121 }, (_, index) => ({
@@ -2024,27 +2024,10 @@ test("live badge installs once outside ladder state, isolates failure, and stops
   assert.equal(run({ install() { throw new Error("decorator unavailable"); } }), true);
 });
 
-test("trusted scale fit waits for a fresh observer frame before retrying placement", () => {
-  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
-  const request = source.match(/function requestScaleFit[\s\S]*?\n  \}/)?.[0] || "";
-  assert.match(request, /observationBeforeFit = axisObservationAt\(\)/);
-  assert.match(request, /await waitForFreshAxisObservation\(observationBeforeFit\);[\s\S]*?scaleFitInFlight = false;[\s\S]*?await controller\?\.place\(\)/);
-});
-
-test("new timeframe resets exhausted scale-fit budget before attempt guard", () => {
-  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
-  const request = source.match(/function requestScaleFit[\s\S]*?\n  \}/)?.[0] || "";
-  assert.ok(
-    request.indexOf("scaleFitTimeframe !== timeframe") < request.indexOf("scaleFitAttempts >= 6"),
-    "timeframe reset must happen before exhausted-attempt guard"
-  );
-});
-
-test("trusted scale fit includes active timeframe for calibrated drag strength", () => {
-  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
-  const body = source.match(/function requestScaleFit\([\s\S]*?\n  \}/)?.[0] || "";
-  const request = body.match(/chrome\.runtime\.sendMessage\(\{([\s\S]*?)\}\)\.then/)?.[1] || "";
-  assert.match(request, /timeframe/);
+test("unsafe viewport placement returns manual zoom guidance without changing chart scale", () => {
+  assert.equal(api.priceScaleFailure("overlap"), "13 STRIKES OVERLAP AT THIS SCALE · ZOOM IN");
+  assert.equal(api.priceScaleFailure("outside"), "13 STRIKES OUTSIDE VISIBLE PRICE RANGE · ZOOM OUT");
+  assert.throws(() => api.priceScaleFailure("unknown"), /Unknown price-scale failure/);
 });
 
 test("breakeven module loads before content and selection remains explicit", () => {

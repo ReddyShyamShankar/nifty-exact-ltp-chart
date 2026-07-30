@@ -131,6 +131,12 @@
     });
   }
 
+  function priceScaleFailure(kind) {
+    if (kind === "overlap") return "13 STRIKES OVERLAP AT THIS SCALE · ZOOM IN";
+    if (kind === "outside") return "13 STRIKES OUTSIDE VISIBLE PRICE RANGE · ZOOM OUT";
+    throw new Error("Unknown price-scale failure.");
+  }
+
   function riskLabelLayout(laneZeroRows) {
     const rows = Array.isArray(laneZeroRows) ? laneZeroRows : [laneZeroRows];
     if (!rows.length || rows.some((row) => !row || typeof row.getBoundingClientRect !== "function")) return null;
@@ -467,8 +473,7 @@
       clearCachedRiskPlacement();
       hideRisk();
       hideRows(message || "AXIS CALIBRATION UNAVAILABLE");
-      const delayFloor = message === "AUTO-FITTING PRICE SCALE" ? 500 : 0;
-      if (allowRetry) retryRebuild(localGeneration, timeframe, requestedExpiry, minimumObservedAt, delayFloor);
+      if (allowRetry) retryRebuild(localGeneration, timeframe, requestedExpiry, minimumObservedAt);
       return false;
     }
 
@@ -840,7 +845,8 @@
     riskBandClassName,
     riskLabelLayout,
     rowLaneLayout,
-    rowsFitPlot
+    rowsFitPlot,
+    priceScaleFailure
   };
   root.NiftyAxisLadderContent = api;
   if (typeof module !== "undefined" && module.exports) {
@@ -856,9 +862,6 @@
   let currentLabel = null;
   let currentUrl = String(root.location?.href || "");
   let runtimeObserver = null;
-  let scaleFitAttempts = 0;
-  let scaleFitInFlight = false;
-  let scaleFitTimeframe = null;
   let normalStatus = "LIVE";
   let breakEvenStatusOverride = null;
   let manualPayoffStatusOverride = null;
@@ -1675,61 +1678,11 @@
     }
   }
 
-  async function waitForFreshAxisObservation(previousAt, timeout = 1800) {
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-      if (axisObservationAt() > previousAt) {
-        await new Promise((resolve) => setTimeout(resolve, 180));
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 80));
-    }
-    return false;
-  }
-
   async function fetchChain(expiry, signal) {
     const response = await fetch(`${API}/api/nifty-chain?expiry=${encodeURIComponent(expiry)}`, { cache: "no-store", signal });
     const chain = await response.json();
     if (!response.ok) throw new Error(chain.error || "Option chain unavailable.");
     return chain;
-  }
-
-  function requestScaleFit(rect, timeframe, direction = "out") {
-    if (scaleFitTimeframe !== timeframe) {
-      scaleFitTimeframe = timeframe;
-      scaleFitAttempts = 0;
-    }
-    if (scaleFitInFlight || scaleFitAttempts >= 6) return false;
-    scaleFitInFlight = true;
-    scaleFitAttempts += 1;
-    const observationBeforeFit = axisObservationAt();
-    chrome.runtime.sendMessage({
-      type: "FIT_AXIS_SCALE",
-      plotRect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      attempt: scaleFitAttempts,
-      direction,
-      timeframe
-    }).then(async (result) => {
-      if (!settings.enabled || timeframe !== timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || "")) {
-        scaleFitInFlight = false;
-        return;
-      }
-      if (!result?.ok) {
-        scaleFitInFlight = false;
-        showStatus(`AUTO-FIT UNAVAILABLE · ${result?.error || "TRUSTED GESTURE FAILED"}`);
-        return;
-      }
-      await waitForFreshAxisObservation(observationBeforeFit);
-      scaleFitInFlight = false;
-      if (!settings.enabled || timeframe !== timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || "")) return;
-      await controller?.place();
-    }).catch((error) => {
-      scaleFitInFlight = false;
-      showStatus(`AUTO-FIT UNAVAILABLE · ${error?.message || "TRUSTED GESTURE FAILED"}`);
-    });
-    return true;
   }
 
   function placeRows(rows, membership, toY, visualPlacementRevision) {
@@ -1743,9 +1696,7 @@
     const node = rootNode();
     const layout = rowLaneLayout(rows, membership?.atm, membership?.interval);
     if (!layout) {
-      const timeframe = membership?.timeframe || timeframeApi.timeframeKey(canvas.getAttribute("aria-label") || "");
-      if (requestScaleFit(rect, timeframe, "reset")) throw new Error("AUTO-FITTING PRICE SCALE");
-      throw new Error("13 STRIKES OVERLAP AT THIS SCALE · ZOOM IN");
+      throw new Error(priceScaleFailure("overlap"));
     }
     const elements = rows.map((row) => ({
       row,
@@ -1767,9 +1718,7 @@
       const laneOffset = Math.ceil(Math.max(...dimensions.map(({ width }) => width))) + 10;
       const baseRight = Math.max(0, window.innerWidth - rect.right + 7);
       if (!rowsFitPlot(rows, dimensions, rect, window.innerWidth, baseRight, layout.lanes, laneOffset)) {
-        const timeframe = membership?.timeframe || timeframeApi.timeframeKey(canvas.getAttribute("aria-label") || "");
-        if (requestScaleFit(rect, timeframe, "out")) throw new Error("AUTO-FITTING PRICE SCALE");
-        throw new Error("13 STRIKES OUTSIDE VISIBLE PRICE RANGE · ZOOM OUT");
+        throw new Error(priceScaleFailure("outside"));
       }
       elements.forEach(({ row, element }, index) => {
         const lane = layout.lanes[index];
@@ -1787,8 +1736,6 @@
       const railDecorations = sharedRailDecorations(toY, rect);
       placeBreakEvenRails(toY, rect, labelRight, railDecorations.quick, visualPlacementRevision);
       placeManualPlanRails(toY, rect, labelRight, railDecorations.manual, visualPlacementRevision);
-      scaleFitAttempts = 0;
-      scaleFitTimeframe = membership?.timeframe || scaleFitTimeframe;
       return { riskLayout: { labelRight } };
     } catch (error) {
       clearBreakEvenRails(visualPlacementRevision);
@@ -2024,9 +1971,6 @@
     timeframeTimer = null;
     clearTimeout(axisPlacementTimer);
     axisPlacementTimer = null;
-    scaleFitAttempts = 0;
-    scaleFitInFlight = false;
-    scaleFitTimeframe = null;
     clearRetries();
     runtimeObserver?.disconnect();
     runtimeObserver = null;

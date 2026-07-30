@@ -19,6 +19,8 @@ Version 0.5.0 adds a manual NIFTY options strategy builder directly to the Tradi
 
 Plans stay in local extension storage, keyed by exact expiry. The background service worker serializes mutations across tabs so one valid edit cannot overwrite another. Entry premiums and captured snapshots remain fixed through refresh, reload, timeframe changes, zoom, pan, and side-panel activity; an unavailable opposite-side snapshot remains unavailable. Malformed stored entries are quarantined for recovery and reported as `MANUAL ENTRY NEEDS REVIEW` instead of being discarded. Invalid axis data fails closed.
 
+Extension never changes TradingView price scale or Auto-fit state and requests no Chrome debugger access. When 13 exact rows cannot fit current viewport safely, chart status asks user to zoom in or out.
+
 ## Setup
 
 Load [`extension-axis-ladder`](extension-axis-ladder) as an unpacked extension in Chrome 141 or newer. Open a logged-in TradingView NIFTY chart, select the exact expiry, and use the existing explicit refresh to populate live option values. Double-click a row to start the manual plan.
