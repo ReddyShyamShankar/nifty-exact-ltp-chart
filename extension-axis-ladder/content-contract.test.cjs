@@ -1824,7 +1824,7 @@ test("entry faces contain exact compact copy without redundant trade words or ic
   assert.match(source, /×\$\{active\.lots\}/);
 });
 
-test("top-left lot badges and inline editor use neutral tokens without moving row geometry", () => {
+test("top-left lot badges use yellow emphasis without moving row geometry", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const badges = css.match(/\.nifty-axis-ladder__badges\s*\{([^}]+)\}/)?.[1] || "";
   const badge = css.match(/\.nifty-axis-ladder__badge\s*\{([^}]+)\}/)?.[1] || "";
@@ -1832,8 +1832,9 @@ test("top-left lot badges and inline editor use neutral tokens without moving ro
   assert.match(badges, /position:\s*absolute/);
   assert.match(badges, /left:\s*4px/);
   assert.match(badges, /top:\s*-9px/);
-  assert.match(badge, /background:\s*var\(--ladder-surface\)/);
-  assert.match(badge, /color:\s*var\(--ladder-ink\)/);
+  assert.match(badge, /border:\s*1px solid var\(--ladder-selected-ink\)/);
+  assert.match(badge, /background:\s*var\(--ladder-selected\)/);
+  assert.match(badge, /color:\s*var\(--ladder-selected-ink\)/);
   assert.match(editor, /position:\s*fixed/);
   assert.match(editor, /z-index:\s*[3-9]/);
   assert.match(editor, /top:\s*50%/);

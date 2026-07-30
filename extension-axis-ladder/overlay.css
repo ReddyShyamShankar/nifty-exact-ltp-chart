@@ -257,10 +257,10 @@
   min-width: 16px;
   height: 14px;
   padding: 0 3px;
-  border: 1px solid var(--ladder-ink);
+  border: 1px solid var(--ladder-selected-ink);
   border-radius: 7px;
-  background: var(--ladder-surface);
-  color: var(--ladder-ink);
+  background: var(--ladder-selected);
+  color: var(--ladder-selected-ink);
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
