@@ -23,6 +23,7 @@ function loadBackground({
   const strategyWrites = [];
   global.chrome = {
     runtime: {
+      id: "options-ladder-test",
       onMessage: { addListener(listener) { listeners.message = listener; } },
       onInstalled: { addListener(listener) { listeners.installed = listener; } },
       onStartup: { addListener(listener) { listeners.startup = listener; } }
@@ -143,6 +144,36 @@ test("strategy mutation accepts TradingView and rejects foreign senders", async 
   });
   assert.deepEqual(rejected, { ok: false, error: "Strategy mutations are limited to TradingView tabs." });
   assert.equal(strategyStore.strategyById(h.local.strategyBook, "s2"), null);
+});
+
+test("strategy mutation accepts own side panel and rejects spoofed extension sender", async () => {
+  const h = loadBackground();
+  const own = await new Promise((resolve) => {
+    const handled = h.listeners.message(
+      { type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("create-side-panel", "panel") },
+      {
+        id: "options-ladder-test",
+        url: "chrome-extension://options-ladder-test/popup.html"
+      },
+      resolve
+    );
+    assert.equal(handled, true);
+  });
+  assert.equal(own.ok, true);
+  assert.equal(strategyStore.strategyById(h.local.strategyBook, "panel").label, "PANEL");
+
+  const spoofed = await new Promise((resolve) => {
+    h.listeners.message(
+      { type: "MUTATE_STRATEGY_BOOK", command: createStrategyCommand("create-spoofed", "spoofed") },
+      {
+        id: "foreign-extension",
+        url: "chrome-extension://foreign-extension/popup.html"
+      },
+      resolve
+    );
+  });
+  assert.deepEqual(spoofed, { ok: false, error: "Strategy mutations are limited to TradingView tabs." });
+  assert.equal(strategyStore.strategyById(h.local.strategyBook, "spoofed"), null);
 });
 
 test("strategy queue serializes concurrent commands without lost updates", async () => {

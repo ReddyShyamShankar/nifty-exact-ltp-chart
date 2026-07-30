@@ -2761,6 +2761,28 @@ test("production strategy rails open details, synchronize squares, preview combi
   assert.equal(rails.querySelectorAll(".nifty-strategy__selector").every((node) => node.getAttribute("aria-pressed") === "false"), true);
 });
 
+test("side panel reads temporary chart strategy selection without mutating it", async () => {
+  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  await h.settle();
+  const selector = h.strategyRails().querySelectorAll(".nifty-strategy__selector")[0];
+  selector.dispatch("click", { stopPropagation() {} });
+  await h.settle();
+
+  let response = null;
+  const handled = h.runtimeListeners[0]({ type: "GET_STRATEGY_PREVIEW_STATE" }, null, (value) => { response = value; });
+  assert.equal(handled, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), {
+    ok: true,
+    selectedIds: ["s1"],
+    compare: false,
+    instrumentKey: "NSE_DLY:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25"
+  });
+  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__selector")
+    .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
+});
+
 test("new leg waits for explicit chart strategy ownership before any write", async () => {
   const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
   await h.settle();

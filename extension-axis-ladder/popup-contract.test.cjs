@@ -36,7 +36,35 @@ test("popup loads pure seller scripts before browser orchestration", () => {
   const html = read("popup.html");
   const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map((match) => match[1]);
 
-  assert.deepEqual(scripts, ["theme.js", "seller-view-identity.js", "seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js", "popup.js"]);
+  assert.deepEqual(scripts, [
+    "theme.js", "seller-view-identity.js", "seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js",
+    "strategy-store.js", "strategy-panel.js", "popup.js"
+  ]);
+});
+
+test("side panel exposes permanent strategy save, versions, split, restore, archive, and ledger history", () => {
+  const html = read("popup.html");
+  const js = read("popup.js");
+  for (const id of [
+    "strategy-manager", "strategy-preview-summary", "strategy-book-select", "strategy-save",
+    "strategy-save-decision", "strategy-save-destination", "strategy-save-confirm",
+    "strategy-versions", "strategy-split", "strategy-archive", "strategy-ledger-history"
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /LEDGER HISTORY/);
+  assert.match(js, /OptionsStrategyPanel\.commandForSave/);
+  assert.match(js, /OptionsStrategyPanel\.commandForSplit/);
+  assert.match(js, /OptionsStrategyPanel\.commandForRestore/);
+  assert.match(js, /MUTATE_STRATEGY_BOOK/);
+  assert.match(js, /GET_STRATEGY_PREVIEW_STATE/);
+});
+
+test("strategy manager reuses ARB Desk tokens without extra colors", () => {
+  const css = read("popup.css");
+  const section = css.slice(css.indexOf(".strategy-manager"));
+  assert.match(section, /var\(--panel\)/);
+  assert.match(section, /var\(--line/);
+  assert.match(section, /var\(--accent\)/);
+  assert.doesNotMatch(section, /#[0-9a-f]{3,8}\b/i);
 });
 
 test("side panel uses exact ARB Desk dark and light controls with matching native field scheme", () => {

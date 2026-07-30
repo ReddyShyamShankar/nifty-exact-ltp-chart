@@ -14,7 +14,10 @@ const DEFAULTS = {
   sellerSafetyRefreshFailuresByExpiry: {},
   sellerSafetyPending: null,
   sellerSafetyChain: null,
-  sellerSafetyChainsByExpiry: {}
+  sellerSafetyChainsByExpiry: {},
+  strategyBook: {
+    version: 1, nextSequence: 1, legs: {}, strategies: {}, versions: {}, quarantine: [], appliedCommands: {}
+  }
 };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
@@ -23,6 +26,233 @@ let brokerStatus = { configured: false, connected: false, expiresAt: null };
 let expiries = [];
 let pendingReview = null;
 let candidateSequence = 0;
+let strategyPreviewState = { selectedIds: [], compare: false, instrumentKey: "", underlying: "", expiry: "" };
+let activeVersionedStrategyId = "";
+
+function strategyManagerAvailable() {
+  return Boolean($("#strategy-manager") && globalThis.OptionsStrategyStore && globalThis.OptionsStrategyPanel);
+}
+
+function strategyIdentity() {
+  return {
+    instrumentKey: strategyPreviewState.instrumentKey || undefined,
+    expiry: strategyPreviewState.expiry || undefined
+  };
+}
+
+function strategyManagerStatus(message) {
+  const node = $("#strategy-preview-summary");
+  if (node) node.textContent = message;
+}
+
+function strategyCommandId(prefix) {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}:${random}`;
+}
+
+async function readChartStrategyPreview() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !tab.url?.startsWith("https://www.tradingview.com/")) {
+    throw new Error("Open active TradingView chart first.");
+  }
+  const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_STRATEGY_PREVIEW_STATE" });
+  if (!response?.ok) throw new Error(response?.error || "Chart preview is unavailable.");
+  strategyPreviewState = {
+    selectedIds: Array.isArray(response.selectedIds) ? response.selectedIds : [],
+    compare: response.compare === true,
+    instrumentKey: response.instrumentKey || "",
+    underlying: response.underlying || "",
+    expiry: response.expiry || ""
+  };
+  return strategyPreviewState;
+}
+
+function strategyRow(title, detail, action) {
+  const row = document.createElement("div");
+  row.className = "strategy-manager__row";
+  const copy = document.createElement("span");
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  const meta = document.createElement("span");
+  meta.textContent = detail;
+  copy.append(strong, meta);
+  row.append(copy);
+  if (action) row.append(action);
+  return row;
+}
+
+function renderStrategyManager() {
+  if (!strategyManagerAvailable()) return;
+  const book = OptionsStrategyStore.normalizeBook(state.strategyBook);
+  const model = OptionsStrategyPanel.viewModel(book, strategyIdentity());
+  const select = $("#strategy-book-select");
+  const activeIds = new Set(model.active.map((item) => item.id));
+  if (!activeIds.has(activeVersionedStrategyId)) activeVersionedStrategyId = model.active[0]?.id || "";
+  select.replaceChildren(
+    optionNode("", "No active strategy"),
+    ...model.active.map((item) => optionNode(item.id, `${item.label} · ${item.expiry}`))
+  );
+  select.value = activeVersionedStrategyId;
+
+  const count = strategyPreviewState.selectedIds.length;
+  strategyManagerStatus(count
+    ? `${count} CHART STRATEG${count === 1 ? "Y" : "IES"} SELECTED · TEMPORARY`
+    : "NO CHART PREVIEW SELECTED");
+
+  const current = model.active.find((item) => item.id === activeVersionedStrategyId);
+  const legs = $("#strategy-current-legs");
+  legs.replaceChildren(...(current?.legs.length ? current.legs.map((leg) => {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.strategyLegId = leg.id;
+    checkbox.setAttribute("aria-label", `Select ${leg.optionType} ${leg.strike}`);
+    const label = document.createElement("label");
+    label.className = "strategy-manager__leg";
+    const copy = document.createElement("span");
+    copy.textContent = `${leg.optionType} ${leg.strike} · ${leg.direction} ×${leg.lots}`;
+    label.append(checkbox, copy);
+    const row = document.createElement("div");
+    row.className = "strategy-manager__row";
+    row.append(label);
+    return row;
+  }) : [strategyRow("NO ACTIVE LEGS", "Select a strategy above.")]));
+
+  const versions = $("#strategy-versions");
+  versions.replaceChildren(...(current?.versions.length ? current.versions.map((version) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = version.id === current.currentVersionId ? "CURRENT" : "RESTORE";
+    button.disabled = version.id === current.currentVersionId;
+    button.dataset.restoreVersionId = version.id;
+    return strategyRow(version.operation, new Date(version.createdAt).toLocaleString(), button);
+  }) : [strategyRow("NO VERSION HISTORY", "Saved changes appear here.")]));
+
+  const history = $("#strategy-ledger-history");
+  history.replaceChildren(...(model.history.length ? model.history.map((item) =>
+    strategyRow(`${item.label} · ${item.status}`, `${item.expiry} · ${item.versionCount} VERSION${item.versionCount === 1 ? "" : "S"}`)
+  ) : [strategyRow("NO ARCHIVED STRATEGIES", "Permanent history stays here.")]));
+}
+
+async function mutateVersionedStrategies(command) {
+  const response = await chrome.runtime.sendMessage({ type: "MUTATE_STRATEGY_BOOK", command });
+  if (!response?.ok || !response.strategyBook) throw new Error(response?.error || "Strategy save failed.");
+  await persist({ strategyBook: response.strategyBook });
+  renderStrategyManager();
+  return response.strategyBook;
+}
+
+async function beginPermanentSave() {
+  try {
+    const preview = await readChartStrategyPreview();
+    const choices = OptionsStrategyPanel.saveChoices(state.strategyBook, preview.selectedIds);
+    if (!choices.length) throw new Error("Select at least two chart strategies using square selectors.");
+    const destination = $("#strategy-save-destination");
+    const options = [optionNode("CREATE_NEW", "CREATE NEW STRATEGY")];
+    for (const choice of choices) {
+      for (const item of choice.destinations || []) options.push(optionNode(`EXISTING:${item.strategyId}`, `MERGE INTO ${item.label}`));
+    }
+    destination.replaceChildren(...options);
+    $("#strategy-save-decision").hidden = false;
+    renderStrategyManager();
+  } catch (error) {
+    strategyManagerStatus(friendlyError(error).toUpperCase());
+  }
+}
+
+async function confirmPermanentSave() {
+  try {
+    const value = $("#strategy-save-destination").value;
+    const createNew = value === "CREATE_NEW";
+    const strategyId = createNew ? strategyCommandId("strategy") : value.slice("EXISTING:".length);
+    const command = OptionsStrategyPanel.commandForSave({
+      commandId: strategyCommandId("merge"),
+      versionId: strategyCommandId("version"),
+      selectedIds: strategyPreviewState.selectedIds,
+      destination: createNew
+        ? { mode: "CREATE_NEW", strategyId, label: `T${Number(state.strategyBook?.nextSequence) || 1}` }
+        : { mode: "EXISTING", strategyId }
+    });
+    await mutateVersionedStrategies(command);
+    activeVersionedStrategyId = strategyId;
+    $("#strategy-save-decision").hidden = true;
+    renderStrategyManager();
+    strategyManagerStatus("PERMANENT VERSION SAVED · SOURCES ARCHIVED");
+  } catch (error) {
+    strategyManagerStatus(friendlyError(error).toUpperCase());
+  }
+}
+
+async function splitSelectedStrategyLegs() {
+  try {
+    if (!activeVersionedStrategyId) throw new Error("Select an active strategy first.");
+    const legIds = [...document.querySelectorAll("[data-strategy-leg-id]:checked")].map((node) => node.dataset.strategyLegId);
+    const destinationId = strategyCommandId("strategy");
+    const command = OptionsStrategyPanel.commandForSplit({
+      commandId: strategyCommandId("split"),
+      sourceStrategyId: activeVersionedStrategyId,
+      sourceVersionId: strategyCommandId("version"),
+      legIds,
+      destination: {
+        mode: "CREATE_NEW", destinationId,
+        strategyId: destinationId,
+        label: `T${Number(state.strategyBook?.nextSequence) || 1}`
+      },
+      destinationVersionId: strategyCommandId("version")
+    });
+    await mutateVersionedStrategies(command);
+    activeVersionedStrategyId = destinationId;
+    renderStrategyManager();
+    strategyManagerStatus("SELECTED LEGS SPLIT INTO NEW STRATEGY");
+  } catch (error) {
+    strategyManagerStatus(friendlyError(error).toUpperCase());
+  }
+}
+
+async function restoreStrategyVersion(versionId) {
+  try {
+    const command = OptionsStrategyPanel.commandForRestore({
+      commandId: strategyCommandId("restore"),
+      strategyId: activeVersionedStrategyId,
+      restoreVersionId: versionId,
+      versionId: strategyCommandId("version")
+    });
+    await mutateVersionedStrategies(command);
+    strategyManagerStatus("HISTORICAL VERSION RESTORED AS NEW VERSION");
+  } catch (error) {
+    strategyManagerStatus(friendlyError(error).toUpperCase());
+  }
+}
+
+async function archiveVersionedStrategy() {
+  try {
+    if (!activeVersionedStrategyId) throw new Error("Select an active strategy first.");
+    await mutateVersionedStrategies({
+      id: strategyCommandId("archive"), type: "ARCHIVE_STRATEGY", strategyId: activeVersionedStrategyId
+    });
+    activeVersionedStrategyId = "";
+    renderStrategyManager();
+    strategyManagerStatus("STRATEGY ARCHIVED · LEDGER HISTORY PRESERVED");
+  } catch (error) {
+    strategyManagerStatus(friendlyError(error).toUpperCase());
+  }
+}
+
+function bindStrategyManager() {
+  if (!strategyManagerAvailable()) return;
+  $("#strategy-book-select").addEventListener("change", (event) => {
+    activeVersionedStrategyId = event.target.value;
+    renderStrategyManager();
+  });
+  $("#strategy-save").addEventListener("click", beginPermanentSave);
+  $("#strategy-save-confirm").addEventListener("click", confirmPermanentSave);
+  $("#strategy-split").addEventListener("click", splitSelectedStrategyLegs);
+  $("#strategy-archive").addEventListener("click", archiveVersionedStrategy);
+  $("#strategy-versions").addEventListener("click", (event) => {
+    const versionId = event.target.closest?.("[data-restore-version-id]")?.dataset.restoreVersionId;
+    if (versionId) void restoreStrategyVersion(versionId);
+  });
+  void readChartStrategyPreview().catch(() => {}).finally(renderStrategyManager);
+}
 
 function friendlyError(error) {
   const message = String(error?.message || error || "Unknown error");
@@ -883,6 +1113,7 @@ async function init() {
   };
   await persist(migration);
   bindEvents();
+  bindStrategyManager();
   renderSettings();
   renderCurrent();
   await loadHealth();

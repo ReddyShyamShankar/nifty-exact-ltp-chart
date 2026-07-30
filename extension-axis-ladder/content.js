@@ -2572,10 +2572,22 @@
   });
 
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
-    if (!["CLEAR_BREAK_EVEN_SELECTION", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS"].includes(message?.type)) return false;
+    if (!["CLEAR_BREAK_EVEN_SELECTION", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS", "GET_STRATEGY_PREVIEW_STATE"].includes(message?.type)) return false;
     if (message.type === "CLEAR_BREAK_EVEN_SELECTION") {
       clearBreakEvenSelection();
       sendResponse({ ok: true });
+      return false;
+    }
+    if (message.type === "GET_STRATEGY_PREVIEW_STATE") {
+      const identity = currentStrategyIdentity();
+      sendResponse({
+        ok: true,
+        selectedIds: ensureStrategyChartController()?.selected() || [],
+        compare: ensureStrategyChartController()?.comparing() || false,
+        instrumentKey: identity?.instrumentKey || "",
+        underlying: identity?.underlying || "",
+        expiry: settings.expiry
+      });
       return false;
     }
     if (!settings.enabled) {

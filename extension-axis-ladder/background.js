@@ -80,6 +80,18 @@ function isTradingViewSender(sender) {
   }
 }
 
+function isExtensionSender(sender) {
+  if (typeof sender?.url !== "string" || typeof chrome?.runtime?.id !== "string") return false;
+  try {
+    const url = new URL(sender.url);
+    return sender.id === chrome.runtime.id
+      && url.protocol === "chrome-extension:"
+      && url.hostname === chrome.runtime.id;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchNiftyChain(expiry, fetchImpl = globalThis.fetch) {
   if (!manualPlanApi.isIsoDate(expiry)) throw new Error("Select one exact NIFTY expiry first.");
   const response = await fetchImpl(
@@ -323,7 +335,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const strategyMigration = isStrategyMigrationMessage(message?.type);
   if (!isCaptureMessage(message?.type) && !manualMutation && !chainFetch
     && !strategyMutation && !strategyMigration) return;
-  if (!isTradingViewSender(sender)) {
+  const trustedStrategySender = (strategyMutation || strategyMigration) && isExtensionSender(sender);
+  if (!isTradingViewSender(sender) && !trustedStrategySender) {
     sendResponse({
       ok: false,
       error: chainFetch

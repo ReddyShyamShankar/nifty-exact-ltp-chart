@@ -45,6 +45,29 @@
         <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
       </section>
 
+      <section class="strategy-manager" id="strategy-manager" aria-label="Strategy versions">
+        <div class="section-heading mono">STRATEGY VERSIONS</div>
+        <div class="strategy-preview-summary mono" id="strategy-preview-summary">NO CHART PREVIEW SELECTED</div>
+        <label class="field-label" for="strategy-book-select">Active strategy</label>
+        <select id="strategy-book-select" aria-label="Active versioned strategy"><option value="">No active strategy</option></select>
+        <div class="strategy-manager__actions">
+          <button class="secondary-button mono" id="strategy-save" type="button">SAVE PREVIEW</button>
+          <button class="secondary-button mono" id="strategy-split" type="button">SPLIT SELECTED LEGS</button>
+          <button class="secondary-button mono" id="strategy-archive" type="button">ARCHIVE</button>
+        </div>
+        <div class="strategy-save-decision" id="strategy-save-decision" hidden>
+          <label class="field-label" for="strategy-save-destination">Save as</label>
+          <select id="strategy-save-destination" aria-label="Permanent save destination"></select>
+          <button class="accept-button mono" id="strategy-save-confirm" type="button">CONFIRM SAVE</button>
+        </div>
+        <div class="strategy-manager__subhead mono">CURRENT LEGS</div>
+        <div class="strategy-manager__list" id="strategy-current-legs"></div>
+        <div class="strategy-manager__subhead mono">VERSION HISTORY</div>
+        <div class="strategy-manager__list" id="strategy-versions"></div>
+        <div class="strategy-manager__subhead mono">LEDGER HISTORY</div>
+        <div class="strategy-manager__list" id="strategy-ledger-history"></div>
+      </section>
+
       <section class="risk-summary" id="risk-summary" aria-live="polite">
         <div class="priority-line mono" id="priority-label">CURRENT RISK</div>
         <div class="risk-grid breakeven-grid">
@@ -117,6 +140,8 @@
     <script src="seller-ledger.js"></script>
     <script src="tradebook-csv.js"></script>
     <script src="popup-view.js"></script>
+    <script src="strategy-store.js"></script>
+    <script src="strategy-panel.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
