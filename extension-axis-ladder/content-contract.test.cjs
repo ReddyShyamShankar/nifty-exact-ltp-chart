@@ -1828,6 +1828,7 @@ test("top-left lot badges use yellow emphasis without moving row geometry", () =
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const badges = css.match(/\.nifty-axis-ladder__badges\s*\{([^}]+)\}/)?.[1] || "";
   const badge = css.match(/\.nifty-axis-ladder__badge\s*\{([^}]+)\}/)?.[1] || "";
+  const orangeRowBadge = css.match(/\.nifty-axis-ladder__row\.is-atm:not\(\.is-selected\) \.nifty-axis-ladder__badge\s*\{([^}]+)\}/)?.[1] || "";
   const editor = css.match(/\.nifty-manual-editor\s*\{([^}]+)\}/)?.[1] || "";
   assert.match(badges, /position:\s*absolute/);
   assert.match(badges, /left:\s*4px/);
@@ -1835,6 +1836,9 @@ test("top-left lot badges use yellow emphasis without moving row geometry", () =
   assert.match(badge, /border:\s*1px solid var\(--ladder-selected-ink\)/);
   assert.match(badge, /background:\s*var\(--ladder-selected\)/);
   assert.match(badge, /color:\s*var\(--ladder-selected-ink\)/);
+  assert.match(orangeRowBadge, /border-color:\s*var\(--ladder-surface\)/);
+  assert.match(orangeRowBadge, /background:\s*var\(--ladder-surface\)/);
+  assert.match(orangeRowBadge, /color:\s*var\(--ladder-ink\)/);
   assert.match(editor, /position:\s*fixed/);
   assert.match(editor, /z-index:\s*[3-9]/);
   assert.match(editor, /top:\s*50%/);

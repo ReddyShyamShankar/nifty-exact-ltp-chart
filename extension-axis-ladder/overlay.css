@@ -267,6 +267,12 @@
   vertical-align: middle;
 }
 
+.nifty-axis-ladder__row.is-atm:not(.is-selected) .nifty-axis-ladder__badge {
+  border-color: var(--ladder-surface);
+  background: var(--ladder-surface);
+  color: var(--ladder-ink);
+}
+
 .nifty-axis-ladder__row.is-selected {
   border-color: var(--ladder-selected);
   outline: none;
