@@ -70,7 +70,7 @@ function validStoredChain(snapshot, expiry = snapshot?.expiry) {
     NiftySellerViewIdentity.exactIsoDate(expiry) && snapshot.expiry === expiry &&
     typeof snapshot.updatedAt === "string" && Number.isFinite(updatedAt) &&
     Date.now() - updatedAt <= SELLER_SAFETY_STALE_MS &&
-    Number.isFinite(Number(snapshot.spot)) && Array.isArray(snapshot.rows) && snapshot.rows.length >= 13 &&
+    Number.isFinite(Number(snapshot.spot)) && Array.isArray(snapshot.rows) && snapshot.rows.length >= 1 &&
     snapshot.rows.every((row) => Number.isFinite(Number(row?.strike))) &&
     new Set(snapshot.rows.map((row) => Number(row.strike))).size === snapshot.rows.length);
 }

@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const manualPlan = require("./manual-plan.js");
 
-function loadBackground({ manualPlans = manualPlan.emptyStore() } = {}) {
+function loadBackground({ manualPlans = manualPlan.emptyStore(), fetchImpl = global.fetch } = {}) {
   const listeners = {};
   const sidePanelCalls = [];
   const session = {};
@@ -68,6 +68,7 @@ function loadBackground({ manualPlans = manualPlan.emptyStore() } = {}) {
       if (file === "manual-plan.js") global.NiftyManualPlan = manualPlan;
     }
   };
+  global.fetch = fetchImpl;
   const filename = path.join(__dirname, "background.js");
   delete require.cache[filename];
   return { api: require(filename), listeners, sidePanelCalls, local, manualWrites };
@@ -77,12 +78,63 @@ test("exports native-axis capture and single-writer manual mutation API", () => 
   const { api } = loadBackground();
   assert.deepEqual(Object.keys(api).sort(), [
     "applyManualPlanMutation", "axisPairsFromCandidates", "captureAxisScale",
-    "enqueueManualPlanMutation", "extractAxisPrices", "isCaptureMessage",
-    "isManualPlanMutationMessage", "isolateAxisCandidates"
+    "enqueueManualPlanMutation", "extractAxisPrices", "fetchNiftyChain",
+    "isCaptureMessage", "isChainFetchMessage", "isManualPlanMutationMessage",
+    "isolateAxisCandidates"
   ]);
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), false);
   assert.equal(api.isManualPlanMutationMessage("MUTATE_MANUAL_PLANS"), true);
+  assert.equal(api.isChainFetchMessage("FETCH_NIFTY_CHAIN"), true);
+});
+
+test("background owns bridge chain fetch for TradingView content scripts", async () => {
+  const requests = [];
+  const chain = { expiry: "2026-08-25", spot: 24317.15, rows: [{ strike: 24300, call: 325, put: 263 }] };
+  const { listeners } = loadBackground({
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), options });
+      return { ok: true, async json() { return chain; } };
+    }
+  });
+  const response = await new Promise((resolve) => {
+    const handled = listeners.message(
+      { type: "FETCH_NIFTY_CHAIN", expiry: "2026-08-25" },
+      { tab: { id: 7 }, url: "https://www.tradingview.com/chart/test/" },
+      resolve
+    );
+    assert.equal(handled, true);
+  });
+
+  assert.deepEqual(response, { ok: true, chain });
+  assert.deepEqual(requests, [{
+    url: "http://127.0.0.1:8787/api/nifty-chain?expiry=2026-08-25",
+    options: { cache: "no-store" }
+  }]);
+});
+
+test("background chain proxy rejects invalid expiry and non-TradingView callers before network", async () => {
+  let requests = 0;
+  const { listeners } = loadBackground({ fetchImpl: async () => { requests += 1; } });
+  for (const [message, sender, expectedError] of [
+    [
+      { type: "FETCH_NIFTY_CHAIN", expiry: "current_month" },
+      { tab: { id: 7 }, url: "https://www.tradingview.com/chart/test/" },
+      "Select one exact NIFTY expiry first."
+    ],
+    [
+      { type: "FETCH_NIFTY_CHAIN", expiry: "2026-08-25" },
+      { tab: { id: 7 }, url: "https://example.com/" },
+      "Option-chain refresh is limited to TradingView tabs."
+    ]
+  ]) {
+    const response = await new Promise((resolve) => {
+      const handled = listeners.message(message, sender, resolve);
+      assert.equal(handled, true);
+    });
+    assert.deepEqual(response, { ok: false, error: expectedError });
+  }
+  assert.equal(requests, 0);
 });
 
 test("background ignores synthetic price-scale gesture requests", () => {

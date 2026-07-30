@@ -19,7 +19,7 @@ test("operator guide documents click-only single-leg break-even rails", () => {
   assert.match(readme, /click one ladder strike/i);
   assert.match(readme, /CALL BE is strike plus displayed Call premium/i);
   assert.match(readme, /PUT BE is strike minus displayed Put premium/i);
-  assert.match(readme, /Values are rounded to whole NIFTY points/i);
+  assert.match(readme, /Values use selected instrument's valid display precision/i);
   assert.match(readme, /outside click removes both break-even rails/i);
   assert.match(readme, /Manual refresh removes both break-even rails; click a strike again/i);
   assert.match(readme, /independent single-leg expiry break-evens, not combined short-straddle break-evens/i);
@@ -36,8 +36,8 @@ test("0.5.0 guides document exact manual-only strategy workflow and keyboard par
     assert.match(guide, /CALL ▾[^.\n]*PUT ▾[^.\n]*Buy[^.\n]*Sell/i, `${name}: staged menus`);
     assert.match(guide, /positive whole-number lots[^.\n]*editable premium/i, `${name}: lot and premium controls`);
     assert.match(guide, /top-left `C2`[^.\n]*`P3`[^.\n]*Call[^.\n]*Put lots/i, `${name}: lot badge meaning`);
-    assert.match(guide, /black `#111315`[^.\n]*orange `#ff9f0a`[^.\n]*blue `#3b82f6`[^.\n]*red `#f87171`/i,
-      `${name}: exact row tokens`);
+    assert.match(guide, /ARB Desk panel tokens[^.\n]*warning tokens[^.\n]*black text[^.\n]*accent tokens[^.\n]*danger tokens/i,
+      `${name}: exact shared row tokens`);
     assert.match(guide, /single-click[^.\n]*newest-first[^.\n]*live/i, `${name}: entry cycle`);
     assert.match(guide, /PLAN BE[^.\n]*combined[^.\n]*expiry payoff[^.\n]*zero/i, `${name}: combined break-even meaning`);
     assert.match(guide, /rails span[^.\n]*both directions/i, `${name}: rail direction`);
@@ -62,6 +62,20 @@ test("operator guide treats TradingView badge styling as cosmetic and fail-safe"
   assert.match(readme, /badge styling cannot block the ladder/i);
   assert.match(readme, /badge styling cannot block[^\n]*manual refresh/i);
   assert.match(readme, /badge styling cannot block[^\n]*break-even rails/i);
+});
+
+test("content delegates bridge chain requests to extension service worker", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /chrome\.runtime\.sendMessage\(\{\s*type:\s*"FETCH_NIFTY_CHAIN",\s*expiry\s*\}\)/);
+  assert.doesNotMatch(source, /fetch\([^)]*api\/nifty-chain/);
+});
+
+test("render transaction never exposes an axis row before placement coordinates commit", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  const renderRows = source.match(/function renderRows\(rows, membership\)\s*\{[\s\S]*?\n  \}/)?.[0] || "";
+  const placeRows = source.match(/function placeRows\(rows, membership, toY, visualPlacementRevision\)\s*\{[\s\S]*?\n  \}/)?.[0] || "";
+  assert.match(renderRows, /renderManualRow\(element, row, membership, entriesByStrike\);\s*element\.hidden = true;/);
+  assert.match(placeRows, /element\.style\.right = `\$\{baseRight \+ lane \* laneOffset\}px`;\s*element\.style\.top = `\$\{row\.y\}px`;/);
 });
 
 function acceptedRiskView(overrides = {}) {
@@ -177,7 +191,7 @@ test("controller rebuild succeeds and places exact contracts on an inverted Trad
   assert.equal(placements.at(-1).find((row) => row.strike === 23750).y, 110);
 });
 
-test("controller records snapped native axis interval without a timeframe preference", async () => {
+test("controller records TradingView label interval without a timeframe preference", async () => {
   const denseChain = {
     spot: 23767.45,
     rows: Array.from({ length: 101 }, (_, index) => ({
@@ -196,7 +210,7 @@ test("controller records snapped native axis interval without a timeframe prefer
   });
 
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
-  assert.equal(controller.membership().nativeInterval, 250);
+  assert.equal(controller.membership().nativeInterval, 50);
   assert.equal(controller.membership().preferredInterval, undefined);
   assert.equal(controller.membership().interval, 50);
 });
@@ -629,7 +643,7 @@ test("controller accepts stable 25-point native ticks and selects real 50-point 
   assert.equal(controller.membership().interval, 50);
 });
 
-test("production membership keeps thirteen exact interaction rows independent from timeframe", () => {
+test("production membership uses axis intersections plus real ATM inside visible range", () => {
   const rows = Array.from({ length: 101 }, (_, index) => ({
     strike: 21300 + index * 50,
     call: index,
@@ -639,27 +653,26 @@ test("production membership keeps thirteen exact interaction rows independent fr
     timeframe: "1M",
     expiry: "current_month",
     interval: 1000,
+    axisPrices: [23400, 23600, 23800, 24000, 24200],
     spot: 23767.45,
     chainRows: rows
   });
 
-  assert.equal(membership.interval, 50);
+  assert.equal(membership.interval, 200);
   assert.equal(membership.center, 23750);
   assert.equal(membership.atmStep, 50);
-  assert.deepEqual(membership.strikes, [
-    23450, 23500, 23550, 23600, 23650, 23700, 23750,
-    23800, 23850, 23900, 23950, 24000, 24050
-  ]);
-  assert.equal(api.freezeMembership({
+  assert.deepEqual(membership.strikes, [23400, 23600, 23750, 23800, 24000, 24200]);
+  assert.deepEqual(api.freezeMembership({
     timeframe: "1M",
     expiry: "current_month",
     interval: 1000,
+    axisPrices: [21300, 21350, 21400],
     spot: 23767.45,
     chainRows: rows.slice(0, 12)
-  }), null);
+  }).strikes, [21300, 21350, 21400]);
 });
 
-test("builds thirteen frozen contracts from spot but maps their y positions from native axis pairs", async () => {
+test("builds one frozen contract per visible axis strike and maps native y positions", async () => {
   const placements = [];
   const controller = api.createLadderController({
     expiry: "current_month",
@@ -763,8 +776,8 @@ test("LTP refresh recenters at the exact interval midpoint without another axis 
   assert.equal(captures, 2, "spot recenter reuses cached native-axis mapping");
   assert.equal(controller.membership().atm, 23800);
   assert.deepEqual(controller.membership().strikes, [
-    23500, 23550, 23600, 23650, 23700, 23750, 23800,
-    23850, 23900, 23950, 24000, 24050, 24100
+    23450, 23500, 23550, 23600, 23650, 23700, 23750,
+    23800, 23850, 23900, 23950, 24000, 24050
   ]);
   assert.equal(placements.at(-1).find((row) => row.strike === 23800).isAtm, true);
 });
@@ -792,8 +805,8 @@ test("LTP refresh recenters on true contract midpoint while axis controls visibl
 
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 month");
   assert.equal(controller.membership().atm, 23750);
-  assert.equal(controller.membership().interval, 50);
-  assert.deepEqual(controller.membership().visibleStrikes, [23750, 24000]);
+  assert.equal(controller.membership().interval, 1000);
+  assert.deepEqual(controller.membership().visibleStrikes, [22000, 23000, 23750, 24000]);
   assert.equal(controller.membership().atmStep, 50);
 
   spot = 23774.99;
@@ -803,6 +816,7 @@ test("LTP refresh recenters on true contract midpoint while axis controls visibl
   spot = 23775;
   await controller.refreshLtp();
   assert.equal(controller.membership().atm, 23800);
+  assert.deepEqual(controller.membership().visibleStrikes, [22000, 23000, 23800, 24000]);
   await controller.refreshLtp();
   await controller.refreshLtp();
   assert.equal(controller.membership().atm, 23800, "unchanged midpoint must not ping-pong back down");
@@ -867,13 +881,15 @@ test("ATM recenter keeps exact contract rows while native axis remains independe
   });
 
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 month");
-  assert.equal(controller.membership().nativeInterval, 350);
+  assert.equal(controller.membership().nativeInterval, 50);
   assert.equal(controller.membership().preferredInterval, undefined);
   assert.equal(controller.membership().interval, 50);
   await controller.refreshLtp();
-  assert.equal(controller.membership().interval, 100);
+  assert.equal(controller.membership().interval, 50);
+  assert.equal(controller.membership().atmStep, 100);
   await controller.refreshLtp();
-  assert.equal(controller.membership().interval, 50, "recovered dense chain restores exact 50-point interaction rows");
+  assert.equal(controller.membership().interval, 50, "TradingView axis remains sole display interval");
+  assert.equal(controller.membership().atmStep, 50);
 });
 
 test("partial chain preserves membership but never reports LIVE", async () => {
@@ -999,7 +1015,7 @@ test("failed exact-midpoint recenter retries when complete chain returns", async
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
   assert.equal(await controller.refreshLtp(), true);
   assert.equal(controller.membership().atm, 23750);
-  assert.equal(statuses.at(-1), "RECENTER PENDING");
+  assert.equal(statuses.at(-1), "PARTIAL");
   assert.equal(await controller.refreshLtp(), true);
   assert.equal(controller.membership().atm, 23800);
   assert.equal(statuses.at(-1), "LIVE");
@@ -1791,25 +1807,47 @@ test("new content has no collision spreading or Pine input synchronization path"
   assert.match(source, /chain:\s*controller\.chain\(\)/);
 });
 
-test("manual row states use exact markup tokens and no new semantic color", () => {
+test("manual plan disclosure keeps previous black cards with full-row profit and loss color in both themes", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
-  assert.match(css, /--ladder-surface:\s*#111315/);
-  assert.match(css, /--ladder-line:\s*#2c3238/);
-  assert.match(css, /--ladder-ink:\s*#f4f4f5/);
-  assert.match(css, /--ladder-atm:\s*#ff9f0a/);
-  assert.match(css, /--ladder-buy:\s*#3b82f6/);
-  assert.match(css, /--ladder-sell:\s*#f87171/);
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  const light = css.match(/#nifty-axis-ladder\[data-theme="light"\]\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(css, /--theme-panel:\s*#111113/);
+  assert.match(css, /--theme-line-2:\s*#2a2a30/);
+  assert.match(css, /--theme-ink:\s*#f4f4f5/);
+  assert.match(css, /--theme-warn:\s*#fbbf24/);
+  assert.match(css, /--theme-accent:\s*#34d399/);
+  assert.match(css, /--theme-danger:\s*#f87171/);
+  assert.match(css, /--pnl-profit:\s*#34d399/);
+  assert.match(css, /--pnl-profit-soft:\s*rgba\(52, 211, 153, 0\.12\)/);
+  assert.match(css, /--pnl-loss:\s*#f87171/);
+  assert.match(css, /--pnl-loss-soft:\s*rgba\(248, 113, 113, 0\.10\)/);
+  assert.match(css, /--plan-surface:\s*#111113/);
+  assert.match(css, /--plan-ink:\s*#f4f4f5/);
+  assert.doesNotMatch(light, /--pnl-(?:profit|loss)/);
+  assert.doesNotMatch(light, /--plan-(?:surface|ink)/);
+  assert.match(css, /--ladder-surface:\s*var\(--theme-panel\)/);
+  assert.match(css, /--ladder-atm:\s*var\(--theme-warn\)/);
+  assert.match(css, /--ladder-buy:\s*var\(--theme-accent\)/);
+  assert.match(css, /--ladder-sell:\s*var\(--theme-danger\)/);
   assert.match(css, /\.nifty-axis-ladder__row\.is-atm\s*\{[^}]*background:\s*var\(--ladder-atm\)/);
   assert.match(css, /\.nifty-axis-ladder__row\.is-manual-entry\.is-buy\s*\{[^}]*background:\s*var\(--ladder-buy\)/);
   assert.match(css, /\.nifty-axis-ladder__row\.is-manual-entry\.is-sell\s*\{[^}]*background:\s*var\(--ladder-sell\)/);
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?background:\s*var\(--ladder-surface\)/);
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?width:\s*max-content/);
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?text-align:\s*center/);
-  assert.match(css, /--ladder-selected:\s*#facc15/);
+  assert.match(css, /--ladder-selected:\s*var\(--theme-warn\)/);
   assert.doesNotMatch(css, /#a78bfa|#ddd6fe/i);
   assert.match(css, /\.nifty-manual-plan__line\s*\{[^}]*border-top:\s*1px dashed var\(--ladder-line\)/);
-  assert.match(css, /\.nifty-manual-plan__label,[\s\S]*?border-left:\s*2px solid var\(--ladder-ink\)/);
-  assert.match(css, /\.nifty-manual-plan__label,[\s\S]*?color:\s*var\(--ladder-ink\)/);
+  assert.match(css, /\.nifty-manual-plan__label,[\s\S]*?font:\s*11px\/1\.25 "Geist Mono"/);
+  assert.match(css, /\.nifty-manual-plan__label,[\s\S]*?background:\s*var\(--plan-surface\)/);
+  assert.match(css, /\.nifty-manual-plan__label,[\s\S]*?color:\s*var\(--plan-ink\)/);
+  assert.match(css, /\.nifty-manual-plan__trade\.is-profit\s*\{[^}]*border-left-color:\s*var\(--pnl-profit\)[^}]*color:\s*var\(--pnl-profit\)/);
+  assert.match(css, /\.nifty-manual-plan__trade\.is-loss\s*\{[^}]*border-left-color:\s*var\(--pnl-loss\)[^}]*color:\s*var\(--pnl-loss\)/);
+  assert.match(css, /\.nifty-manual-plan__pnl\.is-profit,[\s\S]*?color:\s*inherit/);
+  assert.doesNotMatch(css, /\.nifty-manual-plan__group\.is-atm/);
+  assert.match(source, /trade\.className\s*=\s*`nifty-manual-plan__trade is-\$\{item\.tone\}`/);
+  assert.match(css, /\.nifty-seller-risk__band\.is-current\.is-profit\s*\{[^}]*background:\s*var\(--pnl-profit-soft\)/);
+  assert.match(css, /\.nifty-seller-risk__band\.is-current\.is-loss\s*\{[^}]*background:\s*var\(--pnl-loss-soft\)/);
 });
 
 test("entry faces contain exact compact copy without redundant trade words or icon", () => {
@@ -1822,7 +1860,7 @@ test("top-left lot badges use yellow emphasis without moving row geometry", () =
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const badges = css.match(/\.nifty-axis-ladder__badges\s*\{([^}]+)\}/)?.[1] || "";
   const badge = css.match(/\.nifty-axis-ladder__badge\s*\{([^}]+)\}/)?.[1] || "";
-  const orangeRowBadge = css.match(/\.nifty-axis-ladder__row\.is-atm:not\(\.is-selected\) \.nifty-axis-ladder__badge\s*\{([^}]+)\}/)?.[1] || "";
+  const atmRowBadge = css.match(/\.nifty-axis-ladder__row\.is-atm \.nifty-axis-ladder__badge\s*\{([^}]+)\}/)?.[1] || "";
   const editor = css.match(/\.nifty-manual-editor\s*\{([^}]+)\}/)?.[1] || "";
   assert.match(badges, /position:\s*absolute/);
   assert.match(badges, /left:\s*4px/);
@@ -1830,9 +1868,9 @@ test("top-left lot badges use yellow emphasis without moving row geometry", () =
   assert.match(badge, /border:\s*1px solid var\(--ladder-selected-ink\)/);
   assert.match(badge, /background:\s*var\(--ladder-selected\)/);
   assert.match(badge, /color:\s*var\(--ladder-selected-ink\)/);
-  assert.match(orangeRowBadge, /border-color:\s*var\(--ladder-surface\)/);
-  assert.match(orangeRowBadge, /background:\s*var\(--ladder-surface\)/);
-  assert.match(orangeRowBadge, /color:\s*var\(--ladder-ink\)/);
+  assert.match(atmRowBadge, /border-color:\s*var\(--ladder-atm-badge\)/);
+  assert.match(atmRowBadge, /background:\s*var\(--ladder-atm-badge\)/);
+  assert.match(atmRowBadge, /color:\s*var\(--ladder-atm-badge-ink\)/);
   assert.match(editor, /position:\s*fixed/);
   assert.match(editor, /z-index:\s*[3-9]/);
   assert.match(editor, /top:\s*50%/);
@@ -1843,6 +1881,15 @@ test("top-left lot badges use yellow emphasis without moving row geometry", () =
   assert.doesNotMatch(css, /\.nifty-axis-ladder__row:has\(>\s*\.nifty-manual-editor\)/);
 });
 
+test("light warning surfaces use white text while ATM lot badge stays black with white text", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const light = css.match(/#nifty-axis-ladder\[data-theme="light"\]\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(light, /--ladder-atm-ink:\s*#ffffff/);
+  assert.match(light, /--ladder-selected-ink:\s*#ffffff/);
+  assert.match(css, /--ladder-atm-badge:\s*#111113/);
+  assert.match(css, /--ladder-atm-badge-ink:\s*#f4f4f5/);
+});
+
 test("manual persistence crosses only the service-worker operation boundary", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   assert.match(source, /MUTATE_MANUAL_PLANS/);
@@ -1850,13 +1897,13 @@ test("manual persistence crosses only the service-worker operation boundary", ()
   assert.doesNotMatch(source, /manualPersistTail/);
 });
 
-test("selected strike uses a solid yellow fill without an outline, including ATM", () => {
+test("selected strike uses a solid ARB Desk warning fill without an outline, including ATM", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const selected = css.match(/\.nifty-axis-ladder__row\.is-selected\s*\{([^}]+)\}/)?.[1] || "";
   const selectedArrow = css.match(/\.nifty-axis-ladder__row\.is-selected::after\s*\{([^}]+)\}/)?.[1] || "";
 
-  assert.match(css, /--ladder-selected:\s*#facc15/);
-  assert.match(css, /--ladder-selected-ink:\s*#111315/);
+  assert.match(css, /--ladder-selected:\s*var\(--theme-warn\)/);
+  assert.match(css, /--ladder-selected-ink:\s*var\(--theme-contrast-ink\)/);
   assert.match(selected, /background:\s*var\(--ladder-selected\)/);
   assert.match(selected, /color:\s*var\(--ladder-selected-ink\)/);
   assert.match(selected, /border-color:\s*var\(--ladder-selected\)/);
@@ -1949,11 +1996,11 @@ test("TradingView status decorator loads before content and stays independent fr
   assert.doesNotMatch(source, /if \(!.*LiveBadge.*\).*start\(/);
 });
 
-test("native status badge uses full green or red fill with white text", () => {
+test("native status badge uses active ARB Desk accent or danger fill with fixed light text", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
-  assert.match(css, /\.nifty-tv-status-badge\.is-live\s*\{[\s\S]*?background(?:-color)?:\s*#(?:16a34a|15803d)/i);
-  assert.match(css, /\.nifty-tv-status-badge\.is-offline\s*\{[\s\S]*?background(?:-color)?:\s*#(?:dc2626|b91c1c)/i);
-  assert.match(css, /\.nifty-tv-status-badge\s*\{[\s\S]*?color:\s*#fff/i);
+  assert.match(css, /\.nifty-tv-status-badge\.is-live\s*\{[\s\S]*?background:\s*var\(--theme-accent\)/i);
+  assert.match(css, /\.nifty-tv-status-badge\.is-offline\s*\{[\s\S]*?background:\s*var\(--theme-danger\)/i);
+  assert.match(css, /\.nifty-tv-status-badge\s*\{[\s\S]*?color:\s*var\(--theme-status-ink\)/i);
 });
 
 test("native status badge CSS preserves TradingView box and text metrics", () => {
@@ -1980,9 +2027,9 @@ test("native status badge CSS preserves TradingView box and text metrics", () =>
   const forbiddenMetric = /^(?:border(?:-.+)?|padding(?:-.+)?|(?:min-|max-)?(?:width|height)|font-weight|font-size|line-height|position|pointer-events)$/;
 
   assert.equal(base.some(({ property }) => forbiddenMetric.test(property)), false);
-  assert.deepEqual(base, [{ property: "color", value: "#fff !important" }]);
-  assert.deepEqual(live, [{ property: "background", value: "#16a34a !important" }]);
-  assert.deepEqual(offline, [{ property: "background", value: "#dc2626 !important" }]);
+  assert.deepEqual(base, [{ property: "color", value: "var(--theme-status-ink) !important" }]);
+  assert.deepEqual(live, [{ property: "background", value: "var(--theme-accent) !important" }]);
+  assert.deepEqual(offline, [{ property: "background", value: "var(--theme-danger) !important" }]);
 });
 
 test("live badge installs once outside ladder state, isolates failure, and stops on unload", () => {
@@ -2023,9 +2070,9 @@ test("live badge installs once outside ladder state, isolates failure, and stops
   assert.equal(run({ install() { throw new Error("decorator unavailable"); } }), true);
 });
 
-test("unsafe viewport placement returns manual zoom guidance without changing chart scale", () => {
-  assert.equal(api.priceScaleFailure("overlap"), "13 STRIKES OVERLAP AT THIS SCALE · ZOOM IN");
-  assert.equal(api.priceScaleFailure("outside"), "13 STRIKES OUTSIDE VISIBLE PRICE RANGE · ZOOM OUT");
+test("unsafe viewport placement reports axis failure without fixed-count zoom guidance", () => {
+  assert.equal(api.priceScaleFailure("overlap"), "VISIBLE STRIKES CANNOT BE PLACED SAFELY");
+  assert.equal(api.priceScaleFailure("outside"), "NO OPTION STRIKES ON VISIBLE PRICE GRID");
   assert.throws(() => api.priceScaleFailure("unknown"), /Unknown price-scale failure/);
 });
 
@@ -2159,6 +2206,10 @@ function createBreakEvenLifecycleHarness({
       setAttribute(name, value) { attributes.set(name, String(value)); },
       getAttribute(name) { return attributes.get(name) || null; },
       closest(selector) {
+        if (/^\.[\w-]+(?:\.[\w-]+)*$/.test(selector)) {
+          const names = selector.slice(1).split(".");
+          if (names.every((name) => classes.has(name))) return node;
+        }
         if (selector === ".nifty-axis-ladder__row" && classes.has("nifty-axis-ladder__row")) return node;
         if (selector === ".nifty-manual-editor" && classes.has("nifty-manual-editor")) return node;
         return node.parent?.closest(selector) || null;
@@ -2240,7 +2291,7 @@ function createBreakEvenLifecycleHarness({
     };
   }
 
-  function optionChainResponse(overrides = refreshNumbers) {
+  function optionChainPayload(overrides = refreshNumbers) {
     const byStrike = overrides?.byStrike || {};
     const hasLegacyQuote = Object.prototype.hasOwnProperty.call(overrides || {}, "call")
       || Object.prototype.hasOwnProperty.call(overrides || {}, "put");
@@ -2252,11 +2303,8 @@ function createBreakEvenLifecycleHarness({
       } : {}))
     }));
     return {
-      ok: true,
-      json: async () => ({
-        spot: Number.isFinite(Number(overrides?.spot)) ? Number(overrides.spot) : snapshot.spot,
-        rows
-      })
+      spot: Number.isFinite(Number(overrides?.spot)) ? Number(overrides.spot) : snapshot.spot,
+      rows
     };
   }
 
@@ -2325,6 +2373,13 @@ function createBreakEvenLifecycleHarness({
               return { ok: false, error: error?.message || "Manual plan mutation failed." };
             }
           }
+          if (message?.type === "FETCH_NIFTY_CHAIN") {
+            fetchCalls += 1;
+            if (deferFetches) {
+              return new Promise((resolve) => pendingFetches.push({ resolve }));
+            }
+            return { ok: true, chain: optionChainPayload() };
+          }
           if (deferAxisCaptures) {
             return new Promise((resolve) => pendingAxisCaptures.push(resolve));
           }
@@ -2368,17 +2423,6 @@ function createBreakEvenLifecycleHarness({
       }
     },
     document,
-    fetch: async (_url, options = {}) => {
-      fetchCalls += 1;
-      if (deferFetches) {
-        return new Promise((resolve, reject) => pendingFetches.push({
-          resolve,
-          reject,
-          signal: options.signal
-        }));
-      }
-      return optionChainResponse();
-    },
     setTimeout(callback, delay) {
       const id = nextTimerId++;
       timers.set(id, { callback, delay });
@@ -2455,7 +2499,6 @@ function createBreakEvenLifecycleHarness({
     deferFetches() { deferFetches = true; },
     pendingAxisCaptureCount() { return pendingAxisCaptures.length; },
     pendingFetchCount() { return pendingFetches.length; },
-    pendingFetchAborted(index = 0) { return Boolean(pendingFetches[index]?.signal?.aborted); },
     resolveAxisCapture(index = 0, result = axisCaptureResult()) {
       const [resolve] = pendingAxisCaptures.splice(index, 1);
       assert.ok(resolve, "expected a pending axis capture");
@@ -2467,12 +2510,12 @@ function createBreakEvenLifecycleHarness({
     resolveFetch(index = 0, overrides) {
       const [pending] = pendingFetches.splice(index, 1);
       assert.ok(pending, "expected a pending option-number fetch");
-      pending.resolve(optionChainResponse(overrides));
+      pending.resolve({ ok: true, chain: optionChainPayload(overrides) });
     },
     rejectFetch(index = 0, error = new Error("Option chain unavailable.")) {
       const [pending] = pendingFetches.splice(index, 1);
       assert.ok(pending, "expected a pending option-number fetch");
-      pending.reject(error);
+      pending.resolve({ ok: false, error: error.message });
     },
     row(strike = 23750) {
       return document.getElementById("nifty-axis-ladder")
@@ -2805,7 +2848,8 @@ test("new editor disables Add until selected leg and premium are valid", async (
 for (const [name, finish] of [
   ["success", async (h, request) => {
     h.resolveFetch(0, { byStrike: { 23750: { call: 500, put: 600 } } });
-    assert.equal((await request).ok, true);
+    const response = await request;
+    assert.equal(response.ok, true, `${response.error} / ${h.status()}`);
   }],
   ["network failure", async (h, request) => {
     h.rejectFetch(0, new Error("network failed"));
@@ -2837,7 +2881,7 @@ for (const [name, finish] of [
   });
 }
 
-test("second refresh aborts first request and clears a newly opened manual editor before fetch", async () => {
+test("second refresh invalidates first response and clears a newly opened manual editor before fetch", async () => {
   const h = createBreakEvenLifecycleHarness({
     manualEntries: [savedManualEntry()],
     deferFetches: true
@@ -2849,11 +2893,11 @@ test("second refresh aborts first request and clears a newly opened manual edito
 
   h.openEdit("entry-23750");
   const second = h.startRefreshOptionNumbers();
-  assert.equal(h.pendingFetchAborted(0), true);
   assert.equal(h.editor(23750), null);
 
   h.resolveFetch(1);
-  assert.equal((await second).ok, true);
+  const response = await second;
+  assert.equal(response.ok, true, `${response.error} / ${h.status()}`);
   h.resolveFetch(0);
   assert.equal((await first).ok, false);
 });
@@ -2869,7 +2913,7 @@ test("saved manual plan draws every neutral break-even through native axis", asy
   assert.equal(h.rails(), null, "manual plan never creates quick single-leg rails");
 });
 
-test("each manual break-even label flips only through individual position P&L for its side", async () => {
+test("A2 plan disclosure is exclusive and any outside click collapses it", async () => {
   const h = createBreakEvenLifecycleHarness({ manualEntries: approvedOneCallThreePuts, spot: 24050 });
   h.setProject((level) => ({ mode: "line", y: level.exact < 24000 ? 180 : 220 }));
   await h.settle();
@@ -2878,14 +2922,40 @@ test("each manual break-even label flips only through individual position P&L fo
   const lower = rails.children[0].children[0];
   const upper = rails.children[1].children[0];
   lower.dispatch("click", { stopPropagation() {} });
-  upper.dispatch("click", { stopPropagation() {} });
+  assert.equal(lower.children[0].textContent, "PLAN BE 23,698");
+  assert.equal(lower.children[1].children[0].children[0].textContent, "P 24,000 SELL ×3");
+  assert.equal(lower.children[1].children[0].children[1].textContent, "-₹7,995");
+  assert.equal(lower.children[1].children[0].children[1].classList.contains("is-loss"), true);
+  assert.equal(lower.children[0].getAttribute("aria-expanded"), "true");
 
-  assert.equal(lower.textContent, "P 24,000 SELL ×3 · P&L ≈ -₹7,995");
-  assert.equal(upper.textContent, "C 24,100 SELL ×1 · P&L ≈ +₹15,080");
+  h.document.dispatch("pointerdown", { target: lower.children[0] });
+  assert.equal(lower.children.length, 2, "pressing the same plan header does not pre-collapse it");
 
-  lower.dispatch("click", { stopPropagation() {} });
   upper.dispatch("click", { stopPropagation() {} });
+  assert.equal(lower.children.length, 1, "opening another plan collapses the prior plan");
+  assert.equal(upper.children[0].textContent, "PLAN BE 25,007");
+  assert.equal(upper.children[1].children[0].children[0].textContent, "C 24,100 SELL ×1");
+  assert.equal(upper.children[1].children[0].children[1].textContent, "+₹15,080");
+  assert.equal(upper.children[1].children[0].children[1].classList.contains("is-profit"), true);
+  assert.equal(upper.children[0].getAttribute("aria-expanded"), "true");
+
+  h.document.dispatch("pointerdown", { target: h.row(23750) });
   assert.deepEqual(h.manualRailLabels(), ["PLAN BE 23,698", "PLAN BE 25,007"]);
+  assert.equal(upper.children[0].getAttribute("aria-expanded"), "false");
+});
+
+test("manual plan at exact ATM keeps previous disclosure structure", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: [savedManualEntry({ strike: 23750, premium: 50, callSnapshot: 50 })],
+    spot: 23800
+  });
+  await h.settle();
+
+  const group = h.manualRails().children[0].children[0];
+  assert.equal(group.classList.contains("is-atm"), true);
+  group.dispatch("click", { stopPropagation() {} });
+  assert.equal(group.children[0].textContent, "PLAN BE 23,800");
+  assert.equal(group.children[1].children.length, 1);
 });
 
 test("valid draft previews changed lots without saving", async () => {
@@ -3082,8 +3152,11 @@ test("production retry placement keeps accepted refresh quotes and commits its n
     gridGapPx: 20,
     axisPairs: [
       { price: 24000, y: 300 },
+      { price: 23950, y: 310 },
       { price: 23900, y: 320 },
+      { price: 23850, y: 330 },
       { price: 23800, y: 340 },
+      { price: 23750, y: 350 },
       { price: 23700, y: 360 }
     ]
   });
@@ -3112,16 +3185,19 @@ test("production retry placement applies its newer axis to refresh-recentered me
   assert.equal((await refresh).ok, true);
   assert.equal(h.row(23800).classList.contains("is-atm"), true);
   assert.match(h.row(23800).textContent, /C 777\.00P 888\.00/);
-  assert.equal(h.row(23450), null);
-  assert.ok(h.row(24100), "recentered upper contract remains rendered");
+  assert.ok(h.row(23450), "lower visible grid contract remains rendered");
+  assert.ok(h.row(24100), "upper visible grid contract remains rendered");
 
   h.resolveAxisCapture(0, {
     ok: true,
     gridGapPx: 20,
     axisPairs: [
       { price: 24000, y: 300 },
+      { price: 23950, y: 310 },
       { price: 23900, y: 320 },
+      { price: 23850, y: 330 },
       { price: 23800, y: 340 },
+      { price: 23750, y: 350 },
       { price: 23700, y: 360 }
     ]
   });
@@ -3147,8 +3223,11 @@ test("production refresh finishing after a newer placement retains fresh quotes 
     gridGapPx: 20,
     axisPairs: [
       { price: 24000, y: 300 },
+      { price: 23950, y: 310 },
       { price: 23900, y: 320 },
+      { price: 23850, y: 330 },
       { price: 23800, y: 340 },
+      { price: 23750, y: 350 },
       { price: 23700, y: 360 }
     ]
   });
@@ -3977,8 +4056,11 @@ test("generic timeframe rebuild failure preserves clicked snapshot and restores 
 
   harness.setAxisPairs([
     { price: 24000, y: 100 },
+    { price: 23950, y: 110 },
     { price: 23900, y: 120 },
+    { price: 23850, y: 130 },
     { price: 23800, y: 140 },
+    { price: 23750, y: 150 },
     { price: 23700, y: 160 }
   ]);
   await harness.navigateTo("Chart for NSE_DLY:NIFTY, 1 hour");
@@ -4000,8 +4082,11 @@ test("generic timeframe rebuild failure preserves unavailable selection feedback
 
   harness.setAxisPairs([
     { price: 24000, y: 100 },
+    { price: 23950, y: 110 },
     { price: 23900, y: 120 },
+    { price: 23850, y: 130 },
     { price: 23800, y: 140 },
+    { price: 23750, y: 150 },
     { price: 23700, y: 160 }
   ]);
   await harness.navigateTo("Chart for NSE_DLY:NIFTY, 1 hour");
@@ -4175,8 +4260,11 @@ test("invalid axis map or projection conceals rails without clearing selected ro
 
   harness.setAxisPairs([
     { price: 24000, y: 100 },
+    { price: 23950, y: 110 },
     { price: 23900, y: 120 },
+    { price: 23850, y: 130 },
     { price: 23800, y: 140 },
+    { price: 23750, y: 150 },
     { price: 23700, y: 160 }
   ]);
   harness.setProject(() => null);

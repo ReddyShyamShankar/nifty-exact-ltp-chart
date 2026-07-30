@@ -10,14 +10,14 @@ test("new extension has independent identity", () => {
   assert.equal(manifest.minimum_chrome_version, "141");
   assert.equal(manifest.permissions.includes("debugger"), false);
   assert.equal(manifest.permissions.includes("sidePanel"), true);
-  assert.equal(manifest.permissions.includes("contextMenus"), true);
+  assert.equal(manifest.permissions.includes("contextMenus"), false);
   assert.deepEqual(manifest.side_panel, { default_path: "popup.html" });
-  assert.equal(Object.hasOwn(manifest.action, "default_popup"), false);
+  assert.equal(manifest.action.default_popup, "action-popup.html");
   assert.equal(Object.hasOwn(manifest.action, "default_state"), false);
   assert.equal(manifest.action.default_title, "Options Ladder");
 });
 
-test("extension card and toolbar use popup-matching green status mark", () => {
+test("extension card and toolbar preserve original Options Ladder logo", () => {
   const expected = {
     "16": "icons/nifty-mark-16.png",
     "32": "icons/nifty-mark-32.png",

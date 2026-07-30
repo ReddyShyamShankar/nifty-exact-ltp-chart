@@ -26,38 +26,24 @@
   function snapStrikeInterval(raw) {
     const value = Number(raw);
     if (!Number.isFinite(value) || value <= 0) return null;
-    return Math.max(50, Math.round(value / 50) * 50);
-  }
-
-  function maxStrikeInterval(raw) {
-    const value = Number(raw);
-    if (!Number.isFinite(value) || value <= 0) return null;
-    return Math.max(50, Math.floor(value / 50) * 50);
-  }
-
-  function thirteenStrikes(spot, interval, tieDirection = "up") {
-    const price = Number(spot);
-    const step = Number(interval);
-    if (!Number.isFinite(price) || !Number.isFinite(step) || step <= 0) return [];
-    const lower = Math.floor(price / step) * step;
-    const upper = Math.ceil(price / step) * step;
-    const lowerDistance = price - lower;
-    const upperDistance = upper - price;
-    const isTie = Math.abs(lowerDistance - upperDistance) < 1e-9;
-    const center = isTie
-      ? (tieDirection === "down" ? lower : upper)
-      : (lowerDistance < upperDistance ? lower : upper);
-    return Array.from({ length: 13 }, (_, index) => center + (index - 6) * step);
+    return value;
   }
 
   function nearestAvailableStrike(rows, spot, tieDirection = "up") {
     const price = Number(spot);
     if (!Array.isArray(rows) || !Number.isFinite(price)) return null;
-    const strikes = new Set(rows
+    const strikes = Array.from(new Set(rows
       .map((row) => Number(row?.strike))
-      .filter(Number.isFinite));
-    const canonical = thirteenStrikes(price, 50, tieDirection)[6];
-    return strikes.has(canonical) ? canonical : null;
+      .filter(Number.isFinite)))
+      .sort((left, right) => left - right);
+    if (!strikes.length) return null;
+    return strikes.reduce((best, strike) => {
+      const distance = Math.abs(strike - price);
+      const bestDistance = Math.abs(best - price);
+      if (distance < bestDistance - 1e-9) return strike;
+      if (Math.abs(distance - bestDistance) > 1e-9) return best;
+      return tieDirection === "down" ? Math.min(best, strike) : Math.max(best, strike);
+    }, strikes[0]);
   }
 
   function nativeAxisInterval(axisPrices) {
@@ -69,17 +55,43 @@
       .map((price, index) => price - prices[index])
       .filter((gap) => gap > 0)
       .sort((left, right) => left - right);
-    if (!gaps.length) return 50;
-    const midpoint = Math.floor(gaps.length / 2);
-    const median = gaps.length % 2
-      ? gaps[midpoint]
-      : (gaps[midpoint - 1] + gaps[midpoint]) / 2;
-    return snapStrikeInterval(median);
+    if (!gaps.length) return null;
+    const middle = Math.floor(gaps.length / 2);
+    const interval = gaps.length % 2
+      ? gaps[middle]
+      : (gaps[middle - 1] + gaps[middle]) / 2;
+    return rounded(interval, precisionFor(prices));
   }
 
-  function selectAxisAlignedRows(rows, spot, axisPrices, maximumRows = 13, tieDirection = "up") {
+  function rounded(value, precision) {
+    return Number(Number(value).toFixed(precision));
+  }
+
+  function precisionFor(values) {
+    return Math.min(10, Math.max(0, ...(values || []).map((value) => {
+      const text = String(value).toLowerCase();
+      if (text.includes("e-")) return Number(text.split("e-")[1]) || 0;
+      return (text.split(".")[1] || "").length;
+    })));
+  }
+
+  function stableAxisGrid(axisPrices) {
+    const observed = Array.from(new Set((Array.isArray(axisPrices) ? axisPrices : [])
+      .map(Number)
+      .filter(Number.isFinite)))
+      .sort((left, right) => left - right);
+    const interval = nativeAxisInterval(observed);
+    if (!Number.isFinite(interval) || interval <= 0 || observed.length < 2) return observed;
+    const precision = precisionFor([...observed, interval]);
+    const start = observed[0];
+    const end = observed.at(-1);
+    const count = Math.round((end - start) / interval);
+    if (!Number.isFinite(count) || count < 1 || count > 1000) return observed;
+    return Array.from({ length: count + 1 }, (_, index) => rounded(start + index * interval, precision));
+  }
+
+  function selectAxisAlignedRows(rows, spot, axisPrices, _maximumRows, tieDirection = "up") {
     if (!Array.isArray(rows)) return null;
-    const limit = Math.max(1, Math.floor(Number(maximumRows)) || 13);
     const byStrike = new Map();
     for (const row of rows) {
       const strike = Number(row?.strike);
@@ -87,100 +99,50 @@
     }
     const center = nearestAvailableStrike(rows, spot, tieDirection);
     if (!Number.isFinite(center)) return null;
-    const aligned = Array.from(new Set((Array.isArray(axisPrices) ? axisPrices : [])
-      .map(Number)
-      .filter((price) => Number.isFinite(price) && byStrike.has(price))));
-    if (!aligned.includes(center)) aligned.push(center);
-    const selected = aligned.length <= limit
-      ? aligned
-      : aligned
-        .slice()
-        .sort((left, right) => Math.abs(left - center) - Math.abs(right - center) || left - right)
-        .slice(0, limit);
-    selected.sort((left, right) => left - right);
+    const grid = stableAxisGrid(axisPrices);
+    const strikeStep = availableStrikeStep(rows);
+    const tolerance = Math.max(1e-9, Math.abs(Number(strikeStep) || 1) * 1e-7);
+    const selected = Array.from(byStrike.keys())
+      .filter((strike) => grid.some((price) => Math.abs(price - strike) <= tolerance))
+      .sort((left, right) => left - right);
+    const gridStart = grid[0];
+    const gridEnd = grid.at(-1);
+    const atmIsVisible = Number.isFinite(gridStart)
+      && Number.isFinite(gridEnd)
+      && center >= gridStart - tolerance
+      && center <= gridEnd + tolerance;
+    if (atmIsVisible && !selected.includes(center)) {
+      selected.push(center);
+      selected.sort((left, right) => left - right);
+    }
     return {
-      interval: nativeAxisInterval(axisPrices),
+      interval: nativeAxisInterval(grid),
       center,
-      atmStep: availableStrikeStep(rows),
+      atmStep: strikeStep,
+      axisPrices: grid,
       rows: selected.map((strike) => byStrike.get(strike))
     };
   }
 
   function availableStrikeStep(rows) {
-    return Array.isArray(rows) && rows.some((row) => Number.isFinite(Number(row?.strike))) ? 50 : null;
-  }
-
-  function strikesFromCenter(center, interval) {
-    const strike = Number(center);
-    const step = Number(interval);
-    if (!Number.isFinite(strike) || !Number.isFinite(step) || step <= 0) return [];
-    return Array.from({ length: 13 }, (_, index) => strike + (index - 6) * step);
-  }
-
-  function greatestCommonDivisor(left, right) {
-    let a = Math.abs(Math.round(Number(left)));
-    let b = Math.abs(Math.round(Number(right)));
-    while (b) [a, b] = [b, a % b];
-    return a;
-  }
-
-  function nearestExactThirteen(byStrike, center, atmStep) {
-    const strikes = Array.from(byStrike.keys()).sort((left, right) => left - right);
-    if (strikes.length < 13) return null;
-    const centerIndex = strikes.indexOf(center);
-    if (centerIndex < 0) return null;
-    const start = Math.max(0, Math.min(centerIndex - 6, strikes.length - 13));
-    const selected = strikes.slice(start, start + 13);
-    const interval = selected.reduce(
-      (value, strike) => greatestCommonDivisor(value, Math.abs(strike - center)),
-      0
-    );
-    const exactInterval = maxStrikeInterval(interval);
-    if (!exactInterval || !selected.includes(center)) return null;
-    return {
-      interval: exactInterval,
-      center,
-      atmStep,
-      rows: selected.map((strike) => byStrike.get(strike))
-    };
-  }
-
-  function selectExactThirteen(rows, spot, maximumInterval, tieDirection = "up") {
-    if (!Array.isArray(rows)) return null;
-    const widestInterval = maxStrikeInterval(maximumInterval);
-    if (!widestInterval) return null;
-    const byStrike = new Map();
-    for (const row of rows) {
-      const strike = Number(row?.strike);
-      if (Number.isFinite(strike) && !byStrike.has(strike)) byStrike.set(strike, row);
-    }
-    const center = nearestAvailableStrike(rows, spot, tieDirection);
-    const atmStep = availableStrikeStep(rows);
-    if (!Number.isFinite(center) || !Number.isFinite(atmStep)) return null;
-    for (let interval = widestInterval; interval >= 50; interval -= 50) {
-      const strikes = strikesFromCenter(center, interval);
-      if (strikes.length !== 13 || !strikes.every((strike) => byStrike.has(strike))) continue;
-      return {
-        interval,
-        center,
-        atmStep,
-        rows: strikes.map((strike) => byStrike.get(strike))
-      };
-    }
-    return nearestExactThirteen(byStrike, center, atmStep);
+    const strikes = Array.from(new Set((Array.isArray(rows) ? rows : [])
+      .map((row) => Number(row?.strike))
+      .filter(Number.isFinite)))
+      .sort((left, right) => left - right);
+    const gaps = strikes.slice(1)
+      .map((strike, index) => strike - strikes[index])
+      .filter((gap) => gap > 0);
+    return gaps.length ? rounded(Math.min(...gaps), precisionFor(strikes)) : null;
   }
 
   const api = {
     availableStrikeStep,
-    maxStrikeInterval,
     nativeAxisInterval,
     nearestAvailableStrike,
     selectAxisAlignedRows,
+    stableAxisGrid,
     timeframeKey,
-    snapStrikeInterval,
-    strikesFromCenter,
-    thirteenStrikes,
-    selectExactThirteen
+    snapStrikeInterval
   };
   root.NiftyTimeframeLadder = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

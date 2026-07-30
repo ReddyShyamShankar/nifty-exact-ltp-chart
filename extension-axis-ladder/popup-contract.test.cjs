@@ -20,6 +20,8 @@ test("popup keeps chart toggle and refresh immediate, preserves approved glyph, 
   assert.doesNotMatch(html, /class="refresh-icon"/);
   assert.match(html, />REFRESH ALL</);
   assert.doesNotMatch(html, />NIFTY OPTIONS</);
+  assert.match(html, /TV axis contracts/);
+  assert.doesNotMatch(html, /13 exact contracts/);
   assert.match(html, /id="coverage-from"/);
   assert.match(html, /id="coverage-to"/);
   assert.match(html, /id="confirm-coverage"/);
@@ -34,15 +36,19 @@ test("popup loads pure seller scripts before browser orchestration", () => {
   const html = read("popup.html");
   const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map((match) => match[1]);
 
-  assert.deepEqual(scripts, ["seller-view-identity.js", "seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js", "popup.js"]);
+  assert.deepEqual(scripts, ["theme.js", "seller-view-identity.js", "seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js", "popup.js"]);
 });
 
-test("side panel uses light controls without forcing dark native fields", () => {
+test("side panel uses exact ARB Desk dark and light controls with matching native field scheme", () => {
   const css = read("popup.css");
+  const themeCss = read("theme.css");
 
-  assert.match(css, /--bg:\s*#f6f7f8/);
-  assert.match(css, /--panel:\s*#ffffff/);
-  assert.doesNotMatch(css, /color-scheme:\s*dark/);
+  assert.match(themeCss, /--bg:\s*#0a0a0a/);
+  assert.match(themeCss, /--panel:\s*#111113/);
+  assert.match(themeCss, /:root\[data-theme="light"\][\s\S]*?--bg:\s*#fafafa/);
+  assert.match(themeCss, /:root\[data-theme="light"\][\s\S]*?--panel:\s*#ffffff/);
+  assert.match(css, /select, input \{ color-scheme: dark; \}/);
+  assert.match(css, /:root\[data-theme="light"\] select,[\s\S]*?color-scheme: light/);
 });
 
 test("content still accepts exact-axis placement retry", () => {

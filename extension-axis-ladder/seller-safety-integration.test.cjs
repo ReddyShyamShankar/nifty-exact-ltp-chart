@@ -222,8 +222,11 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
     fetchChain: async () => { extraChainRequests += 1; throw new Error("unexpected chain request"); },
     captureAxisScale: async () => ({
       ok: true,
-      gridGapPx: 20,
-      axisPairs: [{ price: 25000, y: 0 }, { price: 22000, y: 600 }]
+      gridGapPx: 100,
+      axisPairs: Array.from({ length: 31 }, (_, index) => ({
+        price: 22000 + index * 100,
+        y: 600 - index * 20
+      }))
     }),
     renderRows: (rows) => { renderedRows = rows; },
     placeRows: () => ({ riskLayout: RISK_LAYOUT }),
@@ -238,7 +241,7 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
   });
   t.after(() => controller.invalidate());
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
-  assert.equal(renderedRows.length, 13);
+  assert.deepEqual(renderedRows.map((row) => row.strike), [23800, 23900, 24000, 24100, 24200, 24300, 24400]);
   assert.equal(extraChainRequests, 0);
 
   assert.equal(layers.status, "OK");
@@ -732,7 +735,7 @@ test("operator docs define setup, daily review, map semantics, stale behavior, a
   assert.match(extensionReadme, /REFRESH FAILED[\s\S]*immediately[\s\S]*hides/i);
   assert.match(extensionReadme, /strategy selector[\s\S]*without another refresh/i);
   for (const readme of [rootReadme, extensionReadme]) {
-    assert.match(readme, /click[\s\S]*NIFTY[\s\S]*extension icon/i);
+    assert.match(readme, /click[\s\S]*Options Ladder icon[\s\S]*Refresh ladder[\s\S]*Open side panel/i);
     assert.match(readme, /full[- ]height[\s\S]*side panel/i);
     assert.match(readme, /side panel[\s\S]*TradingView-only/i);
     assert.match(readme, /same seller-safety UI[\s\S]*version 0\.4\.0/i);

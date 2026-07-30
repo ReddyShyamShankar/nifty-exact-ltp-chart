@@ -6,6 +6,8 @@ NiftySidePanel.install(chrome);
 
 const manualPlanApi = globalThis.NiftyManualPlan;
 const MANUAL_PLAN_MUTATION = "MUTATE_MANUAL_PLANS";
+const CHAIN_FETCH = "FETCH_NIFTY_CHAIN";
+const BRIDGE_API = "http://127.0.0.1:8787";
 let manualPlanMutationTail = Promise.resolve();
 
 function finiteNumber(value) {
@@ -49,6 +51,32 @@ function isCaptureMessage(type) {
 
 function isManualPlanMutationMessage(type) {
   return type === MANUAL_PLAN_MUTATION;
+}
+
+function isChainFetchMessage(type) {
+  return type === CHAIN_FETCH;
+}
+
+function isTradingViewSender(sender) {
+  if (!sender?.tab?.id || typeof sender.url !== "string") return false;
+  try {
+    const url = new URL(sender.url);
+    return url.protocol === "https:"
+      && ["tradingview.com", "www.tradingview.com"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function fetchNiftyChain(expiry, fetchImpl = globalThis.fetch) {
+  if (!manualPlanApi.isIsoDate(expiry)) throw new Error("Select one exact NIFTY expiry first.");
+  const response = await fetchImpl(
+    `${BRIDGE_API}/api/nifty-chain?expiry=${encodeURIComponent(expiry)}`,
+    { cache: "no-store" }
+  );
+  const chain = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(chain.error || "Option chain unavailable.");
+  return chain;
 }
 
 function applyManualPlanMutation(store, mutation) {
@@ -247,17 +275,22 @@ async function captureAxisScale(_sender, message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const manualMutation = isManualPlanMutationMessage(message?.type);
-  if (!isCaptureMessage(message?.type) && !manualMutation) return;
-  if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
+  const chainFetch = isChainFetchMessage(message?.type);
+  if (!isCaptureMessage(message?.type) && !manualMutation && !chainFetch) return;
+  if (!isTradingViewSender(sender)) {
     sendResponse({
       ok: false,
-      error: manualMutation
+      error: chainFetch
+        ? "Option-chain refresh is limited to TradingView tabs."
+        : manualMutation
         ? "Manual plan mutations are limited to TradingView tabs."
         : "Axis capture is limited to TradingView tabs."
     });
-    return;
+    return chainFetch || undefined;
   }
-  const operation = manualMutation
+  const operation = chainFetch
+    ? fetchNiftyChain(message.expiry).then((chain) => ({ ok: true, chain }))
+    : manualMutation
     ? enqueueManualPlanMutation(message.mutation)
       .then((manualPlans) => ({ ok: true, manualPlans }))
     : captureAxisScale(sender, message);
@@ -274,7 +307,9 @@ if (typeof module !== "undefined" && module.exports) {
     captureAxisScale,
     enqueueManualPlanMutation,
     extractAxisPrices,
+    fetchNiftyChain,
     isCaptureMessage,
+    isChainFetchMessage,
     isManualPlanMutationMessage,
     isolateAxisCandidates
   };

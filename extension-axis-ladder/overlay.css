@@ -1,21 +1,75 @@
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/GeistMono-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 #nifty-axis-ladder {
-  --ladder-surface: #111315;
-  --ladder-line: #2c3238;
-  --ladder-ink: #f4f4f5;
-  --ladder-atm: #ff9f0a;
-  --ladder-atm-ink: #1b1d22;
-  --ladder-buy: #3b82f6;
-  --ladder-buy-ink: #ffffff;
-  --ladder-sell: #f87171;
-  --ladder-sell-ink: #1b1d22;
-  --ladder-selected: #facc15;
-  --ladder-selected-ink: #111315;
+  --theme-bg: #0a0a0a;
+  --theme-panel: #111113;
+  --theme-panel-2: #161618;
+  --theme-line: #1f1f23;
+  --theme-line-2: #2a2a30;
+  --theme-ink: #f4f4f5;
+  --theme-ink-dim: #a1a1aa;
+  --theme-ink-mute: #71717a;
+  --theme-accent: #34d399;
+  --theme-accent-soft: rgba(52, 211, 153, 0.12);
+  --theme-danger: #f87171;
+  --theme-danger-soft: rgba(248, 113, 113, 0.10);
+  --pnl-profit: #34d399;
+  --pnl-profit-soft: rgba(52, 211, 153, 0.12);
+  --pnl-loss: #f87171;
+  --pnl-loss-soft: rgba(248, 113, 113, 0.10);
+  --plan-surface: #111113;
+  --plan-line: #2a2a30;
+  --plan-ink: #f4f4f5;
+  --theme-warn: #fbbf24;
+  --theme-warn-soft: rgba(251, 191, 36, 0.10);
+  --theme-contrast-ink: #18181b;
+  --theme-status-ink: #f4f4f5;
+  --ladder-surface: var(--theme-panel);
+  --ladder-line: var(--theme-line-2);
+  --ladder-ink: var(--theme-ink);
+  --ladder-atm: var(--theme-warn);
+  --ladder-atm-ink: var(--theme-contrast-ink);
+  --ladder-atm-badge: #111113;
+  --ladder-atm-badge-ink: #f4f4f5;
+  --ladder-buy: var(--theme-accent);
+  --ladder-buy-ink: var(--theme-contrast-ink);
+  --ladder-sell: var(--theme-danger);
+  --ladder-sell-ink: var(--theme-contrast-ink);
+  --ladder-selected: var(--theme-warn);
+  --ladder-selected-ink: var(--theme-contrast-ink);
   position: fixed;
   z-index: 2147483647;
   inset: 0;
   color: var(--ladder-ink);
-  font: 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 12px/1.35 "Geist Mono", ui-monospace, monospace;
   pointer-events: none;
+}
+
+#nifty-axis-ladder[data-theme="light"] {
+  --theme-bg: #fafafa;
+  --theme-panel: #ffffff;
+  --theme-panel-2: #f4f4f5;
+  --theme-line: #e4e4e7;
+  --theme-line-2: #d4d4d8;
+  --theme-ink: #18181b;
+  --theme-ink-dim: #52525b;
+  --theme-ink-mute: #6a6a73;
+  --theme-accent: #066647;
+  --theme-accent-soft: rgba(5, 150, 105, 0.10);
+  --theme-danger: #dc2626;
+  --theme-danger-soft: rgba(220, 38, 38, 0.08);
+  --theme-warn: #b45309;
+  --theme-warn-soft: rgba(180, 83, 9, 0.10);
+  --ladder-atm-ink: #ffffff;
+  --ladder-buy-ink: #ffffff;
+  --ladder-sell-ink: #ffffff;
+  --ladder-selected-ink: #ffffff;
 }
 
 #nifty-seller-risk {
@@ -41,11 +95,11 @@
 }
 
 .nifty-tv-status-badge {
-  color: #fff !important;
+  color: var(--theme-status-ink) !important;
 }
 
-.nifty-tv-status-badge.is-live { background: #16a34a !important; }
-.nifty-tv-status-badge.is-offline { background: #dc2626 !important; }
+.nifty-tv-status-badge.is-live { background: var(--theme-accent) !important; }
+.nifty-tv-status-badge.is-offline { background: var(--theme-danger) !important; }
 
 .nifty-break-even__line {
   position: fixed;
@@ -54,11 +108,11 @@
 }
 
 .nifty-break-even__line.is-call {
-  border-color: #3b82f6;
+  border-color: var(--theme-accent);
 }
 
 .nifty-break-even__line.is-put {
-  border-color: #f59e0b;
+  border-color: var(--theme-warn);
 }
 
 .nifty-break-even__label,
@@ -74,12 +128,12 @@
 
 .nifty-break-even__label.is-call,
 .nifty-break-even__marker.is-call {
-  border-left-color: #3b82f6;
+  border-left-color: var(--theme-accent);
 }
 
 .nifty-break-even__label.is-put,
 .nifty-break-even__marker.is-put {
-  border-left-color: #f59e0b;
+  border-left-color: var(--theme-warn);
 }
 
 .nifty-manual-plan__line {
@@ -88,22 +142,69 @@
   border-top: 1px dashed var(--ladder-line);
 }
 
-.nifty-manual-plan__label,
 .nifty-manual-plan__marker {
   position: fixed;
-  padding: 1px 4px;
-  border-left: 2px solid var(--ladder-ink);
-  background: var(--ladder-surface);
-  color: var(--ladder-ink);
-  font: 10px/1.3 "Geist Mono", ui-monospace, monospace;
-  white-space: nowrap;
 }
 
-.nifty-manual-plan__label.is-flippable,
-.nifty-manual-plan__marker.is-flippable {
+.nifty-manual-plan__group {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: max-content;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.nifty-manual-plan__label,
+.nifty-manual-plan__trade {
+  box-sizing: border-box;
+  display: block;
+  padding: 4px 8px;
+  border: 1px solid var(--plan-line);
+  border-radius: 4px 2px 2px 4px;
+  background: var(--plan-surface);
+  color: var(--plan-ink);
+  box-shadow: none;
+  font: 11px/1.25 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.nifty-manual-plan__label.is-flippable {
   pointer-events: auto;
   cursor: pointer;
 }
+
+.nifty-manual-plan__trades {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nifty-manual-plan__trade {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2ch;
+  border-left-width: 4px;
+}
+
+.nifty-manual-plan__trade.is-profit {
+  border-left-color: var(--pnl-profit);
+  color: var(--pnl-profit);
+}
+
+.nifty-manual-plan__trade.is-loss {
+  border-left-color: var(--pnl-loss);
+  color: var(--pnl-loss);
+}
+
+.nifty-manual-plan__pnl { font-weight: 800; }
+.nifty-manual-plan__pnl.is-profit,
+.nifty-manual-plan__pnl.is-loss,
+.nifty-manual-plan__pnl.is-flat { color: inherit; }
 
 .nifty-seller-risk__band,
 .nifty-seller-risk__line {
@@ -116,29 +217,29 @@
 }
 
 .nifty-seller-risk__band.is-current.is-profit {
-  background: rgba(52, 211, 153, 0.055);
+  background: var(--pnl-profit-soft);
 }
 
 .nifty-seller-risk__band.is-current.is-loss {
-  background: rgba(44, 50, 56, 0.045);
+  background: var(--pnl-loss-soft);
 }
 
 .nifty-seller-risk__band.is-whole-trade.is-profit {
-  background: repeating-linear-gradient(135deg, rgba(52, 211, 153, 0.035) 0 4px, transparent 4px 9px);
+  background: var(--pnl-profit-soft);
 }
 
 .nifty-seller-risk__band.is-whole-trade.is-loss {
-  background: repeating-linear-gradient(-135deg, rgba(244, 63, 94, 0.04) 0 4px, transparent 4px 9px);
+  background: var(--pnl-loss-soft);
 }
 
 .nifty-seller-risk__line {
   z-index: 1;
   height: 0;
-  border-top: 1px solid #34d399;
+  border-top: 1px solid var(--theme-accent);
 }
 
 .nifty-seller-risk__line.is-whole-trade {
-  border-top: 1px dashed #71717a;
+  border-top: 1px dashed var(--theme-ink-mute);
 }
 
 .nifty-seller-risk__label {
@@ -146,15 +247,15 @@
   top: -8px;
   padding: 1px 4px;
   border-radius: 2px;
-  background: rgba(17, 19, 21, 0.86);
-  color: #a7f3d0;
+  background: var(--theme-panel);
+  color: var(--theme-accent);
   font: 9px/1.4 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: nowrap;
   transform: translateX(-100%);
 }
 
 .nifty-seller-risk__line.is-whole-trade .nifty-seller-risk__label {
-  color: #a1a1aa;
+  color: var(--theme-ink-dim);
 }
 
 .nifty-axis-ladder__row {
@@ -167,7 +268,7 @@
   border-radius: 4px 2px 2px 4px;
   background: var(--ladder-surface);
   color: var(--ladder-ink);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
   font: 11px/1.25 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -258,7 +359,7 @@
   height: 14px;
   padding: 0 3px;
   border: 1px solid var(--ladder-selected-ink);
-  border-radius: 7px;
+  border-radius: 2px;
   background: var(--ladder-selected);
   color: var(--ladder-selected-ink);
   font-size: 9px;
@@ -267,10 +368,10 @@
   vertical-align: middle;
 }
 
-.nifty-axis-ladder__row.is-atm:not(.is-selected) .nifty-axis-ladder__badge {
-  border-color: var(--ladder-surface);
-  background: var(--ladder-surface);
-  color: var(--ladder-ink);
+.nifty-axis-ladder__row.is-atm .nifty-axis-ladder__badge {
+  border-color: var(--ladder-atm-badge);
+  background: var(--ladder-atm-badge);
+  color: var(--ladder-atm-badge-ink);
 }
 
 .nifty-axis-ladder__row.is-selected {
@@ -337,7 +438,6 @@
 .nifty-manual-editor button.is-selected {
   background: var(--ladder-selected-ink);
   color: var(--ladder-selected);
-  box-shadow: inset 0 0 0 1px var(--ladder-selected);
 }
 
 .nifty-manual-editor button:disabled {
@@ -406,7 +506,7 @@
   top: 8px;
   right: 8px;
   padding: 4px 6px;
-  color: #a1a1aa;
-  background: rgba(10, 10, 10, 0.82);
+  color: var(--theme-ink-dim);
+  background: var(--theme-panel);
   font: 10px/1.2 "Geist Mono", ui-monospace, monospace;
 }

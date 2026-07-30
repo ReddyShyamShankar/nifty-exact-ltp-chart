@@ -114,55 +114,15 @@ test("initialize sets click behavior and configures existing tabs without openin
   assert.deepEqual(chromeApi.session.niftySidePanelActiveTabs, { "1": 1 });
 });
 
-test("left-click refreshes ladder without opening side panel", async () => {
-  const tab = { id: 7, windowId: 2, url: "https://www.tradingview.com/chart/one" };
-  const chromeApi = fakeChrome([tab]);
-  const controller = sidePanel.createController(chromeApi);
-
-  assert.equal(await controller.refreshLadder(tab), true);
-  assert.deepEqual(chromeApi.calls.find(([kind]) => kind === "message"), [
-    "message",
-    7,
-    { type: "REFRESH_OPTION_NUMBERS" }
-  ]);
-  assert.equal(chromeApi.calls.some(([kind]) => kind === "open"), false);
-  assert.deepEqual(chromeApi.calls.filter(([kind]) => kind === "badge").map(([, value]) => value.text), ["…", "OK"]);
-});
-
-test("failed left-click refresh shows failure badge without opening controls", async () => {
-  const tab = { id: 7, windowId: 2, url: "https://www.tradingview.com/chart/one" };
-  const chromeApi = fakeChrome([tab], { refreshResponse: { ok: false, error: "Bridge unavailable" } });
-  const controller = sidePanel.createController(chromeApi);
-
-  assert.equal(await controller.refreshLadder(tab), false);
-  assert.deepEqual(chromeApi.calls.filter(([kind]) => kind === "badge").map(([, value]) => value.text), ["…", "!"]);
-  assert.equal(chromeApi.calls.some(([kind]) => kind === "open"), false);
-});
-
-test("right-click action menu opens controls without refreshing ladder", async () => {
-  const tab = { id: 7, windowId: 2, url: "https://www.tradingview.com/chart/one" };
-  const chromeApi = fakeChrome([tab]);
-  const controller = sidePanel.createController(chromeApi);
-
-  await controller.createActionMenu();
-  assert.deepEqual(chromeApi.calls[0], ["menu-create", {
-    id: "open-options-ladder-controls",
-    title: "Open Options Ladder controls",
-    contexts: ["action"]
-  }]);
-  chromeApi.calls.length = 0;
-
-  assert.equal(await controller.openControls({ menuItemId: "open-options-ladder-controls" }, tab), true);
-  assert.deepEqual(chromeApi.calls, [["open", { tabId: 7 }]]);
-});
-
-test("install registers lifecycle listeners and never opens or fetches", async () => {
+test("install registers lifecycle listeners without obsolete toolbar-click handlers", async () => {
   const chromeApi = fakeChrome();
   sidePanel.install(chromeApi);
   await new Promise((resolve) => setImmediate(resolve));
-  for (const name of ["installed", "startup", "created", "updated", "activated", "action", "menu"]) {
+  for (const name of ["installed", "startup", "created", "updated", "activated"]) {
     assert.equal(typeof chromeApi.listeners[name], "function");
   }
+  assert.equal(chromeApi.listeners.action, undefined);
+  assert.equal(chromeApi.listeners.menu, undefined);
   const forbidden = new Set(["open", "fetch", "seller-refresh", "positions", "trades", "chain"]);
   assert.equal(chromeApi.calls.some(([kind]) => forbidden.has(kind)), false);
 });

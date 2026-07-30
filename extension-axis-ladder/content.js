@@ -2,9 +2,7 @@
   "use strict";
 
   const RETRY_DELAYS = [0, 250, 650, 1200];
-  const API = "http://127.0.0.1:8787";
   const LABELS_ID = "nifty-axis-ladder";
-  const MAX_LANES = 13;
   const RISK_LABEL_GAP_PX = 12;
   const BREAK_EVEN_LABEL_HEIGHT = 15;
   const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
@@ -28,6 +26,7 @@
     || (typeof module !== "undefined" && module.exports ? require("./manual-ui.js") : null);
   const DEFAULTS = {
     enabled: false,
+    uiTheme: "dark",
     expiry: "current_month",
     labelCount: "5",
     panelOpen: false,
@@ -63,20 +62,15 @@
     return /(?:^|\s)NSE(?:_DLY)?:NIFTY(?:\s+50)?(?:,|$)/i.test(String(label || ""));
   }
 
-  function rowLaneLayout(rows, atm, interval) {
-    if (!Array.isArray(rows) || rows.length < 1 || rows.length > MAX_LANES) return null;
-    const center = Number(atm);
-    const step = Number(interval);
-    if (!Number.isFinite(center) || !Number.isFinite(step) || step <= 0) return null;
+  function rowLaneLayout(rows, _atm, _interval) {
+    if (!Array.isArray(rows) || rows.length < 1) return null;
     const entries = rows.map((row, index) => {
       const strike = Number(row?.strike);
       const y = Number(row?.y);
-      const rawOffset = (strike - center) / step;
-      const offset = Math.round(rawOffset);
-      if (!Number.isFinite(strike) || !Number.isFinite(y) || Math.abs(rawOffset - offset) > 1e-7) return null;
+      if (!Number.isFinite(strike) || !Number.isFinite(y)) return null;
       return { index, strike, y };
     });
-    if (entries.some((entry) => !entry) || !entries.some((entry) => entry.strike === center)) return null;
+    if (entries.some((entry) => !entry)) return null;
     if (new Set(entries.map((entry) => entry.strike)).size !== entries.length) return null;
 
     return { mode: "single", laneCount: 1, lanes: Array(entries.length).fill(0) };
@@ -112,8 +106,8 @@
   }
 
   function priceScaleFailure(kind) {
-    if (kind === "overlap") return "13 STRIKES OVERLAP AT THIS SCALE · ZOOM IN";
-    if (kind === "outside") return "13 STRIKES OUTSIDE VISIBLE PRICE RANGE · ZOOM OUT";
+    if (kind === "overlap") return "VISIBLE STRIKES CANNOT BE PLACED SAFELY";
+    if (kind === "outside") return "NO OPTION STRIKES ON VISIBLE PRICE GRID";
     throw new Error("Unknown price-scale failure.");
   }
 
@@ -159,7 +153,7 @@
   }
 
   function freezeMembership({ timeframe, expiry, interval, nativeInterval = interval, axisPrices, spot, chainRows, tieDirection = "up" }) {
-    const selection = timeframeApi.selectExactThirteen(chainRows, spot, 50, tieDirection);
+    const selection = timeframeApi.selectAxisAlignedRows(chainRows, spot, axisPrices, undefined, tieDirection);
     if (!selection) return null;
     const rows = selection.rows.map((row) => Object.freeze({
       strike: Number(row.strike),
@@ -167,15 +161,12 @@
       put: quote(row.put)
     }));
     const strikes = rows.map((row) => row.strike);
-    const axisSelection = timeframeApi.selectAxisAlignedRows(chainRows, spot, axisPrices, MAX_LANES, tieDirection);
-    const visibleStrikeSet = new Set(axisSelection?.rows.map((row) => Number(row.strike)) || []);
-    visibleStrikeSet.add(selection.center);
-    const visibleStrikes = strikes.filter((strike) => visibleStrikeSet.has(strike));
+    const visibleStrikes = strikes.slice();
     return Object.freeze({
       timeframe,
       expiry,
-      nativeInterval: timeframeApi.snapStrikeInterval(nativeInterval),
-      axisPrices: Object.freeze((Array.isArray(axisPrices) ? axisPrices : []).map(Number).filter(Number.isFinite)),
+      nativeInterval: selection.interval || timeframeApi.snapStrikeInterval(nativeInterval),
+      axisPrices: Object.freeze((selection.axisPrices || []).slice()),
       interval: selection.interval,
       atmStep: selection.atmStep,
       center: selection.center,
@@ -202,6 +193,38 @@
       ...membership,
       strikes: membership.strikes,
       rows: Object.freeze(rows)
+    });
+  }
+
+  function sameStrikes(left, right) {
+    return Array.isArray(left?.strikes)
+      && Array.isArray(right?.strikes)
+      && left.strikes.length === right.strikes.length
+      && left.strikes.every((strike, index) => strike === right.strikes[index]);
+  }
+
+  function refreshMembershipAtSpot(membership, chainRows, spot, tieDirection = "up") {
+    const refreshed = refreshMembership(membership, chainRows);
+    const atm = timeframeApi.nearestAvailableStrike(chainRows, spot, tieDirection);
+    if (!refreshed || !Number.isFinite(atm)) return refreshed;
+    if (atm !== refreshed.atm && hasCompleteMembershipRows(refreshed, chainRows)) {
+      const reselection = freezeMembership({
+        timeframe: refreshed.timeframe,
+        expiry: refreshed.expiry,
+        interval: refreshed.interval,
+        nativeInterval: refreshed.nativeInterval,
+        axisPrices: refreshed.axisPrices,
+        spot,
+        chainRows,
+        tieDirection
+      });
+      if (reselection) return reselection;
+    }
+    return Object.freeze({
+      ...refreshed,
+      center: atm,
+      atm,
+      atmStep: timeframeApi.availableStrikeStep(chainRows) || refreshed.atmStep
     });
   }
 
@@ -275,7 +298,7 @@
         || Number(now()) - Date.parse(snapshot.updatedAt) > SELLER_SAFETY_STALE_MS
         || !Number.isFinite(Number(snapshot.spot))
         || !Array.isArray(snapshot.rows)
-        || snapshot.rows.length < 13
+        || snapshot.rows.length < 1
         || snapshot.rows.some((row) => !Number.isFinite(Number(row?.strike)))
         || new Set(snapshot.rows.map((row) => Number(row.strike))).size !== snapshot.rows.length) return null;
       return {
@@ -364,7 +387,6 @@
         y: toY(row.strike)
       }));
       return positioned.length >= 1
-        && positioned.length <= MAX_LANES
         && positioned.every((row) => Number.isFinite(row.y)) ? positioned : null;
     }
 
@@ -607,39 +629,23 @@
         const chain = await fetchChain(expiry, localRefreshAbort?.signal);
         if (generation !== snapshotGeneration
           || localRefreshRevision !== refreshRevision
-          || current !== snapshot
-          || snapshot.expiry !== expiry) return false;
+          || current?.expiry !== expiry) return false;
         cachedChain = chain;
+        const membership = current;
         const spot = Number(chain?.spot);
-        const lowerMidpoint = snapshot.atm - snapshot.atmStep / 2;
-        const upperMidpoint = snapshot.atm + snapshot.atmStep / 2;
-        const atLowerMidpoint = Math.abs(spot - lowerMidpoint) < 1e-9;
-        const atUpperMidpoint = Math.abs(spot - upperMidpoint) < 1e-9;
-        const crossedLower = spot < lowerMidpoint
-          || (atLowerMidpoint && Number.isFinite(lastSpot) && lastSpot > spot);
-        const crossedUpper = spot > upperMidpoint
-          || (atUpperMidpoint && (!Number.isFinite(lastSpot) || lastSpot < spot));
-        const direction = crossedLower ? "down" : "up";
-        const shouldRecenter = Number.isFinite(spot) && (crossedLower || crossedUpper);
-        const recentered = shouldRecenter ? freezeMembership({
-          timeframe: snapshot.timeframe,
-          expiry: snapshot.expiry,
-          interval: snapshot.nativeInterval,
-          nativeInterval: snapshot.nativeInterval,
-          axisPrices: snapshot.axisPrices,
-          spot,
-          chainRows: chain?.rows,
-          tieDirection: direction
-        }) : null;
-        const membershipChanged = recentered
-          && recentered.strikes.some((strike, index) => strike !== snapshot.strikes[index]);
-        const pendingRecenter = shouldRecenter && !recentered;
-        current = membershipChanged ? recentered : refreshMembership(snapshot, chain?.rows);
+        const direction = Number.isFinite(lastSpot) && spot < lastSpot
+          ? "down"
+          : Number.isFinite(lastSpot) && spot > lastSpot
+          ? "up"
+          : membership.atm <= spot ? "down" : "up";
+        current = Number.isFinite(spot)
+          ? refreshMembershipAtSpot(membership, chain?.rows, spot, direction)
+          : refreshMembership(membership, chain?.rows);
         refreshOwnedMembership = current;
         acceptedFreshData = true;
         const complete = hasCompleteMembershipRows(current, chain?.rows);
-        if (!pendingRecenter) lastSpot = spot;
-        dataStatus = pendingRecenter ? "RECENTER PENDING" : (complete ? "LIVE" : "PARTIAL");
+        if (complete && Number.isFinite(spot)) lastSpot = spot;
+        dataStatus = complete ? "LIVE" : "PARTIAL";
         renderRows(current.rows, current);
         const refreshVisualPlacementRevision = isVisualPlacementCurrent(visualPlacementRevision)
           ? visualPlacementRevision
@@ -710,12 +716,15 @@
           interval: nativeInterval,
           nativeInterval,
           axisPrices: scale.axisPairs.map((pair) => Number(pair.price)),
-          spot: latestMembership.atm,
-          chainRows: latestMembership.rows
+          spot: Number(cachedChain?.spot ?? latestMembership.atm),
+          chainRows: cachedChain?.rows || latestMembership.rows
         });
         if (!axisMembership) throw new Error("Visible axis contracts are unavailable.");
+        const membershipChanged = !sameStrikes(latestMembership, axisMembership);
+        current = axisMembership;
+        if (membershipChanged) renderRows(current.rows, current);
         cachedAxisToY = toY;
-        if (!placeCached(axisMembership, localVisualPlacementRevision)) throw new Error("Exact strike positions are unavailable.");
+        if (!placeCached(current, localVisualPlacementRevision)) throw new Error("Exact strike positions are unavailable.");
         if (Number.isFinite(Number(scale.observedAt))) {
           committedAxisObservedAt = Math.max(committedAxisObservedAt, Number(scale.observedAt));
         }
@@ -896,6 +905,13 @@
   let manualLifecycleGeneration = 0;
   let railVisualRevision = 0;
   let manualRowsConcealed = false;
+  let expandedManualRailDisclosure = null;
+
+  function collapseExpandedManualRailDisclosure() {
+    const active = expandedManualRailDisclosure;
+    expandedManualRailDisclosure = null;
+    active?.collapse?.();
+  }
 
   function normalizeManualPlans(value) {
     return manualPlanApi.normalizeStore(value);
@@ -998,9 +1014,13 @@
 
   function rootNode() {
     let node = document.getElementById(LABELS_ID);
-    if (node) return node;
+    if (node) {
+      node.dataset.theme = settings.uiTheme === "light" ? "light" : "dark";
+      return node;
+    }
     node = document.createElement("div");
     node.id = LABELS_ID;
+    node.dataset.theme = settings.uiTheme === "light" ? "light" : "dark";
     node.hidden = true;
     document.documentElement.append(node);
     if (controller) {
@@ -1103,6 +1123,7 @@
         node.append(element);
       }
       renderManualRow(element, row, membership, entriesByStrike);
+      element.hidden = true;
       existing.delete(row.strike);
     });
     existing.forEach((row) => row.remove());
@@ -1130,6 +1151,7 @@
 
   function removeManualPlanRails(visualPlacementRevision) {
     if (!visualPlacementIsCurrent(visualPlacementRevision)) return false;
+    expandedManualRailDisclosure = null;
     document.getElementById("nifty-manual-plan-rails")?.remove();
     return true;
   }
@@ -1198,7 +1220,7 @@
     return `${sign}₹${Math.abs(rounded).toLocaleString("en-IN")}`;
   }
 
-  function manualPositionPnlLabels(levelIndex, levelCount) {
+  function manualPositionPnlItems(levelIndex, levelCount) {
     const optionType = levelCount === 1 ? null
       : levelIndex === 0 ? "PUT"
         : levelIndex === levelCount - 1 ? "CALL" : null;
@@ -1209,30 +1231,78 @@
         const row = membershipRows.find((candidate) => candidate.strike === entry.strike);
         const pnl = manualPayoffApi?.positionPnl?.(entry, row, 65);
         const side = entry.optionType === "CALL" ? "C" : "P";
-        return `${side} ${Number(entry.strike).toLocaleString("en-IN")} ${entry.direction} ×${entry.lots} · P&L ≈ ${signedApproxRupees(pnl)}`;
+        const label = `${side} ${Number(entry.strike).toLocaleString("en-IN")} ${entry.direction} ×${entry.lots}`;
+        const pnlText = signedApproxRupees(pnl);
+        return {
+          label,
+          pnlText,
+          text: `${label}   ${pnlText}`,
+          tone: pnl > 0 ? "profit" : pnl < 0 ? "loss" : "flat"
+        };
       });
   }
 
-  function makeManualRailFlippable(label, breakEvenLabel, pnlLabels) {
-    if (!label || !pnlLabels.length) return;
-    const faces = [breakEvenLabel, ...pnlLabels];
-    let faceIndex = 0;
-    const advance = (event) => {
-      event?.stopPropagation?.();
-      faceIndex = (faceIndex + 1) % faces.length;
-      label.textContent = faces[faceIndex];
-      label.setAttribute("aria-label", `${faces[faceIndex]}. Click to show next rail detail.`);
+  function makeManualRailDisclosure(group, breakEvenLabel, pnlItems, widthCh) {
+    if (!group) return;
+    let expanded = false;
+    const summary = document.createElement("span");
+    summary.className = "nifty-manual-plan__label is-plan";
+    summary.textContent = breakEvenLabel;
+    const trades = document.createElement("span");
+    trades.className = "nifty-manual-plan__trades";
+    pnlItems.forEach((item) => {
+      const trade = document.createElement("span");
+      trade.className = `nifty-manual-plan__trade is-${item.tone}`;
+      trade.style.width = `${widthCh}ch`;
+      const position = document.createElement("span");
+      position.className = "nifty-manual-plan__position";
+      position.textContent = item.label;
+      const pnl = document.createElement("span");
+      pnl.className = `nifty-manual-plan__pnl is-${item.tone}`;
+      pnl.textContent = item.pnlText;
+      trade.append(position, pnl);
+      trades.append(trade);
+    });
+    const render = () => {
+      group.replaceChildren(summary);
+      if (expanded) group.append(trades);
+      group.classList.toggle("is-expanded", expanded);
+      summary.setAttribute("aria-expanded", String(expanded));
+      summary.setAttribute("aria-label", expanded
+        ? `${breakEvenLabel}. All ${pnlItems.length} relevant trades shown. Click to collapse.`
+        : `${breakEvenLabel}. Click to show all ${pnlItems.length} relevant trades.`);
     };
-    label.classList.add("is-flippable");
-    label.setAttribute("role", "button");
-    label.setAttribute("tabindex", "0");
-    label.setAttribute("aria-label", `${breakEvenLabel}. Click to show individual position P and L.`);
-    label.addEventListener("click", advance);
-    label.addEventListener("keydown", (event) => {
+    const collapse = () => {
+      if (!expanded) return;
+      expanded = false;
+      if (expandedManualRailDisclosure?.group === group) expandedManualRailDisclosure = null;
+      render();
+    };
+    const toggle = (event) => {
+      event?.stopPropagation?.();
+      if (expanded) {
+        collapse();
+        return;
+      }
+      collapseExpandedManualRailDisclosure();
+      expanded = true;
+      expandedManualRailDisclosure = { group, collapse };
+      render();
+    };
+    if (!pnlItems.length) {
+      render();
+      return;
+    }
+    summary.classList.add("is-flippable");
+    summary.setAttribute("role", "button");
+    summary.setAttribute("tabindex", "0");
+    group.addEventListener("click", toggle);
+    group.addEventListener("keydown", (event) => {
       if (!["Enter", " "].includes(event?.key)) return;
       event.preventDefault?.();
-      advance(event);
+      toggle(event);
     });
+    render();
   }
 
   function manualRailPlacements(toY, rect, payoff = manualLevels()) {
@@ -1276,27 +1346,47 @@
     const railRight = Math.max(plotLeft, Math.min(plotRight, Number.isFinite(labelRight) ? labelRight : plotRight));
     const rails = manualPlanRailsRoot();
     rails.replaceChildren();
+    const railItems = placements.map(({ level }, index) => ({
+      breakEvenLabel: level.label,
+      pnlItems: manualPositionPnlItems(index, placements.length)
+    }));
+    const sharedWidthCh = Math.max(34, Math.min(60, 2 + Math.max(...railItems.flatMap(({ breakEvenLabel, pnlItems }) => [
+      breakEvenLabel.length,
+      ...pnlItems.map((item) => item.text.length)
+    ]))));
     placements.forEach(({ level, projection }, index) => {
       const element = document.createElement("div");
       const className = projection.mode === "line" ? "line" : "marker";
+      const themeClass = Number(level.exact) === Number(controller?.membership()?.atm) ? " is-atm" : "";
       element.className = `nifty-manual-plan__${className} is-plan`;
       element.style.top = `${projection.y}px`;
       if (projection.mode === "line") {
         element.style.left = `${plotLeft}px`;
         element.style.width = `${plotRight - plotLeft}px`;
-        const label = document.createElement("span");
-        label.className = "nifty-manual-plan__label is-plan";
-        label.style.right = `${window.innerWidth - railRight}px`;
-        label.style.top = `${labelDecorations[index].top}px`;
-        label.textContent = level.label;
-        makeManualRailFlippable(label, level.label, manualPositionPnlLabels(index, placements.length));
-        element.append(label);
+        const group = document.createElement("span");
+        group.className = `nifty-manual-plan__group is-plan${themeClass}`;
+        group.style.right = `${window.innerWidth - railRight}px`;
+        group.style.top = `${labelDecorations[index].top}px`;
+        makeManualRailDisclosure(
+          group,
+          railItems[index].breakEvenLabel,
+          railItems[index].pnlItems,
+          sharedWidthCh
+        );
+        element.append(group);
       } else {
         element.classList.add(`is-${projection.edge}`);
-        element.style.right = `${window.innerWidth - railRight}px`;
-        element.style.top = `${labelDecorations[index].top}px`;
-        element.textContent = level.label;
-        makeManualRailFlippable(element, level.label, manualPositionPnlLabels(index, placements.length));
+        const group = document.createElement("span");
+        group.className = `nifty-manual-plan__group is-plan${themeClass}`;
+        group.style.right = `${window.innerWidth - railRight}px`;
+        group.style.top = `${labelDecorations[index].top}px`;
+        makeManualRailDisclosure(
+          group,
+          railItems[index].breakEvenLabel,
+          railItems[index].pnlItems,
+          sharedWidthCh
+        );
+        element.append(group);
       }
       rails.append(element);
     });
@@ -1680,10 +1770,11 @@
   }
 
   async function fetchChain(expiry, signal) {
-    const response = await fetch(`${API}/api/nifty-chain?expiry=${encodeURIComponent(expiry)}`, { cache: "no-store", signal });
-    const chain = await response.json();
-    if (!response.ok) throw new Error(chain.error || "Option chain unavailable.");
-    return chain;
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const result = await chrome.runtime.sendMessage({ type: "FETCH_NIFTY_CHAIN", expiry });
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (!result?.ok) throw new Error(result?.error || "Option chain unavailable.");
+    return result.chain;
   }
 
   function placeRows(rows, membership, toY, visualPlacementRevision) {
@@ -1856,6 +1947,8 @@
   }
 
   function handleDocumentPointerDown(event) {
+    if (event.target?.closest?.(".nifty-manual-plan__label.is-flippable")) return;
+    collapseExpandedManualRailDisclosure();
     if (event.target?.closest?.(".nifty-manual-editor")) return;
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
     if (!row) {
@@ -2005,6 +2098,11 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
+    if (changes.uiTheme) {
+      settings.uiTheme = changes.uiTheme.newValue === "light" ? "light" : "dark";
+      const node = document.getElementById(LABELS_ID);
+      if (node) node.dataset.theme = settings.uiTheme;
+    }
     if (changes.enabled) {
       settings.enabled = Boolean(changes.enabled.newValue);
       if (settings.enabled) start(); else stop();

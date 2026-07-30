@@ -20,7 +20,7 @@ test("returns null for unsupported timeframe labels", () => {
   assert.equal(api.timeframeKey(""), null);
 });
 
-test("selects native right-axis strikes plus true ATM without timeframe rules", () => {
+test("selects only native right-axis strikes while retaining ATM metadata", () => {
   const rows = Array.from({ length: 81 }, (_, index) => ({
     strike: 22000 + index * 50,
     call: index,
@@ -31,11 +31,11 @@ test("selects native right-axis strikes plus true ATM without timeframe rules", 
 
   assert.equal(api.preferredIntervalForTimeframe, undefined);
   assert.equal(selection.center, 24300);
-  assert.deepEqual(selection.rows.map((row) => row.strike), [23400, 23700, 24000, 24300]);
+  assert.deepEqual(selection.rows.map((row) => row.strike), [23400, 23700, 24000]);
   assert.equal(selection.interval, 300);
 });
 
-test("native right-axis zoom controls row density while ATM stays present", () => {
+test("native right-axis zoom alone controls row density", () => {
   const rows = Array.from({ length: 81 }, (_, index) => ({ strike: 22000 + index * 50 }));
 
   const zoomedIn = api.selectAxisAlignedRows(rows, 24276.65, [24100, 24200, 24300, 24400, 24500]);
@@ -47,112 +47,68 @@ test("native right-axis zoom controls row density while ATM stays present", () =
   assert.equal(zoomedOut.interval, 300);
 });
 
-test("snaps scale intervals to 50-point grid with a 50-point minimum", () => {
-  assert.equal(api.snapStrikeInterval(1), 50);
-  assert.equal(api.snapStrikeInterval(24), 50);
-  assert.equal(api.snapStrikeInterval(93), 100);
-  assert.equal(api.snapStrikeInterval(238), 250);
-  assert.equal(api.snapStrikeInterval(487), 500);
+test("pins real ATM strike when it sits inside visible TradingView range but between grid labels", () => {
+  const rows = Array.from({ length: 81 }, (_, index) => ({ strike: 22000 + index * 50 }));
+
+  const selection = api.selectAxisAlignedRows(rows, 24276.65, [23600, 23800, 24000, 24200, 24400, 24600]);
+
+  assert.equal(selection.center, 24300);
+  assert.deepEqual(selection.rows.map((row) => row.strike), [23600, 23800, 24000, 24200, 24300, 24400, 24600]);
 });
 
-test("uses the minimum real NIFTY contract step when native ticks are tighter than 50 points", () => {
-  assert.equal(api.maxStrikeInterval(25), 50);
-  assert.equal(api.maxStrikeInterval(49), 50);
-  assert.equal(api.maxStrikeInterval(50), 50);
-  assert.equal(api.maxStrikeInterval(93), 50);
-  assert.equal(api.maxStrikeInterval(238), 200);
-  assert.equal(api.maxStrikeInterval(487), 450);
+test("does not pin ATM when its exact strike lies outside visible TradingView range", () => {
+  const rows = Array.from({ length: 81 }, (_, index) => ({ strike: 22000 + index * 50 }));
+
+  const selection = api.selectAxisAlignedRows(rows, 24276.65, [23000, 23200, 23400, 23600]);
+
+  assert.equal(selection.center, 24300);
+  assert.deepEqual(selection.rows.map((row) => row.strike), [23000, 23200, 23400, 23600]);
 });
 
-test("selects exact 50-point contracts when TradingView native ticks are 25 points", () => {
-  const rows = Array.from({ length: 101 }, (_, index) => ({
-    strike: 21300 + index * 50,
-    call: index,
-    put: index + 100
-  }));
+test("restores rounded TradingView grid slot hidden by live-price marker", () => {
+  const rows = Array.from({ length: 81 }, (_, index) => ({ strike: 22000 + index * 50 }));
 
-  const selection = api.selectExactThirteen(rows, 23767.45, api.maxStrikeInterval(25));
+  const selection = api.selectAxisAlignedRows(rows, 24296.60, [24000, 24100, 24200, 24400, 24500]);
 
-  assert.equal(selection.interval, 50);
-  assert.equal(selection.center, 23750);
-  assert.deepEqual(selection.rows.map((row) => Number(row.strike)), [
-    23450, 23500, 23550, 23600, 23650, 23700, 23750,
-    23800, 23850, 23900, 23950, 24000, 24050
-  ]);
+  assert.deepEqual(selection.axisPrices, [24000, 24100, 24200, 24300, 24400, 24500]);
+  assert.deepEqual(selection.rows.map((row) => row.strike), [24000, 24100, 24200, 24300, 24400, 24500]);
 });
 
-test("builds six below, ATM, and six above", () => {
-  assert.deepEqual(api.thirteenStrikes(23767.45, 100), [
-    23200, 23300, 23400, 23500, 23600, 23700, 23800,
-    23900, 24000, 24100, 24200, 24300, 24400
-  ]);
+test("ignores live-price marker when it distorts neighboring TradingView grid gaps", () => {
+  const rows = Array.from({ length: 81 }, (_, index) => ({ strike: 22000 + index * 50 }));
+  const axisPrices = [24000, 24100, 24200, 24296.6, 24400, 24500];
+
+  assert.equal(api.nativeAxisInterval(axisPrices), 100);
+  assert.deepEqual(api.stableAxisGrid(axisPrices), [24000, 24100, 24200, 24300, 24400, 24500]);
+
+  const selection = api.selectAxisAlignedRows(rows, 24296.6, axisPrices);
+  assert.deepEqual(selection.rows.map((row) => row.strike), [24000, 24100, 24200, 24300, 24400, 24500]);
 });
 
-test("directional midpoint ties recenter toward price movement", () => {
-  assert.equal(api.thirteenStrikes(23850, 100, "up")[6], 23900);
-  assert.equal(api.thirteenStrikes(23750, 100, "down")[6], 23700);
+test("uses real decimal strikes for a non-NIFTY instrument", () => {
+  const rows = [1.05, 1.10, 1.15, 1.20, 1.25].map((strike) => ({ strike }));
+
+  const selection = api.selectAxisAlignedRows(rows, 1.12, [1.00, 1.10, 1.20, 1.30]);
+
+  assert.equal(selection.center, 1.10);
+  assert.equal(selection.interval, 0.1);
+  assert.equal(selection.atmStep, 0.05);
+  assert.deepEqual(selection.rows.map((row) => row.strike), [1.10, 1.20]);
 });
 
-test("chooses the widest exact 13-strike interval available instead of clumping at chain edges", () => {
-  const rows = Array.from({ length: 101 }, (_, index) => ({
-    strike: 21300 + index * 50,
-    call: index,
-    put: index + 100
-  }));
+test("returns every real strike on visible TradingView grid without row cap", () => {
+  const rows = Array.from({ length: 25 }, (_, index) => ({ strike: 100 + index * 10 }));
+  const axisPrices = rows.map((row) => row.strike);
 
-  const selection = api.selectExactThirteen(rows, 23767.45, 1000);
+  const selection = api.selectAxisAlignedRows(rows, 220, axisPrices);
 
-  assert.equal(selection.interval, 400);
-  assert.equal(selection.center, 23750);
-  assert.equal(selection.atmStep, 50);
-  assert.deepEqual(selection.rows.map((row) => Number(row.strike)), [
-    21350, 21750, 22150, 22550, 22950, 23350, 23750,
-    24150, 24550, 24950, 25350, 25750, 26150
-  ]);
+  assert.equal(selection.rows.length, 25);
+  assert.deepEqual(selection.rows.map((row) => row.strike), axisPrices);
 });
 
-test("true ATM comes from nearest real contract and never from display spacing", () => {
-  const rows = Array.from({ length: 101 }, (_, index) => ({ strike: 21300 + index * 50 }));
-
-  assert.equal(api.nearestAvailableStrike(rows, 23767.45), 23750);
-  assert.equal(api.nearestAvailableStrike(rows, 23775, "up"), 23800);
-  assert.equal(api.nearestAvailableStrike(rows, 23775, "down"), 23750);
-  assert.deepEqual(api.strikesFromCenter(23750, 400), [
-    21350, 21750, 22150, 22550, 22950, 23350, 23750,
-    24150, 24550, 24950, 25350, 25750, 26150
-  ]);
-});
-
-test("missing canonical 50-point ATM fails instead of substituting another contract", () => {
-  const rows = Array.from({ length: 101 }, (_, index) => ({ strike: 21300 + index * 50 }))
-    .filter((row) => row.strike !== 23750);
-  assert.equal(api.nearestAvailableStrike(rows, 23767.45), null);
-  assert.equal(api.selectExactThirteen(rows, 23767.45, 400), null);
-});
-
-test("partial response cannot redefine NIFTY ATM step", () => {
-  const rows = Array.from({ length: 21 }, (_, index) => ({ strike: 22800 + index * 100 }));
-  assert.equal(api.availableStrikeStep(rows), 50);
-});
-
-test("exact 13-strike selection fails closed when no complete symmetric range exists", () => {
-  const rows = Array.from({ length: 12 }, (_, index) => ({ strike: 23500 + index * 50 }));
-  assert.equal(api.selectExactThirteen(rows, 23767.45, 500), null);
-});
-
-test("far expiry falls back to thirteen nearest exact contracts when strikes are sparse", () => {
-  const strikes = [
-    16000, 16500, 18000, 19000, 19500, 20000, 21000, 22000, 22500, 23000,
-    24000, 25000, 25500, 26000, 27000, 28000, 28500, 29000, 30000, 31500
-  ];
-  const rows = strikes.map((strike) => ({ strike, call: strike / 100, put: strike / 200 }));
-
-  const selection = api.selectExactThirteen(rows, 23985.35, 50);
-
-  assert.equal(selection.center, 24000);
-  assert.equal(selection.interval, 500);
-  assert.deepEqual(selection.rows.map((row) => Number(row.strike)), [
-    19500, 20000, 21000, 22000, 22500, 23000, 24000,
-    25000, 25500, 26000, 27000, 28000, 28500
-  ]);
+test("ATM uses nearest real strike with directional midpoint tie", () => {
+  const rows = [100, 110, 120].map((strike) => ({ strike }));
+  assert.equal(api.nearestAvailableStrike(rows, 114), 110);
+  assert.equal(api.nearestAvailableStrike(rows, 115, "up"), 120);
+  assert.equal(api.nearestAvailableStrike(rows, 115, "down"), 110);
 });
