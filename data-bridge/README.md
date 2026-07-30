@@ -1,6 +1,6 @@
 # NIFTY automatic-data bridge
 
-Local bridge between Upstox market data and chart extension. It requests NIFTY's `current_month` option chain, so monthly expiry changes automatically without contract selection or TradingView Options clicks.
+Local bridge between Upstox market data and chart extension. Manual extension refresh requests NIFTY option-chain data. Concurrent and near-duplicate requests share one Upstox response.
 
 It reads `UPSTOX_ANALYTICS_TOKEN` from the current process when present. Normal Mac setup stores the read-only one-year Analytics Token in macOS Keychain and installs a LaunchAgent that keeps the bridge alive. Token is never written into this project or browser.
 

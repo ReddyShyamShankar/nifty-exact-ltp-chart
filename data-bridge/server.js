@@ -1,6 +1,7 @@
 import http from "node:http";
 import { spawnSync } from "node:child_process";
 import { userInfo } from "node:os";
+import { createAsyncCache } from "./chain-cache.js";
 
 const PORT = Number(process.env.NIFTY_BRIDGE_PORT || 8787);
 const UPSTOX_CHAIN_URL = "https://api.upstox.com/v2/option/chain";
@@ -9,10 +10,12 @@ const UPSTOX_CANDLES_URL = "https://api.upstox.com/v3/historical-candle";
 const NIFTY_KEY = "NSE_INDEX|Nifty 50";
 const STRIKE_STEP = 50;
 const EXPIRY_CACHE_MS = 15 * 60 * 1000;
+const CHAIN_CACHE_MS = 2000;
 const KEYCHAIN_SERVICE = process.env.NIFTY_UPSTOX_KEYCHAIN_SERVICE || "NIFTY Options Upstox Analytics Token";
 let expiryCache = null;
 let candleCache = null;
 let keychainToken = null;
+const chainCache = createAsyncCache({ ttlMs: CHAIN_CACHE_MS });
 
 function tokenExpiry(token) {
   try {
@@ -102,7 +105,7 @@ function tradingViewOptionSymbol(expiry, strike, right) {
   return `NSE:NIFTY${compactDate}${right}${strike}`;
 }
 
-async function niftyChain(expiry) {
+async function loadNiftyChain(expiry) {
   const url = new URL(UPSTOX_CHAIN_URL);
   url.searchParams.set("instrument_key", NIFTY_KEY);
   url.searchParams.set("expiry_date", expiry);
@@ -124,6 +127,10 @@ async function niftyChain(expiry) {
     ...result,
     rows
   };
+}
+
+function niftyChain(expiry) {
+  return chainCache.get(expiry, () => loadNiftyChain(expiry));
 }
 
 async function niftyExpiries() {
