@@ -972,6 +972,32 @@
     } catch (_) {}
   }
 
+  function strategyBusinessDate() {
+    const identity = currentStrategyIdentity();
+    const timeZone = identity?.instrumentKey?.startsWith("NSE") ? "Asia/Kolkata" : "UTC";
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit"
+    }).formatToParts(new Date()).reduce((result, item) => ({ ...result, [item.type]: item.value }), {});
+    return { date: `${parts.year}-${parts.month}-${parts.day}`, timeZone };
+  }
+
+  async function expireDueStrategies() {
+    if (!strategyStoreApi) return;
+    const business = strategyBusinessDate();
+    try {
+      await persistStrategyCommand({
+        id: `expire:${business.timeZone}:${business.date}`,
+        type: "EXPIRE_DUE",
+        asOfDate: business.date
+      });
+    } catch (_) {}
+  }
+
+  async function synchronizeStrategyLifecycle() {
+    await migrateLegacyStrategies();
+    await expireDueStrategies();
+  }
+
   function manualEntriesForExpiry() {
     return manualPlanApi.entriesFor(settings.manualPlans, settings.expiry);
   }
@@ -1348,7 +1374,12 @@
       settings.strategyBook,
       selectedIds,
       controller?.membership()?.rows || [],
-      { lotSize: 65 }
+      {
+        lotSize: 65,
+        quoteUpdatedAt: controller?.chain()?.updatedAt,
+        now: new Date().toISOString(),
+        maxQuoteAgeMs: SELLER_SAFETY_STALE_MS
+      }
     );
     if (preview.status !== "OK") return { models: [], preview };
     return {
@@ -2521,7 +2552,7 @@
       chrome.storage.local.set?.({ sellerSafetyChartView: settings.sellerSafetyChartView });
     }
     if (settings.enabled) start();
-    void migrateLegacyStrategies();
+    void synchronizeStrategyLifecycle();
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -2553,6 +2584,7 @@
       clearStrategyPreview();
       clearManualTransientState();
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
+      void expireDueStrategies();
       if (settings.enabled) {
         controller?.setExpiry(settings.expiry).then((hasCached) => {
           const activeSnapshotAccepted = settings.sellerSafetyChain
@@ -2586,7 +2618,8 @@
         compare: ensureStrategyChartController()?.comparing() || false,
         instrumentKey: identity?.instrumentKey || "",
         underlying: identity?.underlying || "",
-        expiry: settings.expiry
+        expiry: settings.expiry,
+        timeZone: identity?.instrumentKey?.startsWith("NSE") ? "Asia/Kolkata" : "UTC"
       });
       return false;
     }

@@ -102,6 +102,24 @@ test("missing live quote preserves selection but blocks economics", () => {
   assert.deepEqual(result.missingQuotes, [{ legId: "put", strike: 100, optionType: "PUT" }]);
 });
 
+test("stale live quote timestamp preserves selection but blocks combined economics", () => {
+  const result = preview.buildPreview(
+    twoStrategyBook(),
+    ["s1", "s2"],
+    [{ strike: 100, call: 8, put: 8 }],
+    {
+      lotSize: 1,
+      quoteUpdatedAt: "2026-07-31T09:00:00.000Z",
+      now: "2026-07-31T10:00:00.000Z",
+      maxQuoteAgeMs: 15 * 60 * 1000
+    }
+  );
+  assert.equal(result.status, "INCOMPLETE");
+  assert.deepEqual(result.selectedIds, ["s1", "s2"]);
+  assert.equal(result.disclosure, "LIVE QUOTES STALE · REFRESH REQUIRED");
+  assert.deepEqual(result.breakEvens, []);
+});
+
 test("unknown charges are disclosed, never guessed", () => {
   const book = twoStrategyBook({ put: { charges: [], chargesComplete: false } });
   const result = preview.buildPreview(book, ["s1", "s2"], [{ strike: 100, call: 8, put: 8 }], { lotSize: 1 });

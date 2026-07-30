@@ -2777,7 +2777,8 @@ test("side panel reads temporary chart strategy selection without mutating it", 
     compare: false,
     instrumentKey: "NSE_DLY:NIFTY",
     underlying: "NIFTY",
-    expiry: "2026-08-25"
+    expiry: "2026-08-25",
+    timeZone: "Asia/Kolkata"
   });
   assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__selector")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
@@ -2798,13 +2799,13 @@ test("new leg waits for explicit chart strategy ownership before any write", asy
   assert.deepEqual(chooser.querySelectorAll(".nifty-strategy-owner__choice").map((node) => node.textContent), [
     "ADD TO T1", "ADD TO T2", "CREATE NEW STRATEGY"
   ]);
-  assert.equal(h.strategyMutationMessages().length, 0);
+  assert.equal(h.strategyMutationMessages().filter((command) => command.type === "ADD_LEG").length, 0);
+  assert.equal(h.strategyMutationMessages().filter((command) => command.type === "EXPIRE_DUE").length, 1);
   assert.equal(h.manualMutationMessages().length, 0);
 
   chooser.querySelectorAll(".nifty-strategy-owner__choice")[0].dispatch("click", { stopPropagation() {} });
   await h.settle();
-  assert.equal(h.strategyMutationMessages().length, 1);
-  assert.equal(h.strategyMutationMessages()[0].type, "ADD_LEG");
+  assert.equal(h.strategyMutationMessages().filter((command) => command.type === "ADD_LEG").length, 1);
   assert.equal(h.manualMutationMessages().length, 1);
   assert.equal(h.editor(23750), null);
 });

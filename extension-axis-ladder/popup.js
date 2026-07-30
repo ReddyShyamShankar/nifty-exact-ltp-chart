@@ -17,7 +17,8 @@ const DEFAULTS = {
   sellerSafetyChainsByExpiry: {},
   strategyBook: {
     version: 1, nextSequence: 1, legs: {}, strategies: {}, versions: {}, quarantine: [], appliedCommands: {}
-  }
+  },
+  lastSelectedStrategyByContext: {}
 };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
@@ -26,7 +27,9 @@ let brokerStatus = { configured: false, connected: false, expiresAt: null };
 let expiries = [];
 let pendingReview = null;
 let candidateSequence = 0;
-let strategyPreviewState = { selectedIds: [], compare: false, instrumentKey: "", underlying: "", expiry: "" };
+let strategyPreviewState = {
+  selectedIds: [], compare: false, instrumentKey: "", underlying: "", expiry: "", timeZone: "UTC"
+};
 let activeVersionedStrategyId = "";
 
 function strategyManagerAvailable() {
@@ -62,9 +65,28 @@ async function readChartStrategyPreview() {
     compare: response.compare === true,
     instrumentKey: response.instrumentKey || "",
     underlying: response.underlying || "",
-    expiry: response.expiry || ""
+    expiry: response.expiry || "",
+    timeZone: response.timeZone || "UTC"
   };
+  const restored = OptionsStrategyStore.resolveLastSelected(
+    state.strategyBook,
+    state.lastSelectedStrategyByContext,
+    strategyPreviewState.instrumentKey,
+    strategyPreviewState.expiry
+  );
+  activeVersionedStrategyId = restored?.id || "";
   return strategyPreviewState;
+}
+
+async function rememberVersionedSelection(strategyId) {
+  const key = OptionsStrategyStore.contextKey(strategyPreviewState.instrumentKey, strategyPreviewState.expiry);
+  if (!key) return;
+  await persist({
+    lastSelectedStrategyByContext: {
+      ...(state.lastSelectedStrategyByContext || {}),
+      [key]: strategyId || ""
+    }
+  });
 }
 
 function strategyRow(title, detail, action) {
@@ -174,6 +196,7 @@ async function confirmPermanentSave() {
     });
     await mutateVersionedStrategies(command);
     activeVersionedStrategyId = strategyId;
+    await rememberVersionedSelection(strategyId);
     $("#strategy-save-decision").hidden = true;
     renderStrategyManager();
     strategyManagerStatus("PERMANENT VERSION SAVED · SOURCES ARCHIVED");
@@ -201,6 +224,7 @@ async function splitSelectedStrategyLegs() {
     });
     await mutateVersionedStrategies(command);
     activeVersionedStrategyId = destinationId;
+    await rememberVersionedSelection(destinationId);
     renderStrategyManager();
     strategyManagerStatus("SELECTED LEGS SPLIT INTO NEW STRATEGY");
   } catch (error) {
@@ -230,6 +254,7 @@ async function archiveVersionedStrategy() {
       id: strategyCommandId("archive"), type: "ARCHIVE_STRATEGY", strategyId: activeVersionedStrategyId
     });
     activeVersionedStrategyId = "";
+    await rememberVersionedSelection("");
     renderStrategyManager();
     strategyManagerStatus("STRATEGY ARCHIVED · LEDGER HISTORY PRESERVED");
   } catch (error) {
@@ -242,6 +267,7 @@ function bindStrategyManager() {
   $("#strategy-book-select").addEventListener("change", (event) => {
     activeVersionedStrategyId = event.target.value;
     renderStrategyManager();
+    void rememberVersionedSelection(activeVersionedStrategyId);
   });
   $("#strategy-save").addEventListener("click", beginPermanentSave);
   $("#strategy-save-confirm").addEventListener("click", confirmPermanentSave);
@@ -251,7 +277,9 @@ function bindStrategyManager() {
     const versionId = event.target.closest?.("[data-restore-version-id]")?.dataset.restoreVersionId;
     if (versionId) void restoreStrategyVersion(versionId);
   });
-  void readChartStrategyPreview().catch(() => {}).finally(renderStrategyManager);
+  void readChartStrategyPreview()
+    .catch(() => {})
+    .finally(renderStrategyManager);
 }
 
 function friendlyError(error) {
@@ -1054,6 +1082,10 @@ function bindEvents() {
     $("#expiry-hint").textContent = expiryData ? `${expiryData.daysToExpiry} DTE` : "NO EXPIRY";
     renderCurrent();
     $("#placement-status").textContent = view ? "ACCEPTED STRATEGY VIEW RESTORED" : "EXPIRY CHANGED · PRESS REFRESH ALL";
+    if (strategyManagerAvailable()) {
+      await readChartStrategyPreview().catch(() => null);
+      renderStrategyManager();
+    }
   });
   $("#enabled").addEventListener("click", async () => {
     await persist({ enabled: !state.enabled });

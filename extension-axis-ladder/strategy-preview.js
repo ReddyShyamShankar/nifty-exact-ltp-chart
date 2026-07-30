@@ -68,6 +68,14 @@
       return emptyResult("INCOMPATIBLE", ids);
     }
 
+    const quoteUpdatedAt = Date.parse(options.quoteUpdatedAt || "");
+    const now = Date.parse(options.now || new Date().toISOString());
+    const maxQuoteAgeMs = Number(options.maxQuoteAgeMs);
+    if (Number.isFinite(quoteUpdatedAt) && Number.isFinite(now) && Number.isFinite(maxQuoteAgeMs)
+      && maxQuoteAgeMs >= 0 && now - quoteUpdatedAt > maxQuoteAgeMs) {
+      return emptyResult("INCOMPLETE", ids, { disclosure: "LIVE QUOTES STALE · REFRESH REQUIRED" });
+    }
+
     const entries = ids.flatMap((id) => strategyStore.legsForStrategy(book, id));
     const rows = Array.isArray(quoteRows) ? quoteRows : [];
     const missingQuotes = [];

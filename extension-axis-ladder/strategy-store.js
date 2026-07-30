@@ -164,6 +164,18 @@
       .sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
   }
 
+  function contextKey(instrumentKey, expiry) {
+    if (!nonEmpty(instrumentKey) || !isIsoDate(expiry)) return "";
+    return JSON.stringify([instrumentKey, expiry]);
+  }
+
+  function resolveLastSelected(book, pointers, instrumentKey, expiry) {
+    const active = activeStrategies(book, instrumentKey, expiry);
+    if (!active.length) return null;
+    const wanted = isRecord(pointers) ? pointers[contextKey(instrumentKey, expiry)] : "";
+    return active.find((item) => item.id === wanted) || active[0];
+  }
+
   function legsForStrategy(book, strategyId, versionId) {
     const normalized = normalizeBook(book);
     const strategy = normalized.strategies[strategyId];
@@ -451,6 +463,8 @@
     normalizeLeg,
     normalizeBook,
     activeStrategies,
+    contextKey,
+    resolveLastSelected,
     strategyById,
     legsForStrategy,
     applyCommand,

@@ -130,6 +130,20 @@ test("expired active strategy moves to ledger history and remains inspectable", 
   assert.deepEqual(store.legsForStrategy(expired, "s1").map((item) => item.id), ["leg-1"]);
 });
 
+test("last selection restores only an active strategy in exact instrument and expiry context", () => {
+  const book = seededTwoStrategies();
+  const key = store.contextKey("NSE_INDEX|NIFTY", "2026-08-25");
+  assert.equal(key, '["NSE_INDEX|NIFTY","2026-08-25"]');
+  assert.equal(store.resolveLastSelected(book, { [key]: "s2" }, "NSE_INDEX|NIFTY", "2026-08-25").id, "s2");
+  assert.equal(store.resolveLastSelected(book, { [key]: "missing" }, "NSE_INDEX|NIFTY", "2026-08-25").id, "s1");
+
+  const expired = store.applyCommand(book, {
+    id: "expire-for-restore", type: "EXPIRE_DUE", asOfDate: "2026-08-26"
+  }, "2026-08-26T00:00:00.000Z");
+  assert.equal(store.resolveLastSelected(expired, { [key]: "s2" }, "NSE_INDEX|NIFTY", "2026-08-25"), null);
+  assert.equal(store.resolveLastSelected(book, { [key]: "s2" }, "CME|ES", "2026-08-25"), null);
+});
+
 test("legacy manual plans migrate once without rewriting captured entries", () => {
   const legacy = {
     version: 1,
