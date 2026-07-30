@@ -1,4 +1,7 @@
 # DECISIONS — append-only, numbered
+
+**FOUNDATIONAL RULE:** Build every core rule for any supported optionable pair, index, or market worldwide. NIFTY is current implementation fixture only, never architecture boundary.
+
 ## D1 — 2026-07-24
 
 Use a controlled TradingView-style chart with TradingView Advanced Charts, not native TradingView Pine or a browser overlay.
@@ -98,4 +101,26 @@ Use Upstox as option and candle data source, after proving the account's live ma
 **Alternatives considered:**
 - Right-only rails — superseded after chart review.
 - Combined plan P&L on both rails — rejected as misleading for position-level inspection.
+**Status:** ACTIVE
+
+## D17 — 2026-07-31
+
+**Decision:** Use one timeframe-independent ladder rule: intersect real option-chain strikes with TradingView native right-axis labels, add real ATM only when its exact strike is inside visible range, and show every resulting contract in one column with no fixed row cap.
+**Why:** Chart zoom already expresses useful density. Timeframe tables and thirteen-strike windows contradicted chart evidence and repeatedly hid valid visible strikes.
+**Supersedes:** D7, D9, D11, and every 15-minute/1-hour/4-hour strike-spacing rule.
+**Status:** ACTIVE
+
+## D18 — 2026-07-31
+
+**Decision:** Keep one ARB Desk token system across popup, side panel, and chart overlay; preserve original Options Ladder logo; synchronize light/dark mode through one toggle; keep profit green and loss red invariant across themes.
+**Why:** Product must read as one Markup-family interface without extra colors, icon drift, or theme-dependent financial meaning.
+**Status:** ACTIVE
+
+## D19 — 2026-07-31
+
+**Decision:** Strategy labels open positions/P&L, adjacent square selectors build temporary combined previews, and side panel owns permanent merge, split, restore, archive, and immutable ledger history.
+**Why:** Chart remains direct and clean while permanent actions stay explicit, reversible through new versions, and auditable. One leg identity belongs to one active strategy, but same contract may be entered again later as a distinct leg.
+**Alternatives considered:**
+- Label click for both P&L and selection — rejected because one click would have two meanings.
+- Permanent management only on chart — rejected because version history and destination choices need structured controls.
 **Status:** ACTIVE

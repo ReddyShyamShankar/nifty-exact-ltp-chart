@@ -89,3 +89,28 @@ Buy uses blue, Sell uses red, ATM keeps existing orange, and selected rows use y
 Verified and published checkpoint branches
 
 Chrome reload confirmed new build with `C2`, `P3`, and `P1` badges plus correct Buy/Sell tokens and flippable plan rails. Full suite passes 450/450; base bridge and feature branches were committed and pushed to GitHub, with temporary brainstorm runtime files ignored.
+
+## #15 — 2026-07-31 — feat
+Shipped universal TradingView-axis ladder and ARB Desk theme system
+
+- Removed thirteen-strike windows and timeframe-specific density rules.
+- Ladder now intersects real chain strikes with current TradingView right-axis labels, keeps one column, restores a rounded label hidden by live-price marker, and supports decimal-strike instruments in core selection logic.
+- Preserved real ATM semantics and theme-specific ATM treatment; one toggle synchronizes popup, side panel, and chart.
+- Preserved original Options Ladder logo and locked all UI color literals to approved ARB Desk palette.
+
+## #16 — 2026-07-31 — feat
+Built chart strategy grouping and immutable side-panel versions
+
+- Each new Call/Put leg explicitly joins an active strategy or creates next T-numbered strategy.
+- Strategy label opens positions/P&L; adjacent square independently selects temporary combined preview.
+- Two or more selections replace originals with combined break-even roots; Compare restores originals beside combined roots.
+- Side panel saves preview as new or existing strategy, archives sources, splits selected legs, restores history as new current version, and preserves archived/expired ledger history.
+- Strategy state remains local until public/cloud phase; broker access remains read-only and no order endpoint exists.
+
+## #17 — 2026-07-31 — fix
+Completed live Chrome E2E and release gate for v0.6.0
+
+- Chrome verified exact-axis zoom density, one-column rows, editor ownership, label/square separation, combined preview, Compare, permanent T3 save, source archive, immutable restore, split, ledger archive, offscreen arrows, stacked cards/connectors, reload recovery, synchronized themes, and unchanged logo.
+- Fixed stale temporary selection after permanent merge.
+- Fixed split TradingView canvas paint bursts and prevented a no-contract axis grid from replacing last valid membership, restoring automatic recovery after extreme zoom/reset.
+- Extension internals report v0.6.0 ENABLED with no disable reasons. Full suite passes 516/516; syntax, whitespace, palette, logo hashes, and read-only-order scans pass.

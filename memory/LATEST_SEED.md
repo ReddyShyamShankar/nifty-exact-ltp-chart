@@ -2,18 +2,18 @@
 
 ## STATE
 
-Options Ladder v0.5.0 is loaded from `.worktrees/timeframe-axis-ladder/extension-axis-ladder` and remains isolated on `codex/timeframe-axis-ladder` for user testing. Manual refresh, side panel, exact-axis ladder, clicked-strike break-evens, manual what-if positions, side-specific lot badges, full-width plan rails, and individual-position P&L flips are implemented. GitHub holds both `codex/timeframe-axis-ladder` and `codex/timeframe-axis-ladder-base`; full suite passes 450/450.
+Options Ladder v0.6.0 is complete on `codex/arbdesk-theme-system` in `.worktrees/timeframe-axis-ladder`. Universal TradingView-axis density, one-column ladder, manual editor, chart strategy labels and square selectors, temporary combined previews, permanent merge/split/archive/restore, immutable ledger history, and synchronized ARB Desk light/dark themes are implemented. Live isolated Chrome E2E passed and full suite passes 516/516.
 
 ## NEXT_LINE
 
-Create a separate worktree/branch for the next approved UI change; keep `codex/timeframe-axis-ladder` unchanged as the tested checkpoint until user accepts it.
+Load v0.6.0 in normal Chrome for user visual acceptance; keep next phase focused on premium-movement alerts only after this checkpoint is accepted.
 
 ## MEMORY_KEY
 
-Options Ladder v0.5.0 manual-first checkpoint: explicit refresh, TradingView side panel, exact-axis 13-row ladder, clicked-strike BE rails, double-click plan editor, C/P lot badges, and individual P&L flips; live positions deferred.
+Options Ladder v0.6.0 universal chart checkpoint: TradingView axis decides density, real chain decides strikes, NIFTY is fixture only; square selectors preview combined strategies, side panel versions permanent decisions, all broker paths remain read-only.
 
 ## OPEN_QUESTIONS
-- Which UI correction should start in the next isolated thread?
-- Does the 0.00 option-LTP state reproduce after a healthy bridge refresh, and should zero upstream quotes fail closed visibly?
-- When should live Zerodha positions graduate from deferred foundation to chart-visible workflow?
-- When should `codex/timeframe-axis-ladder` merge into the primary branch after user testing?
+- Should premium-increase alert threshold stay 50% by default, and which notification channels should phase one use?
+- When should local strategy versions sync to cloud for public release?
+- Which non-NIFTY instrument adapter should prove universal architecture first?
+- When should `codex/arbdesk-theme-system` merge into primary branch after user visual acceptance?
