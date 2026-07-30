@@ -24,6 +24,12 @@
     || (typeof module !== "undefined" && module.exports ? require("./manual-interaction.js") : null);
   const manualUiApi = root.NiftyManualUi
     || (typeof module !== "undefined" && module.exports ? require("./manual-ui.js") : null);
+  const strategyStoreApi = root.OptionsStrategyStore
+    || (typeof module !== "undefined" && module.exports ? require("./strategy-store.js") : null);
+  const strategyPreviewApi = root.OptionsStrategyPreview
+    || (typeof module !== "undefined" && module.exports ? require("./strategy-preview.js") : null);
+  const strategyChartApi = root.OptionsStrategyChart
+    || (typeof module !== "undefined" && module.exports ? require("./strategy-chart.js") : null);
   const DEFAULTS = {
     enabled: false,
     uiTheme: "dark",
@@ -35,7 +41,10 @@
     sellerSafetyChartView: null,
     sellerSafetyChain: null,
     sellerSafetyChainsByExpiry: {},
-    manualPlans: manualPlanApi.emptyStore()
+    manualPlans: manualPlanApi.emptyStore(),
+    strategyBook: strategyStoreApi?.emptyBook?.() || {
+      version: 1, nextSequence: 1, legs: {}, strategies: {}, versions: {}, quarantine: [], appliedCommands: {}
+    }
   };
 
   function quote(value) {
@@ -109,6 +118,26 @@
     if (kind === "overlap") return "VISIBLE STRIKES CANNOT BE PLACED SAFELY";
     if (kind === "outside") return "NO OPTION STRIKES ON VISIBLE PRICE GRID";
     throw new Error("Unknown price-scale failure.");
+  }
+
+  function strategyOwnershipChoices(book, instrumentKey, expiry) {
+    const existing = strategyStoreApi?.activeStrategies?.(book, instrumentKey, expiry) || [];
+    return [
+      ...existing.map((strategy) => ({
+        kind: "EXISTING",
+        strategyId: strategy.id,
+        label: `ADD TO ${strategy.label}`
+      })),
+      { kind: "CREATE_NEW", label: "CREATE NEW STRATEGY" }
+    ];
+  }
+
+  function chartInstrumentIdentity(label) {
+    const match = String(label || "").match(/Chart for\s+([^,]+)/i);
+    const instrumentKey = match?.[1]?.trim() || "";
+    if (!instrumentKey) return null;
+    const underlying = instrumentKey.split(":").at(-1)?.replace(/\s+\d+$/, "").trim() || instrumentKey;
+    return { instrumentKey, underlying };
   }
 
   function riskLabelLayout(laneZeroRows) {
@@ -855,6 +884,8 @@
     riskLabelLayout,
     rowLaneLayout,
     rowsFitPlot,
+    strategyOwnershipChoices,
+    chartInstrumentIdentity,
     visibleRowIndexes,
     priceScaleFailure
   };
@@ -906,6 +937,9 @@
   let railVisualRevision = 0;
   let manualRowsConcealed = false;
   let expandedManualRailDisclosure = null;
+  let strategyChartController = null;
+  let openedStrategyId = null;
+  let strategyOwnershipChooser = null;
 
   function collapseExpandedManualRailDisclosure() {
     const active = expandedManualRailDisclosure;
@@ -915,6 +949,27 @@
 
   function normalizeManualPlans(value) {
     return manualPlanApi.normalizeStore(value);
+  }
+
+  function normalizeStrategyBook(value) {
+    return strategyStoreApi?.normalizeBook?.(value) || DEFAULTS.strategyBook;
+  }
+
+  async function migrateLegacyStrategies() {
+    if (!strategyStoreApi) return;
+    const identity = currentStrategyIdentity();
+    if (!identity) return;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "MIGRATE_MANUAL_PLANS",
+        instrumentKey: identity.instrumentKey,
+        underlying: identity.underlying,
+        at: new Date().toISOString()
+      });
+      if (!response?.ok || !response.strategyBook) return;
+      settings.strategyBook = normalizeStrategyBook(response.strategyBook);
+      if (settings.enabled) void controller?.place();
+    } catch (_) {}
   }
 
   function manualEntriesForExpiry() {
@@ -931,6 +986,7 @@
     current?.rowElement?.setAttribute?.("aria-hidden", "false");
     current?.rowElement?.setAttribute?.("tabindex", "0");
     current?.element?.remove?.();
+    strategyOwnershipChooser = null;
     manualEditor = null;
   }
 
@@ -1067,6 +1123,7 @@
     clearManualTransientState();
     clearBreakEvenRails();
     clearManualPlanRails();
+    clearStrategyRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => row.remove());
     node.hidden = !settings.enabled;
@@ -1079,6 +1136,7 @@
     clearManualTransientState();
     clearBreakEvenRails();
     clearManualPlanRails();
+    clearStrategyRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => { row.hidden = true; });
     node.hidden = !settings.enabled;
@@ -1188,6 +1246,272 @@
       rootNode().append(rails);
     }
     return rails;
+  }
+
+  function strategyRailsRoot() {
+    let rails = document.getElementById("nifty-strategy-rails");
+    if (!rails) {
+      rails = document.createElement("div");
+      rails.id = "nifty-strategy-rails";
+      rootNode().append(rails);
+    }
+    return rails;
+  }
+
+  function installStrategyChartController() {
+    if (!strategyChartApi?.createController) return null;
+    strategyChartController = strategyChartApi.createController({
+      onOpen(strategyId) {
+        openedStrategyId = strategyId;
+        void controller?.place();
+      },
+      onSelection() {
+        void controller?.place();
+      },
+      onCompare() {
+        void controller?.place();
+      }
+    });
+    return strategyChartController;
+  }
+
+  function ensureStrategyChartController() {
+    return strategyChartController || installStrategyChartController();
+  }
+
+  function clearStrategyRails() {
+    document.getElementById("nifty-strategy-rails")?.remove();
+  }
+
+  function clearStrategyPreview() {
+    openedStrategyId = null;
+    strategyOwnershipChooser?.remove?.();
+    strategyOwnershipChooser = null;
+    installStrategyChartController();
+    clearStrategyRails();
+  }
+
+  function currentStrategyIdentity() {
+    return chartInstrumentIdentity(chartCanvas()?.getAttribute("aria-label") || "");
+  }
+
+  function activeChartStrategies() {
+    const identity = currentStrategyIdentity();
+    if (!identity || !strategyStoreApi) return [];
+    return strategyStoreApi.activeStrategies(settings.strategyBook, identity.instrumentKey, settings.expiry);
+  }
+
+  function knownStrategyCharges(entries) {
+    return entries.reduce((total, entry) => total + (entry.charges || []).reduce(
+      (sum, charge) => sum + (Number.isFinite(Number(charge?.amount)) ? Number(charge.amount) : 0), 0
+    ), 0);
+  }
+
+  function strategyPnlItems(entries) {
+    const rows = controller?.membership()?.rows || [];
+    return entries.map((entry) => {
+      const row = rows.find((candidate) => Number(candidate.strike) === Number(entry.strike));
+      const pnl = manualPayoffApi?.positionPnl?.(entry, row, 65);
+      const side = entry.optionType === "CALL" ? "C" : "P";
+      return {
+        text: `${side} ${Number(entry.strike).toLocaleString("en-IN")} ${entry.direction} ×${entry.lots}`,
+        pnl: signedApproxRupees(pnl),
+        tone: pnl > 0 ? "profit" : pnl < 0 ? "loss" : "flat"
+      };
+    });
+  }
+
+  function originalStrategyModels() {
+    return activeChartStrategies().flatMap((strategy) => {
+      const entries = strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id);
+      const chargeOffset = knownStrategyCharges(entries) / 65;
+      const result = manualPayoffApi?.levels?.(entries, `${strategy.label} BE`, chargeOffset);
+      if (result?.status !== "ok") return [];
+      const chargesComplete = entries.every((entry) => entry.chargesComplete === true);
+      return result.levels.map((level) => ({
+        kind: "STRATEGY",
+        strategyId: strategy.id,
+        strategyLabel: strategy.label,
+        exact: level.exact,
+        label: level.label,
+        selected: ensureStrategyChartController()?.isSelected(strategy.id) || false,
+        entries,
+        disclosure: chargesComplete ? null : "EXCLUDING UNKNOWN CHARGES"
+      }));
+    });
+  }
+
+  function combinedStrategyModels() {
+    const selectedIds = ensureStrategyChartController()?.selected() || [];
+    if (selectedIds.length < 2 || !strategyPreviewApi) return { models: [], preview: null };
+    const preview = strategyPreviewApi.buildPreview(
+      settings.strategyBook,
+      selectedIds,
+      controller?.membership()?.rows || [],
+      { lotSize: 65 }
+    );
+    if (preview.status !== "OK") return { models: [], preview };
+    return {
+      preview,
+      models: strategyPreviewApi.displayLevels(preview, "COMBINED BE").map((level) => ({
+        kind: "COMBINED",
+        exact: level.exact,
+        label: level.label,
+        entries: preview.entries,
+        disclosure: preview.disclosure
+      }))
+    };
+  }
+
+  function renderStrategyPreviewBar(rootNodeValue, preview, selectedCount) {
+    if (selectedCount < 2) return;
+    const bar = document.createElement("div");
+    bar.className = "nifty-strategy-preview";
+    const summary = document.createElement("span");
+    summary.className = "nifty-strategy-preview__summary";
+    summary.textContent = preview?.status === "OK"
+      ? `${selectedCount} SELECTED · ${preview.disclosure || "CHARGES INCLUDED"}`
+      : `${selectedCount} SELECTED · ${preview?.status || "INCOMPLETE"}`;
+    const compare = document.createElement("button");
+    compare.type = "button";
+    compare.className = "nifty-strategy-preview__compare";
+    compare.textContent = "Compare";
+    compare.setAttribute("aria-pressed", String(ensureStrategyChartController()?.comparing() || false));
+    compare.addEventListener("click", (event) => {
+      event.stopPropagation?.();
+      strategyChartController.compare(!strategyChartController.comparing());
+    });
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "nifty-strategy-preview__clear";
+    clear.textContent = "Clear";
+    clear.addEventListener("click", (event) => {
+      event.stopPropagation?.();
+      clearStrategyPreview();
+      void controller?.place();
+    });
+    bar.append(summary, compare, clear);
+    rootNodeValue.append(bar);
+  }
+
+  function appendStrategyDetails(card, model) {
+    if (model.kind !== "STRATEGY" || openedStrategyId !== model.strategyId) return;
+    const details = document.createElement("span");
+    details.className = "nifty-strategy__trades";
+    strategyPnlItems(model.entries).forEach((item) => {
+      const trade = document.createElement("span");
+      trade.className = `nifty-strategy__trade is-${item.tone}`;
+      const position = document.createElement("span");
+      position.textContent = item.text;
+      const pnl = document.createElement("span");
+      pnl.textContent = item.pnl;
+      trade.append(position, pnl);
+      details.append(trade);
+    });
+    if (model.disclosure) {
+      const disclosure = document.createElement("span");
+      disclosure.className = "nifty-strategy__disclosure";
+      disclosure.textContent = model.disclosure;
+      details.append(disclosure);
+    }
+    card.append(details);
+  }
+
+  function placeStrategyRails(toY, rect, labelRight, visualPlacementRevision) {
+    if (!visualPlacementIsCurrent(visualPlacementRevision) || !strategyChartApi || !strategyStoreApi) return false;
+    const originals = originalStrategyModels();
+    const selectedIds = ensureStrategyChartController()?.selected() || [];
+    const { models: combined, preview } = combinedStrategyModels();
+    const showOriginals = selectedIds.length < 2 || strategyChartController.comparing() || !combined.length;
+    const models = [...(showOriginals ? originals : []), ...combined];
+    if (!models.length) {
+      clearStrategyRails();
+      return false;
+    }
+    const prices = (controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite);
+    const axisMap = {
+      minPrice: Math.min(...prices),
+      maxPrice: Math.max(...prices),
+      minY: Number(rect.top),
+      maxY: Number(rect.bottom),
+      priceToY: toY
+    };
+    const projected = models.map((model, index) => ({
+      ...model,
+      id: `${model.kind}:${model.strategyId || "combined"}:${index}`,
+      projection: strategyChartApi.projectBreakEven(model.exact, axisMap)
+    })).filter((model) => model.projection.mode !== "HIDDEN");
+    if (!projected.length) {
+      clearStrategyRails();
+      return false;
+    }
+    const cards = strategyChartApi.stackCards(projected.map((model) => ({
+      id: model.id,
+      railY: model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY,
+      height: 28
+    })), { gap: 6, minY: Number(rect.top), maxY: Number(rect.bottom) });
+    const cardById = new Map(cards.map((card) => [card.id, card]));
+    const rootNodeValue = strategyRailsRoot();
+    rootNodeValue.replaceChildren();
+    renderStrategyPreviewBar(rootNodeValue, preview, selectedIds.length);
+    const cardRight = Math.max(Number(rect.left), Math.min(Number(rect.right), Number(labelRight) || Number(rect.right)));
+    projected.forEach((model) => {
+      const placement = cardById.get(model.id);
+      if (!placement) return;
+      const rail = document.createElement("div");
+      rail.className = model.projection.mode === "RAIL"
+        ? "nifty-strategy__rail"
+        : `nifty-strategy__edge is-${String(model.projection.edge).toLowerCase()}`;
+      rail.style.top = `${placement.railY}px`;
+      rail.style.left = `${rect.left}px`;
+      rail.style.width = `${rect.right - rect.left}px`;
+      rootNodeValue.append(rail);
+      if (placement.connector.moved) {
+        const connector = document.createElement("div");
+        connector.className = "nifty-strategy__connector";
+        connector.style.right = `${window.innerWidth - cardRight}px`;
+        connector.style.top = `${Math.min(placement.connector.fromY, placement.connector.toY)}px`;
+        connector.style.height = `${Math.abs(placement.connector.toY - placement.connector.fromY)}px`;
+        rootNodeValue.append(connector);
+      }
+      const card = document.createElement("div");
+      card.className = `nifty-strategy__card is-${model.kind.toLowerCase()}`;
+      card.style.right = `${window.innerWidth - cardRight}px`;
+      card.style.top = `${placement.cardY}px`;
+      if (model.kind === "STRATEGY") {
+        const selector = document.createElement("button");
+        selector.type = "button";
+        selector.className = "nifty-strategy__selector";
+        selector.setAttribute("aria-pressed", String(model.selected));
+        selector.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
+        selector.addEventListener("click", (event) => {
+          event.stopPropagation?.();
+          strategyChartController.square(model.strategyId);
+        });
+        const label = document.createElement("button");
+        label.type = "button";
+        label.className = "nifty-strategy__label";
+        label.textContent = `${model.label}${model.projection.mode === "EDGE" ? ` ${model.projection.arrow}` : ""}`;
+        label.setAttribute("aria-label", strategyChartApi.accessibleLabel({
+          ...model,
+          mode: model.projection.mode,
+          edge: model.projection.edge
+        }));
+        label.addEventListener("click", (event) => {
+          event.stopPropagation?.();
+          strategyChartController.label(model.strategyId);
+        });
+        card.append(selector, label);
+      } else {
+        const label = document.createElement("span");
+        label.className = "nifty-strategy__label";
+        label.textContent = `${model.label}${model.projection.mode === "EDGE" ? ` ${model.projection.arrow}` : ""}`;
+        card.append(label);
+      }
+      appendStrategyDetails(card, model);
+      rootNodeValue.append(card);
+    });
+    return true;
   }
 
   function manualDraftIdentity(draft) {
@@ -1550,6 +1874,26 @@
     return normalized;
   }
 
+  async function persistStrategyCommand(command) {
+    const response = await chrome.runtime.sendMessage({ type: "MUTATE_STRATEGY_BOOK", command });
+    if (!response?.ok || !response.strategyBook) {
+      throw new Error(response?.error || "Strategy mutation failed.");
+    }
+    settings.strategyBook = normalizeStrategyBook(response.strategyBook);
+    return settings.strategyBook;
+  }
+
+  function strategyLegFromManualEntry(entry, identity) {
+    return {
+      ...entry,
+      source: "MANUAL",
+      instrumentKey: identity.instrumentKey,
+      underlying: identity.underlying,
+      charges: [],
+      chargesComplete: false
+    };
+  }
+
   function openManualEditor(context) {
     if (!manualUiApi?.createDraft || !manualUiApi?.renderEditor || !manualPlanApi) return;
     const strike = Number(context?.strike);
@@ -1595,6 +1939,75 @@
       }
     }
 
+    function requestStrategyOwnership(entryToSave) {
+      const identity = currentStrategyIdentity();
+      if (!identity || !strategyStoreApi) {
+        void commitManualPlan({ type: "upsert", entry: entryToSave });
+        return;
+      }
+      strategyOwnershipChooser?.remove?.();
+      const chooser = document.createElement("div");
+      chooser.className = "nifty-strategy-owner";
+      const title = document.createElement("span");
+      title.className = "nifty-strategy-owner__title";
+      title.textContent = "CHOOSE STRATEGY";
+      chooser.append(title);
+      const choices = strategyOwnershipChoices(settings.strategyBook, identity.instrumentKey, entryToSave.expiry);
+      choices.forEach((choice) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "nifty-strategy-owner__choice";
+        button.textContent = choice.label;
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation?.();
+          chooser.querySelectorAll(".nifty-strategy-owner__choice").forEach((node) => { node.disabled = true; });
+          try {
+            let strategyId = choice.strategyId;
+            if (choice.kind === "CREATE_NEW") {
+              strategyId = crypto.randomUUID();
+              const strategySequence = Number(settings.strategyBook?.nextSequence) || 1;
+              await persistStrategyCommand({
+                id: crypto.randomUUID(),
+                type: "CREATE_STRATEGY",
+                strategyId,
+                versionId: crypto.randomUUID(),
+                label: `T${strategySequence}`,
+                instrumentKey: identity.instrumentKey,
+                underlying: identity.underlying,
+                expiry: entryToSave.expiry
+              });
+            }
+            await persistStrategyCommand({
+              id: crypto.randomUUID(),
+              type: "ADD_LEG",
+              strategyId,
+              versionId: crypto.randomUUID(),
+              leg: strategyLegFromManualEntry(entryToSave, identity)
+            });
+            chooser.remove();
+            strategyOwnershipChooser = null;
+            await commitManualPlan({ type: "upsert", entry: entryToSave });
+          } catch (_) {
+            chooser.querySelectorAll(".nifty-strategy-owner__choice").forEach((node) => { node.disabled = false; });
+            showStatus("STRATEGY NOT SAVED");
+          }
+        });
+        chooser.append(button);
+      });
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "nifty-strategy-owner__cancel";
+      cancel.textContent = "CANCEL";
+      cancel.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        chooser.remove();
+        strategyOwnershipChooser = null;
+      });
+      chooser.append(cancel);
+      editor.append(chooser);
+      strategyOwnershipChooser = chooser;
+    }
+
     function renderEditor(placePreview = false) {
       editor?.remove?.();
       editor = manualUiApi.renderEditor(document, draft, {
@@ -1619,7 +2032,8 @@
             id: draft.id || crypto.randomUUID(),
             now: new Date().toISOString()
           });
-          await commitManualPlan({ type: "upsert", entry: entryToSave });
+          if (draft.id) await commitManualPlan({ type: "upsert", entry: entryToSave });
+          else requestStrategyOwnership(entryToSave);
         },
         async remove() {
           if (!draft.id) return;
@@ -1840,11 +2254,18 @@
       const labelRight = riskLabelLayout(laneZeroRows)?.labelRight ?? rect.right;
       const railDecorations = sharedRailDecorations(toY, rect);
       placeBreakEvenRails(toY, rect, labelRight, railDecorations.quick, visualPlacementRevision);
-      placeManualPlanRails(toY, rect, labelRight, railDecorations.manual, visualPlacementRevision);
+      if (activeChartStrategies().length) {
+        clearManualPlanRails(visualPlacementRevision);
+        placeStrategyRails(toY, rect, labelRight, visualPlacementRevision);
+      } else {
+        clearStrategyRails();
+        placeManualPlanRails(toY, rect, labelRight, railDecorations.manual, visualPlacementRevision);
+      }
       return { riskLayout: { labelRight } };
     } catch (error) {
       clearBreakEvenRails(visualPlacementRevision);
       clearManualPlanRails(visualPlacementRevision);
+      clearStrategyRails();
       elements.forEach(({ element }) => { element.hidden = true; });
       throw error;
     } finally {
@@ -1871,6 +2292,7 @@
     if (!isNiftyChartLabel(label)) {
       clearRetries();
       clearBreakEvenSelection();
+      clearStrategyPreview();
       clearManualTransientState();
       clearManualPlanRails();
       controller.invalidate();
@@ -1921,6 +2343,7 @@
       currentUrl = nextUrl;
       manualRowsConcealed = true;
       clearBreakEvenSelection();
+      clearStrategyPreview();
       clearManualTransientState();
       clearManualPlanRails();
     }
@@ -1935,6 +2358,7 @@
     currentUrl = String(root.location?.href || "");
     manualRowsConcealed = true;
     clearBreakEvenSelection();
+    clearStrategyPreview();
     clearManualTransientState();
     clearManualPlanRails();
   }
@@ -1942,6 +2366,7 @@
   function handlePageHide() {
     manualRowsConcealed = true;
     clearBreakEvenSelection();
+    clearStrategyPreview();
     clearManualTransientState();
     clearManualPlanRails();
   }
@@ -2064,6 +2489,7 @@
 
   function stop() {
     clearBreakEvenSelection();
+    clearStrategyPreview();
     clearManualTransientState();
     clearManualPlanRails();
     document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
@@ -2090,10 +2516,12 @@
     const loaded = { ...DEFAULTS, ...stored };
     settings = sellerViewIdentityApi.normalizeStoredRiskViews(loaded);
     settings.manualPlans = normalizeManualPlans(loaded.manualPlans);
+    settings.strategyBook = normalizeStrategyBook(loaded.strategyBook);
     if (settings.sellerSafetyChartView !== loaded.sellerSafetyChartView) {
       chrome.storage.local.set?.({ sellerSafetyChartView: settings.sellerSafetyChartView });
     }
     if (settings.enabled) start();
+    void migrateLegacyStrategies();
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -2116,8 +2544,13 @@
       settings.manualPlans = normalizeManualPlans(changes.manualPlans.newValue);
       void renderStorageManualPlans();
     }
+    if (changes.strategyBook) {
+      settings.strategyBook = normalizeStrategyBook(changes.strategyBook.newValue);
+      if (settings.enabled) void controller?.place();
+    }
     if (changes.expiry) {
       clearBreakEvenSelection();
+      clearStrategyPreview();
       clearManualTransientState();
       settings.expiry = changes.expiry.newValue || DEFAULTS.expiry;
       if (settings.enabled) {
@@ -2156,6 +2589,7 @@
     }
     if (message.type === "REFRESH_OPTION_NUMBERS") {
       clearBreakEvenSelection();
+      clearStrategyPreview();
       clearManualTransientState({ invalidatePlacements: false });
       clearManualPlanRails();
       const refresh = controller?.membership() ? controller.refreshLtp() : rebuildCurrent(true, true);

@@ -7,6 +7,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const api = require("./content.js");
 const viewIdentity = require("./seller-view-identity.js");
+const strategyStore = require("./strategy-store.js");
 
 const RISK_EXPIRY = "2026-08-25";
 
@@ -2096,6 +2097,53 @@ test("rows alone accept input while fullscreen overlay remains pointer-transpare
   assert.match(css, /\.nifty-axis-ladder__row\s*\{[\s\S]*?pointer-events:\s*auto/);
 });
 
+test("strategy ownership choices always require explicit existing or new destination", () => {
+  let book = strategyStore.emptyBook();
+  book = strategyStore.applyCommand(book, {
+    id: "create-s1", type: "CREATE_STRATEGY", strategyId: "s1", versionId: "s1-v1",
+    label: "T1", instrumentKey: "NSE_INDEX|NIFTY", underlying: "NIFTY", expiry: "2026-08-25"
+  }, "2026-07-31T10:00:00.000Z");
+  assert.deepEqual(api.strategyOwnershipChoices(book, "NSE_INDEX|NIFTY", "2026-08-25"), [
+    { kind: "EXISTING", strategyId: "s1", label: "ADD TO T1" },
+    { kind: "CREATE_NEW", label: "CREATE NEW STRATEGY" }
+  ]);
+  assert.deepEqual(api.strategyOwnershipChoices(book, "CME|ES", "2026-09-18"), [
+    { kind: "CREATE_NEW", label: "CREATE NEW STRATEGY" }
+  ]);
+});
+
+test("strategy chart integration keeps label and square as separate actions", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /className = "nifty-strategy__label"/);
+  assert.match(source, /className = "nifty-strategy__selector"/);
+  assert.match(source, /strategyChartController\.label\(model\.strategyId\)/);
+  assert.match(source, /strategyChartController\.square\(model\.strategyId\)/);
+  assert.doesNotMatch(source, /nifty-strategy[^\n]*dblclick/);
+  assert.match(source, /addEventListener\("dblclick", handleLadderDoubleClick\)/);
+});
+
+test("strategy chart renders preview, Compare, edges, collisions, and lifecycle clear contracts", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  for (const token of [
+    "nifty-strategy-rails", "nifty-strategy__edge", "nifty-strategy__connector",
+    "nifty-strategy-preview", "COMBINED BE", "EXCLUDING UNKNOWN CHARGES",
+    "clearStrategyPreview"
+  ]) assert.match(source, new RegExp(token));
+  assert.match(source, /strategyChartApi\.stackCards/);
+  assert.match(source, /strategyChartApi\.projectBreakEven/);
+  assert.match(source, /Compare/);
+});
+
+test("strategy chart CSS uses existing tokens and square selector in both themes", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const strategyCss = css.slice(css.indexOf("#nifty-strategy-rails"));
+  assert.match(strategyCss, /\.nifty-strategy__selector\s*\{[\s\S]*?width:\s*16px[\s\S]*?height:\s*16px/);
+  assert.match(strategyCss, /\.nifty-strategy__selector\[aria-pressed="true"\][\s\S]*?var\(--pnl-profit\)/);
+  assert.match(strategyCss, /\.nifty-strategy__trade\.is-profit[\s\S]*?var\(--pnl-profit\)/);
+  assert.match(strategyCss, /\.nifty-strategy__trade\.is-loss[\s\S]*?var\(--pnl-loss\)/);
+  assert.doesNotMatch(strategyCss, /#[0-9a-f]{3,8}\b/i);
+});
+
 function createBreakEvenLifecycleHarness({
   plotRect = { left: 0, top: 0, right: 1200, bottom: 800 },
   invalidRows = {},
@@ -2106,7 +2154,8 @@ function createBreakEvenLifecycleHarness({
   deferManualStorageEvents = false,
   deferAxisCaptures: initiallyDeferAxisCaptures = false,
   deferFetches: initiallyDeferFetches = false,
-  spot = 23767.45
+  spot = 23767.45,
+  strategyBook = null
 } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const nodesById = new Map();
@@ -2136,6 +2185,10 @@ function createBreakEvenLifecycleHarness({
   const manualPayoffApi = require("./manual-payoff.js");
   const manualInteractionApi = require("./manual-interaction.js");
   const manualUiApi = require("./manual-ui.js");
+  const strategyPreviewApi = require("./strategy-preview.js");
+  const strategyChartApi = require("./strategy-chart.js");
+  let storedStrategyBook = strategyBook;
+  const strategyMutationMessages = [];
   const initialManualPlans = rawManualPlans || manualEntries.reduce(
     (store, entry) => manualPlanApi.upsertEntry(store, entry),
     manualPlanApi.emptyStore()
@@ -2332,12 +2385,31 @@ function createBreakEvenLifecycleHarness({
         return manualUiApi.renderRow(...args);
       }
     },
+    ...(strategyBook ? {
+      OptionsStrategyStore: strategyStore,
+      OptionsStrategyPreview: strategyPreviewApi,
+      OptionsStrategyChart: strategyChartApi
+    } : {}),
     NiftyRiskOverlay: require("./risk-overlay.js"),
     NiftySellerViewIdentity: viewIdentity,
     NiftyTimeframeLadder: require("./timeframe-ladder.js"),
     chrome: {
       runtime: {
         sendMessage: async (message) => {
+          if (message?.type === "MIGRATE_MANUAL_PLANS" && strategyBook) {
+            storedStrategyBook = strategyStore.migrateManualPlans(storedStrategyBook, storedManualPlans, {
+              instrumentKey: message.instrumentKey,
+              underlying: message.underlying,
+              at: message.at
+            });
+            return { ok: true, strategyBook: storedStrategyBook };
+          }
+          if (message?.type === "MUTATE_STRATEGY_BOOK" && strategyBook) {
+            strategyMutationMessages.push(message.command);
+            storedStrategyBook = strategyStore.applyCommand(storedStrategyBook, message.command);
+            dispatchStorage({ strategyBook: { newValue: storedStrategyBook } });
+            return { ok: true, strategyBook: storedStrategyBook };
+          }
           if (message?.type === "MUTATE_MANUAL_PLANS") {
             manualMutationMessages.push(message.mutation);
             const commit = async () => {
@@ -2395,7 +2467,8 @@ function createBreakEvenLifecycleHarness({
               expiry: snapshot.expiry,
               manualPlans: initialManualPlans,
               sellerSafetyChain: snapshot,
-              sellerSafetyChainsByExpiry: { [snapshot.expiry]: snapshot }
+              sellerSafetyChainsByExpiry: { [snapshot.expiry]: snapshot },
+              ...(strategyBook ? { strategyBook: storedStrategyBook } : {})
             });
           },
           async set(value) {
@@ -2475,6 +2548,8 @@ function createBreakEvenLifecycleHarness({
     invalidManualEntries() { return manualPlanApi.invalidEntries(storedManualPlans); },
     storageSetCalls() { return storageWrites.length; },
     manualMutationMessages() { return manualMutationMessages.slice(); },
+    strategyMutationMessages() { return strategyMutationMessages.slice(); },
+    strategyRails() { return document.getElementById("nifty-strategy-rails"); },
     localManualSetCalls() { return localManualSetCalls; },
     lastManualPlanWrite() { return storageWrites.at(-1)?.[manualPlanApi.STORAGE_KEY] || null; },
     pendingStorageWriteCount() { return pendingStorageWrites.length; },
@@ -2605,6 +2680,112 @@ function createBreakEvenLifecycleHarness({
   };
 
 }
+
+function chartStrategyBook() {
+  const at = "2026-07-31T10:00:00.000Z";
+  const identity = { instrumentKey: "NSE_DLY:NIFTY", underlying: "NIFTY", expiry: "2026-08-25" };
+  const leg = (id, optionType) => ({
+    id,
+    source: "MANUAL",
+    ...identity,
+    strike: 23800,
+    optionType,
+    direction: "SELL",
+    lots: 1,
+    premium: 100,
+    callSnapshot: 100,
+    putSnapshot: 100,
+    charges: [],
+    chargesComplete: true,
+    createdAt: at,
+    updatedAt: at
+  });
+  let book = strategyStore.emptyBook();
+  for (const [strategyId, label, optionType] of [["s1", "T1", "CALL"], ["s2", "T2", "PUT"]]) {
+    book = strategyStore.applyCommand(book, {
+      id: `create-${strategyId}`,
+      type: "CREATE_STRATEGY",
+      strategyId,
+      versionId: `${strategyId}-v1`,
+      label,
+      ...identity
+    }, at);
+    book = strategyStore.applyCommand(book, {
+      id: `add-${strategyId}`,
+      type: "ADD_LEG",
+      strategyId,
+      versionId: `${strategyId}-v2`,
+      leg: leg(`leg-${strategyId}`, optionType)
+    }, at);
+  }
+  return book;
+}
+
+test("production strategy rails open details, synchronize squares, preview combined roots, compare, and clear on refresh", async () => {
+  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  await h.settle();
+
+  let rails = h.strategyRails();
+  assert.ok(rails, "strategy rail layer rendered");
+  let labels = rails.querySelectorAll(".nifty-strategy__label");
+  assert.deepEqual(labels.map((node) => node.textContent).sort(), ["T1 BE 23,900", "T2 BE 23,700"]);
+  assert.equal(h.manualRails(), null, "legacy anonymous plan rails stay hidden after migration");
+
+  labels[0].dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.ok(rails.querySelector(".nifty-strategy__trades"), "label opens same-strategy P&L details");
+  assert.equal(rails.querySelectorAll(".nifty-strategy__selector").every((node) => node.getAttribute("aria-pressed") === "false"), true);
+
+  rails.querySelectorAll(".nifty-strategy__selector")[0].dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
+  rails.querySelectorAll(".nifty-strategy__selector").find((node) => node.getAttribute("aria-pressed") === "false")
+    .dispatch("click", { stopPropagation() {} });
+  await h.settle();
+
+  rails = h.strategyRails();
+  assert.deepEqual(rails.querySelectorAll(".nifty-strategy__label").map((node) => node.textContent).sort(), [
+    "COMBINED BE 23,600", "COMBINED BE 24,000"
+  ]);
+  assert.ok(rails.querySelector(".nifty-strategy-preview"));
+
+  rails.querySelector(".nifty-strategy-preview__compare").dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(rails.querySelectorAll(".nifty-strategy__label").length, 4, "Compare restores originals beside combined roots");
+
+  await h.refreshOptionNumbers();
+  rails = h.strategyRails();
+  assert.equal(rails.querySelector(".nifty-strategy-preview"), null);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__selector").every((node) => node.getAttribute("aria-pressed") === "false"), true);
+});
+
+test("new leg waits for explicit chart strategy ownership before any write", async () => {
+  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  await h.settle();
+  h.doubleClick(23750);
+  let editor = h.editor(23750);
+  editor.children[0].dispatch("click", {});
+  editor.children.at(-1).children[1].dispatch("click", {});
+  editor = h.editor(23750);
+  commitManualEditor(h, 23750);
+
+  const chooser = editor.querySelector(".nifty-strategy-owner");
+  assert.ok(chooser, "ownership chooser opens before mutation");
+  assert.deepEqual(chooser.querySelectorAll(".nifty-strategy-owner__choice").map((node) => node.textContent), [
+    "ADD TO T1", "ADD TO T2", "CREATE NEW STRATEGY"
+  ]);
+  assert.equal(h.strategyMutationMessages().length, 0);
+  assert.equal(h.manualMutationMessages().length, 0);
+
+  chooser.querySelectorAll(".nifty-strategy-owner__choice")[0].dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  assert.equal(h.strategyMutationMessages().length, 1);
+  assert.equal(h.strategyMutationMessages()[0].type, "ADD_LEG");
+  assert.equal(h.manualMutationMessages().length, 1);
+  assert.equal(h.editor(23750), null);
+});
 
 test("production ladder shows visible strikes while clipped siblings stay hidden", async () => {
   const h = createBreakEvenLifecycleHarness({
