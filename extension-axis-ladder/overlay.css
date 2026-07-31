@@ -587,7 +587,7 @@
 
 .nifty-strategy__card.is-combined .nifty-strategy__label {
   border-color: var(--theme-warn);
-  color: var(--theme-warn);
+  color: var(--plan-ink);
   cursor: default;
 }
 
@@ -650,9 +650,9 @@
 .nifty-strategy-preview button,
 .nifty-strategy-owner button {
   padding: 3px 6px;
-  border: 1px solid var(--plan-line);
+  border: 1px solid var(--plan-ink);
   border-radius: 2px;
-  background: var(--plan-surface);
+  background: transparent;
   color: var(--plan-ink);
   font: inherit;
   cursor: pointer;

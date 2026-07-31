@@ -2175,6 +2175,17 @@ test("strategy chart CSS uses existing tokens and square selector in both themes
   assert.doesNotMatch(strategyCss, /#[0-9a-f]{3,8}\b/i);
 });
 
+test("preview actions read as white outlined buttons and combined label keeps white text", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const buttonRule = css.match(/\.nifty-strategy-preview button,[\s\S]*?\{([^}]+)\}/)?.[1] || "";
+  const combinedRule = css.match(/\.nifty-strategy__card\.is-combined \.nifty-strategy__label\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(buttonRule, /border:\s*1px solid var\(--plan-ink\)/);
+  assert.match(buttonRule, /background:\s*transparent/);
+  assert.match(buttonRule, /color:\s*var\(--plan-ink\)/);
+  assert.match(combinedRule, /border-color:\s*var\(--theme-warn\)/);
+  assert.match(combinedRule, /color:\s*var\(--plan-ink\)/);
+});
+
 test("manual action menu keeps prior staged design without warning-colored surround", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const actions = css.match(/\.nifty-manual-editor__actions\s*\{([^}]+)\}/)?.[1] || "";
@@ -2805,6 +2816,26 @@ test("production strategy rails open details, synchronize squares, preview combi
   rails = h.strategyRails();
   assert.equal(rails.querySelector(".nifty-strategy-preview"), null);
   assert.equal(rails.querySelectorAll(".nifty-strategy__selector").every((node) => node.getAttribute("aria-pressed") === "false"), true);
+});
+
+test("strategy square commits on pointerdown and ignores duplicate pointer click after rerender", async () => {
+  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  await h.settle();
+
+  const selector = h.strategyRails().querySelectorAll(".nifty-strategy__selector")[0];
+  selector.dispatch("pointerdown", {
+    detail: 1,
+    preventDefault() {},
+    stopPropagation() {}
+  });
+  await h.settle();
+  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__selector")
+    .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
+
+  selector.dispatch("click", { detail: 1, stopPropagation() {} });
+  await h.settle();
+  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__selector")
+    .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
 });
 
 test("outside pointer press collapses opened strategy P&L card", async () => {

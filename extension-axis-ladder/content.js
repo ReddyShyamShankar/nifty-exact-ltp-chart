@@ -1528,8 +1528,14 @@
         selector.className = "nifty-strategy__selector";
         selector.setAttribute("aria-pressed", String(model.selected));
         selector.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
+        selector.addEventListener("pointerdown", (event) => {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          strategyChartController.square(model.strategyId);
+        });
         selector.addEventListener("click", (event) => {
           event.stopPropagation?.();
+          if (Number(event.detail) > 0) return;
           strategyChartController.square(model.strategyId);
         });
         const label = document.createElement("button");
