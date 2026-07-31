@@ -8,6 +8,7 @@ const vm = require("node:vm");
 const api = require("./content.js");
 const viewIdentity = require("./seller-view-identity.js");
 const strategyStore = require("./strategy-store.js");
+const manualPlan = require("./manual-plan.js");
 
 const RISK_EXPIRY = "2026-08-25";
 
@@ -2174,6 +2175,21 @@ test("strategy chart CSS uses existing tokens and square selector in both themes
   assert.doesNotMatch(strategyCss, /#[0-9a-f]{3,8}\b/i);
 });
 
+test("manual action menu keeps prior staged design without warning-colored surround", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const actions = css.match(/\.nifty-manual-editor__actions\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(actions, /border:\s*0/);
+  assert.match(actions, /background:\s*transparent/);
+  assert.match(css, /\.nifty-manual-editor__action\[data-direction="BUY"\]\s*\{[^}]*background:\s*var\(--ladder-buy\)/);
+  assert.match(css, /\.nifty-manual-editor__action\[data-direction="SELL"\]\s*\{[^}]*background:\s*var\(--ladder-sell\)/);
+});
+
+test("strategy ownership and preview controls keep readable plan contrast in light theme", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(css,
+    /\.nifty-strategy-preview button,[\s\S]*?background:\s*var\(--plan-surface\)[\s\S]*?color:\s*var\(--plan-ink\)/);
+});
+
 function createBreakEvenLifecycleHarness({
   plotRect = { left: 0, top: 0, right: 1200, bottom: 800 },
   invalidRows = {},
@@ -2806,6 +2822,33 @@ test("outside pointer press collapses opened strategy P&L card", async () => {
   rails = h.strategyRails();
   assert.equal(rails.querySelector(".nifty-strategy__trades"), null);
   assert.equal(rails.querySelectorAll(".nifty-strategy__label").length, 2);
+});
+
+test("previously archived strategy legs stay in ledger but leave badges and plan rails", async () => {
+  const entry = savedManualEntry();
+  const plans = manualPlan.upsertEntry(manualPlan.emptyStore(), entry);
+  let book = strategyStore.migrateManualPlans(strategyStore.emptyBook(), plans, {
+    instrumentKey: "NSE_INDEX|NIFTY",
+    underlying: "NIFTY",
+    at: "2026-07-31T10:00:00.000Z"
+  });
+  const strategyId = "legacy:NSE_INDEX|NIFTY:2026-08-25";
+  book = strategyStore.applyCommand(book, {
+    id: "archive-existing",
+    type: "ARCHIVE_STRATEGY",
+    strategyId
+  }, "2026-07-31T10:05:00.000Z");
+
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: [entry],
+    strategyBook: book
+  });
+  await h.settle();
+
+  assert.equal(strategyStore.legsForStrategy(book, strategyId).length, 1, "ledger evidence remains");
+  assert.equal(h.row(entry.strike).querySelectorAll(".nifty-axis-ladder__badge").length, 0);
+  assert.equal(h.manualRails(), null);
+  assert.equal(h.strategyRails(), null);
 });
 
 test("side panel reads temporary chart strategy selection without mutating it", async () => {

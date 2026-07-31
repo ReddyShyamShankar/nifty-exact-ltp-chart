@@ -105,6 +105,17 @@
     if (remaining.length) next.plans[expiry] = { entries: remaining }; else delete next.plans[expiry];
     return next;
   }
+  function removeEntries(store, entryIds) {
+    const ids = new Set(Array.isArray(entryIds) ? entryIds.filter((id) => typeof id === "string" && id) : []);
+    const next = normalizeStore(store);
+    if (!ids.size) return next;
+    for (const [expiry, plan] of Object.entries(next.plans)) {
+      const remaining = plan.entries.filter((entry) => !ids.has(entry.id));
+      if (remaining.length) next.plans[expiry] = { entries: remaining };
+      else delete next.plans[expiry];
+    }
+    return next;
+  }
   function groupByStrike(entries) {
     const groups = new Map();
     entries.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
@@ -124,6 +135,7 @@
     invalidCount,
     upsertEntry,
     removeEntry,
+    removeEntries,
     groupByStrike
   };
   root.NiftyManualPlan = api;

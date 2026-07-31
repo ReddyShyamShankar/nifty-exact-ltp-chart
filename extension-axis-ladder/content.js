@@ -1006,7 +1006,13 @@
   }
 
   function manualEntriesForExpiry() {
-    return manualPlanApi.entriesFor(settings.manualPlans, settings.expiry);
+    const entries = manualPlanApi.entriesFor(settings.manualPlans, settings.expiry);
+    const knownLegIds = new Set(Object.keys(settings.strategyBook?.legs || {}));
+    if (!knownLegIds.size || !strategyStoreApi) return entries;
+    const activeLegIds = new Set(activeChartStrategies()
+      .flatMap((strategy) => strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id))
+      .map((leg) => leg.id));
+    return entries.filter((entry) => !knownLegIds.has(entry.id) || activeLegIds.has(entry.id));
   }
 
   function manualEntriesByStrike() {

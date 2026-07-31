@@ -268,7 +268,7 @@ async function archiveVersionedStrategy() {
     activeVersionedStrategyId = "";
     await rememberVersionedSelection("");
     renderStrategyManager();
-    strategyManagerStatus("STRATEGY ARCHIVED · LEDGER HISTORY PRESERVED");
+    strategyManagerStatus("STRATEGY AND TRADES ARCHIVED · LEDGER HISTORY PRESERVED");
   } catch (error) {
     strategyManagerStatus(friendlyError(error).toUpperCase());
   }

@@ -141,9 +141,12 @@ function enqueueStrategyCommit(commit) {
     const rawBook = stored && Object.hasOwn(stored, strategyStoreApi.STORAGE_KEY)
       ? stored[strategyStoreApi.STORAGE_KEY]
       : strategyStoreApi.emptyBook();
-    const next = commit(rawBook, stored?.[manualPlanApi.STORAGE_KEY]);
-    await chrome.storage.local.set({ [strategyStoreApi.STORAGE_KEY]: next });
-    return next;
+    const outcome = commit(rawBook, stored?.[manualPlanApi.STORAGE_KEY]);
+    const strategyBook = outcome?.strategyBook || outcome;
+    const values = { [strategyStoreApi.STORAGE_KEY]: strategyBook };
+    if (outcome?.manualPlans) values[manualPlanApi.STORAGE_KEY] = outcome.manualPlans;
+    await chrome.storage.local.set(values);
+    return strategyBook;
   };
   const result = strategyMutationTail.then(write, write);
   strategyMutationTail = result.catch(() => {});
@@ -151,7 +154,21 @@ function enqueueStrategyCommit(commit) {
 }
 
 function enqueueStrategyMutation(command) {
-  return enqueueStrategyCommit((book) => strategyStoreApi.applyCommand(book, command));
+  return enqueueStrategyCommit((book, manualPlans) => {
+    const archivedLegIds = command?.type === "ARCHIVE_STRATEGY"
+      ? strategyStoreApi.legsForStrategy(book, command.strategyId).map((leg) => leg.id)
+      : [];
+    const strategyBook = strategyStoreApi.applyCommand(book, command);
+    if (!archivedLegIds.length) return strategyBook;
+    const activeLegIds = new Set(strategyStoreApi.activeStrategies(strategyBook)
+      .flatMap((strategy) => strategyStoreApi.legsForStrategy(strategyBook, strategy.id))
+      .map((leg) => leg.id));
+    const retiredLegIds = archivedLegIds.filter((id) => !activeLegIds.has(id));
+    return {
+      strategyBook,
+      manualPlans: manualPlanApi.removeEntries(manualPlans, retiredLegIds)
+    };
+  });
 }
 
 function enqueueStrategyMigration({ instrumentKey, underlying, at }) {

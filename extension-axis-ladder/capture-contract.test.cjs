@@ -229,6 +229,30 @@ test("legacy manual plans migrate once while legacy rollback data remains", asyn
   assert.equal(h.strategyWrites.length, 2);
 });
 
+test("archiving strategy removes its inactive manual trades while preserving ledger evidence", async () => {
+  const legacy = manualPlan.upsertEntry(manualPlan.emptyStore(), manualEntry());
+  const h = loadBackground({ manualPlans: legacy });
+  const migration = {
+    type: "MIGRATE_MANUAL_PLANS",
+    instrumentKey: "NSE_INDEX|NIFTY",
+    underlying: "NIFTY",
+    at: "2026-07-31T10:00:00.000Z"
+  };
+  await sendStrategyMessage(h.listeners, 1, migration);
+  const strategyId = "legacy:NSE_INDEX|NIFTY:2026-08-25";
+
+  const response = await sendStrategyMessage(h.listeners, 1, {
+    type: "MUTATE_STRATEGY_BOOK",
+    command: { id: "archive-legacy", type: "ARCHIVE_STRATEGY", strategyId }
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(strategyStore.strategyById(h.local.strategyBook, strategyId).status, "ARCHIVED");
+  assert.deepEqual(manualPlan.entriesFor(h.local.manualPlans, "2026-08-25"), []);
+  assert.deepEqual(strategyStore.legsForStrategy(h.local.strategyBook, strategyId).map((item) => item.id), ["entry-a"]);
+  assert.equal(h.manualWrites.length, 1);
+});
+
 test("background owns bridge chain fetch for TradingView content scripts", async () => {
   const requests = [];
   const chain = { expiry: "2026-08-25", spot: 24317.15, rows: [{ strike: 24300, call: 325, put: 263 }] };
