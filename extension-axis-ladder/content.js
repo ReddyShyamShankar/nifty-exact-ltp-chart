@@ -947,6 +947,13 @@
     active?.collapse?.();
   }
 
+  function collapseOpenedStrategyDetails() {
+    if (!openedStrategyId) return false;
+    openedStrategyId = null;
+    void controller?.place();
+    return true;
+  }
+
   function normalizeManualPlans(value) {
     return manualPlanApi.normalizeStore(value);
   }
@@ -2403,14 +2410,22 @@
   }
 
   function handleDocumentPointerDown(event) {
-    if (event.target?.closest?.(".nifty-manual-plan__label.is-flippable")) return;
+    const outsideStrategyCard = !event.target?.closest?.(".nifty-strategy__card");
+    if (event.target?.closest?.(".nifty-manual-plan__label.is-flippable")) {
+      if (outsideStrategyCard) collapseOpenedStrategyDetails();
+      return;
+    }
     collapseExpandedManualRailDisclosure();
-    if (event.target?.closest?.(".nifty-manual-editor")) return;
+    if (event.target?.closest?.(".nifty-manual-editor")) {
+      if (outsideStrategyCard) collapseOpenedStrategyDetails();
+      return;
+    }
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
     if (!row) {
       clearBreakEvenSelection();
       clearManualTransientState({ restorePlanRails: true });
     }
+    if (outsideStrategyCard) collapseOpenedStrategyDetails();
   }
 
   function handleQuickSelection(snapshot) {

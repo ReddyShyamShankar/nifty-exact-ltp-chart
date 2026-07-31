@@ -2791,6 +2791,23 @@ test("production strategy rails open details, synchronize squares, preview combi
   assert.equal(rails.querySelectorAll(".nifty-strategy__selector").every((node) => node.getAttribute("aria-pressed") === "false"), true);
 });
 
+test("outside pointer press collapses opened strategy P&L card", async () => {
+  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  await h.settle();
+
+  let rails = h.strategyRails();
+  rails.querySelector(".nifty-strategy__label").dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  assert.ok(h.strategyRails().querySelector(".nifty-strategy__trades"), "strategy details start expanded");
+
+  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  await h.settle();
+
+  rails = h.strategyRails();
+  assert.equal(rails.querySelector(".nifty-strategy__trades"), null);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__label").length, 2);
+});
+
 test("side panel reads temporary chart strategy selection without mutating it", async () => {
   const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
   await h.settle();
