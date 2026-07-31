@@ -353,19 +353,23 @@
 }
 
 .nifty-axis-ladder__badge {
+  appearance: none;
   display: inline-grid;
   place-items: center;
   min-width: 16px;
   height: 14px;
+  margin: 0;
   padding: 0 3px;
   border: 1px solid var(--ladder-selected-ink);
   border-radius: 2px;
   background: var(--ladder-selected);
   color: var(--ladder-selected-ink);
   font-size: 9px;
+  font-family: inherit;
   font-weight: 700;
   line-height: 1;
   vertical-align: middle;
+  cursor: pointer;
 }
 
 .nifty-axis-ladder__row.is-atm .nifty-axis-ladder__badge {
@@ -513,7 +517,7 @@
 
 #nifty-strategy-rails {
   position: fixed;
-  z-index: 3;
+  z-index: auto;
   inset: 0;
   pointer-events: none;
 }
@@ -521,6 +525,7 @@
 .nifty-strategy__rail,
 .nifty-strategy__edge {
   position: fixed;
+  z-index: 1;
   height: 0;
   border-top: 1px dashed var(--plan-line);
   pointer-events: none;
@@ -532,6 +537,7 @@
 
 .nifty-strategy__connector {
   position: fixed;
+  z-index: 1;
   width: 0;
   border-left: 1px solid var(--ladder-line);
   pointer-events: none;
@@ -539,6 +545,7 @@
 
 .nifty-strategy__card {
   position: fixed;
+  z-index: 3;
   display: grid;
   grid-template-columns: 16px auto;
   gap: 4px;

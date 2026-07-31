@@ -1337,7 +1337,15 @@
   function activeChartStrategies() {
     const identity = currentStrategyIdentity();
     if (!identity || !strategyStoreApi) return [];
-    return strategyStoreApi.activeStrategies(settings.strategyBook, identity.instrumentKey, settings.expiry);
+    const liveEntryIds = liveManualEntryIds();
+    return strategyStoreApi.activeStrategies(settings.strategyBook, identity.instrumentKey, settings.expiry)
+      .filter((strategy) => strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+        .some((leg) => liveEntryIds.has(leg.id)));
+  }
+
+  function liveManualEntryIds() {
+    return new Set(manualPlanApi.entriesFor(settings.manualPlans, settings.expiry)
+      .map((entry) => entry.id));
   }
 
   function knownStrategyCharges(entries) {
@@ -1361,8 +1369,10 @@
   }
 
   function originalStrategyModels() {
+    const liveEntryIds = liveManualEntryIds();
     return activeChartStrategies().flatMap((strategy) => {
-      const entries = strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id);
+      const entries = strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+        .filter((entry) => liveEntryIds.has(entry.id));
       const chargeOffset = knownStrategyCharges(entries) / 65;
       const result = manualPayoffApi?.levels?.(entries, `${strategy.label} BE`, chargeOffset);
       if (result?.status !== "ok") return [];
@@ -1466,8 +1476,12 @@
     const originals = originalStrategyModels();
     const selectedIds = ensureStrategyChartController()?.selected() || [];
     const { models: combined, preview } = combinedStrategyModels();
-    const showOriginals = selectedIds.length < 2 || strategyChartController.comparing() || !combined.length;
-    const models = [...(showOriginals ? originals : []), ...combined];
+    const previewingCombined = selectedIds.length >= 2 && combined.length > 0;
+    const showOriginalRails = !previewingCombined || strategyChartController.comparing();
+    const models = [
+      ...originals.map((model) => ({ ...model, hideRail: !showOriginalRails })),
+      ...combined
+    ];
     if (!models.length) {
       clearStrategyRails();
       return false;
@@ -1509,8 +1523,11 @@
       rail.style.top = `${placement.railY}px`;
       rail.style.left = `${rect.left}px`;
       rail.style.width = `${rect.right - rect.left}px`;
-      rootNodeValue.append(rail);
-      if (placement.connector.moved) {
+      if (!model.hideRail) {
+        if (model.kind === "STRATEGY") rail.classList.add("is-original");
+        rootNodeValue.append(rail);
+      }
+      if (!model.hideRail && placement.connector.moved) {
         const connector = document.createElement("div");
         connector.className = "nifty-strategy__connector";
         connector.style.right = `${window.innerWidth - cardRight}px`;
@@ -2087,6 +2104,12 @@
         },
         async remove() {
           if (!draft.id) return;
+          try {
+            await removeManualEntryFromStrategies(draft.id);
+          } catch (_) {
+            showStatus("STRATEGY NOT UPDATED");
+            return;
+          }
           await commitManualPlan({ type: "remove", expiry: draft.expiry, entryId: draft.id });
         },
         close() {
@@ -2108,6 +2131,30 @@
 
     closeManualEditor();
     renderEditor(true);
+  }
+
+  async function removeManualEntryFromStrategies(entryId) {
+    if (!strategyStoreApi || typeof entryId !== "string" || !entryId) return;
+    const owners = activeChartStrategies().filter((strategy) =>
+      strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+        .some((leg) => leg.id === entryId));
+    for (const strategy of owners) {
+      const prior = strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id);
+      await persistStrategyCommand({
+        id: crypto.randomUUID(),
+        type: "REMOVE_LEG",
+        strategyId: strategy.id,
+        versionId: crypto.randomUUID(),
+        legId: entryId
+      });
+      if (prior.length === 1) {
+        await persistStrategyCommand({
+          id: crypto.randomUUID(),
+          type: "ARCHIVE_STRATEGY",
+          strategyId: strategy.id
+        });
+      }
+    }
   }
 
   function riskRoot() {
@@ -2468,6 +2515,13 @@
     const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
     if (!context) return;
     closeManualEditorForOtherRow(context.strike);
+    const entryId = event.target?.closest?.(".nifty-axis-ladder__badge")?.dataset?.entryId;
+    if (entryId) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      openManualEditor({ ...context, entryId });
+      return;
+    }
     const interaction = ensureManualInteraction();
     if (interaction) interaction.click(context); else handleQuickSelection(context.liveRow);
   }

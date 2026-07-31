@@ -2170,6 +2170,9 @@ test("strategy chart CSS uses existing tokens and square selector in both themes
   const strategyCss = css.slice(css.indexOf("#nifty-strategy-rails"));
   assert.match(strategyCss, /\.nifty-strategy__selector\s*\{[\s\S]*?width:\s*16px[\s\S]*?height:\s*16px/);
   assert.match(strategyCss, /\.nifty-strategy__selector\[aria-pressed="true"\][\s\S]*?var\(--pnl-profit\)/);
+  assert.match(strategyCss, /#nifty-strategy-rails\s*\{[\s\S]*?z-index:\s*auto/);
+  assert.match(strategyCss, /\.nifty-strategy__rail,[\s\S]*?z-index:\s*1/);
+  assert.match(strategyCss, /\.nifty-strategy__card\s*\{[\s\S]*?z-index:\s*3/);
   assert.match(strategyCss, /\.nifty-strategy__trade\.is-profit[\s\S]*?var\(--pnl-profit\)/);
   assert.match(strategyCss, /\.nifty-strategy__trade\.is-loss[\s\S]*?var\(--pnl-loss\)/);
   assert.doesNotMatch(strategyCss, /#[0-9a-f]{3,8}\b/i);
@@ -2778,8 +2781,15 @@ function chartStrategyBook() {
   return book;
 }
 
+function chartStrategyHarness(book = chartStrategyBook()) {
+  return createBreakEvenLifecycleHarness({
+    manualEntries: Object.values(book.legs),
+    strategyBook: book
+  });
+}
+
 test("production strategy rails open details, synchronize squares, preview combined roots, compare, and clear on refresh", async () => {
-  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  const h = chartStrategyHarness();
   await h.settle();
 
   let rails = h.strategyRails();
@@ -2803,14 +2813,18 @@ test("production strategy rails open details, synchronize squares, preview combi
 
   rails = h.strategyRails();
   assert.deepEqual(rails.querySelectorAll(".nifty-strategy__label").map((node) => node.textContent).sort(), [
-    "COMBINED BE 23,600", "COMBINED BE 24,000"
+    "COMBINED BE 23,600", "COMBINED BE 24,000", "T1 BE 23,900", "T2 BE 23,700"
   ]);
   assert.ok(rails.querySelector(".nifty-strategy-preview"));
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
+    .filter((node) => node.classList.contains("is-original")).length, 0);
 
   rails.querySelector(".nifty-strategy-preview__compare").dispatch("click", { stopPropagation() {} });
   await h.settle();
   rails = h.strategyRails();
-  assert.equal(rails.querySelectorAll(".nifty-strategy__label").length, 4, "Compare restores originals beside combined roots");
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
+    .filter((node) => node.classList.contains("is-original")).length, 2,
+    "Compare restores original rails beside combined roots");
 
   await h.refreshOptionNumbers();
   rails = h.strategyRails();
@@ -2819,7 +2833,7 @@ test("production strategy rails open details, synchronize squares, preview combi
 });
 
 test("strategy square commits on pointerdown and ignores duplicate pointer click after rerender", async () => {
-  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  const h = chartStrategyHarness();
   await h.settle();
 
   const selector = h.strategyRails().querySelectorAll(".nifty-strategy__selector")[0];
@@ -2838,8 +2852,59 @@ test("strategy square commits on pointerdown and ignores duplicate pointer click
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
 });
 
-test("outside pointer press collapses opened strategy P&L card", async () => {
+test("combined preview keeps every strategy square reachable while compare controls original rails", async () => {
+  let book = chartStrategyBook();
+  book = strategyStore.applyCommand(book, {
+    id: "create-s3",
+    type: "CREATE_STRATEGY",
+    strategyId: "s3",
+    versionId: "s3-v1",
+    label: "T3",
+    instrumentKey: "NSE_DLY:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25"
+  }, "2026-07-31T10:00:00.000Z");
+  book = strategyStore.applyCommand(book, {
+    id: "add-s3",
+    type: "ADD_LEG",
+    strategyId: "s3",
+    versionId: "s3-v2",
+    leg: { ...book.legs["leg-s1"], id: "leg-s3", optionType: "CALL" }
+  }, "2026-07-31T10:00:00.000Z");
+  const h = chartStrategyHarness(book);
+  await h.settle();
+
+  for (const label of ["T1", "T2", "T3"]) {
+    const selector = h.strategyRails().querySelectorAll(".nifty-strategy__selector")
+      .find((node) => node.getAttribute("aria-label")?.startsWith(`${label} `));
+    assert.ok(selector, `${label} selector remains reachable`);
+    selector.dispatch("click", { detail: 0, stopPropagation() {} });
+    await h.settle();
+  }
+
+  let rails = h.strategyRails();
+  assert.equal(rails.querySelectorAll(".nifty-strategy__selector")
+    .filter((node) => node.getAttribute("aria-pressed") === "true").length, 3);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card")
+    .filter((node) => node.classList.contains("is-strategy")).length, 3);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
+    .filter((node) => node.classList.contains("is-original")).length, 0);
+
+  rails.querySelector(".nifty-strategy-preview__compare").dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
+    .filter((node) => node.classList.contains("is-original")).length, 3);
+});
+
+test("orphan active strategies without live manual legs stay off chart", async () => {
   const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  await h.settle();
+  assert.equal(h.strategyRails(), null);
+});
+
+test("outside pointer press collapses opened strategy P&L card", async () => {
+  const h = chartStrategyHarness();
   await h.settle();
 
   let rails = h.strategyRails();
@@ -2882,8 +2947,45 @@ test("previously archived strategy legs stay in ledger but leave badges and plan
   assert.equal(h.strategyRails(), null);
 });
 
+test("clicking one-entry badge opens exact saved leg editor with remove control", async () => {
+  const entry = savedManualEntry({ optionType: "CALL", lots: 1 });
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [entry] });
+  await h.settle();
+
+  const badge = h.row(entry.strike).querySelector(".nifty-axis-ladder__badge");
+  assert.equal(badge.dataset.entryId, entry.id);
+  h.clickTarget(badge);
+
+  const editor = h.editor(entry.strike);
+  assert.ok(editor);
+  assert.ok(editor.querySelector(".nifty-manual-editor__remove"));
+  assert.equal(editor.querySelector(".nifty-manual-editor__commit").textContent, "SAVE");
+});
+
+test("chart badge removal archives emptied owner and clears both trade badge and T card", async () => {
+  const entry = savedManualEntry({ optionType: "CALL", lots: 1 });
+  const plans = manualPlan.upsertEntry(manualPlan.emptyStore(), entry);
+  const book = strategyStore.migrateManualPlans(strategyStore.emptyBook(), plans, {
+    instrumentKey: "NSE_DLY:NIFTY",
+    underlying: "NIFTY",
+    at: "2026-07-31T10:00:00.000Z"
+  });
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [entry], strategyBook: book });
+  await h.settle();
+
+  h.clickTarget(h.row(entry.strike).querySelector(".nifty-axis-ladder__badge"));
+  h.editor(entry.strike).querySelector(".nifty-manual-editor__remove").dispatch("click", {});
+  await h.settle();
+
+  assert.deepEqual(h.strategyMutationMessages().filter((command) =>
+    ["REMOVE_LEG", "ARCHIVE_STRATEGY"].includes(command.type)).map((command) => command.type),
+    ["REMOVE_LEG", "ARCHIVE_STRATEGY"]);
+  assert.equal(h.row(entry.strike).querySelectorAll(".nifty-axis-ladder__badge").length, 0);
+  assert.equal(h.strategyRails(), null);
+});
+
 test("side panel reads temporary chart strategy selection without mutating it", async () => {
-  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  const h = chartStrategyHarness();
   await h.settle();
   const selector = h.strategyRails().querySelectorAll(".nifty-strategy__selector")[0];
   selector.dispatch("click", { stopPropagation() {} });
@@ -2906,7 +3008,7 @@ test("side panel reads temporary chart strategy selection without mutating it", 
 });
 
 test("permanent save can clear stale temporary chart strategy selection", async () => {
-  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  const h = chartStrategyHarness();
   await h.settle();
   let rails = h.strategyRails();
   rails.querySelectorAll(".nifty-strategy__selector")[0].dispatch("click", { stopPropagation() {} });
@@ -2930,7 +3032,7 @@ test("permanent save can clear stale temporary chart strategy selection", async 
 });
 
 test("new leg waits for explicit chart strategy ownership before any write", async () => {
-  const h = createBreakEvenLifecycleHarness({ strategyBook: chartStrategyBook() });
+  const h = chartStrategyHarness();
   await h.settle();
   h.doubleClick(23750);
   let editor = h.editor(23750);

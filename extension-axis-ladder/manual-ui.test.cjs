@@ -182,8 +182,8 @@ test("row model exposes separate Call and Put lot badges for same-strike positio
   const model = ui.rowModel({ liveRow: row, isAtm: false, entries, activeEntryId: null });
 
   assert.deepEqual(model.badges, [
-    { optionType: "CALL", label: "C2" },
-    { optionType: "PUT", label: "P3" }
+    { optionType: "CALL", label: "C2", entryId: "call" },
+    { optionType: "PUT", label: "P3", entryId: "put" }
   ]);
 });
 
@@ -260,9 +260,11 @@ test("renderRow places separate lot badges before price cells", () => {
   });
 
   assert.equal(element.children[0].className, "nifty-axis-ladder__badges");
-  assert.deepEqual(element.children[0].children.map((badge) => [badge.dataset.optionType, badge.textContent]), [
-    ["CALL", "C2"],
-    ["PUT", "P3"]
+  assert.deepEqual(element.children[0].children.map((badge) => [
+    badge.tagName, badge.dataset.optionType, badge.dataset.entryId, badge.textContent, badge.getAttribute("aria-label")
+  ]), [
+    ["BUTTON", "CALL", "call", "C2", "Edit saved Call position"],
+    ["BUTTON", "PUT", "put", "P3", "Edit saved Put position"]
   ]);
 });
 

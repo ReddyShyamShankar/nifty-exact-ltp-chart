@@ -153,10 +153,15 @@
 
   function lotBadges(entries) {
     return OPTION_TYPES.map((optionType) => {
-      const lots = entries
-        .filter((entry) => entry?.optionType === optionType && Number.isInteger(entry?.lots) && entry.lots > 0)
+      const matching = entries
+        .filter((entry) => entry?.optionType === optionType && Number.isInteger(entry?.lots) && entry.lots > 0);
+      const lots = matching
         .reduce((sum, entry) => sum + entry.lots, 0);
-      return lots ? { optionType, label: `${optionType[0]}${lots}` } : null;
+      return lots ? {
+        optionType,
+        label: `${optionType[0]}${lots}`,
+        entryId: matching.length === 1 ? matching[0].id : null
+      } : null;
     }).filter(Boolean);
   }
 
@@ -227,10 +232,15 @@
       const badges = document.createElement("span");
       badges.className = "nifty-axis-ladder__badges";
       model.badges.forEach((modelBadge) => {
-        const badge = document.createElement("span");
+        const badge = document.createElement("button");
+        badge.type = "button";
         badge.className = "nifty-axis-ladder__badge";
         badge.dataset.optionType = modelBadge.optionType;
+        if (modelBadge.entryId) badge.dataset.entryId = modelBadge.entryId;
         badge.textContent = modelBadge.label;
+        badge.setAttribute("aria-label", modelBadge.entryId
+          ? `Edit saved ${word(modelBadge.optionType)} position`
+          : `Saved ${word(modelBadge.optionType)} positions`);
         badges.append(badge);
       });
       cells.unshift(badges);
