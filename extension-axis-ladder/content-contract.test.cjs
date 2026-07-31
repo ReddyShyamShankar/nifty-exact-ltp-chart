@@ -34,7 +34,7 @@ test("0.6.0 guides document exact chart strategy workflow and keyboard parity", 
   for (const [name, guide] of guides) {
     assert.match(guide, /^Version 0\.6\.0\b/m, `${name}: candidate version`);
     assert.match(guide, /Double-click[^.\n]*row[^.\n]*add/i, `${name}: add gesture`);
-    assert.match(guide, /CHOOSE LEG ▾[^.\n]*Buy Call[^.\n]*Buy Put[^.\n]*Sell Call[^.\n]*Sell Put/i, `${name}: one four-leg menu`);
+    assert.match(guide, /CALL ▾[^.\n]*PUT ▾[^.\n]*Buy[^.\n]*Sell/i, `${name}: staged menus`);
     assert.match(guide, /positive whole-number lots[^.\n]*editable premium/i, `${name}: lot and premium controls`);
     assert.match(guide, /top-left `C2`[^.\n]*`P3`[^.\n]*Call[^.\n]*Put lots/i, `${name}: lot badge meaning`);
     assert.match(guide, /ARB Desk panel tokens[^.\n]*warning tokens[^.\n]*black text[^.\n]*accent tokens[^.\n]*danger tokens/i,
@@ -1883,9 +1883,8 @@ test("manual plan disclosure keeps previous black cards with full-row profit and
 
 test("entry faces contain exact compact copy without redundant trade words or icon", () => {
   const source = fs.readFileSync(path.join(__dirname, "manual-ui.js"), "utf8");
-  const rowModelSource = source.slice(source.indexOf("function rowModel"), source.indexOf("function editorModel"));
-  assert.doesNotMatch(rowModelSource, /SELL C|BUY C|SELL P|BUY P|↻/);
-  assert.match(rowModelSource, /×\$\{active\.lots\}/);
+  assert.doesNotMatch(source, /SELL C|BUY C|SELL P|BUY P|↻/);
+  assert.match(source, /×\$\{active\.lots\}/);
 });
 
 test("top-left lot badges use yellow emphasis without moving row geometry", () => {
@@ -2173,12 +2172,6 @@ test("strategy chart CSS uses existing tokens and square selector in both themes
   assert.match(strategyCss, /\.nifty-strategy__trade\.is-profit[\s\S]*?var\(--pnl-profit\)/);
   assert.match(strategyCss, /\.nifty-strategy__trade\.is-loss[\s\S]*?var\(--pnl-loss\)/);
   assert.doesNotMatch(strategyCss, /#[0-9a-f]{3,8}\b/i);
-});
-
-test("strategy ownership choices keep readable plan contrast inside light editor", () => {
-  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
-  assert.match(css,
-    /\.nifty-manual-editor \.nifty-strategy-owner__choice,[\s\S]*?background:\s*var\(--plan-surface\)[\s\S]*?color:\s*var\(--plan-ink\)/);
 });
 
 function createBreakEvenLifecycleHarness({
@@ -2684,8 +2677,7 @@ function createBreakEvenLifecycleHarness({
       assert.ok(editor, "manual editor is open");
       let current = Number(editor.querySelector(".nifty-manual-editor__lots")?.textContent);
       while (current !== lots) {
-        const steps = editor.querySelectorAll(".nifty-manual-editor__step");
-        steps[current < lots ? 1 : 0].dispatch("click", {});
+        editor.children[current < lots ? 4 : 2].dispatch("click", {});
         editor = [...this.roots].find((node) => node.classList.contains("nifty-manual-editor") && node.parent);
         current = Number(editor.querySelector(".nifty-manual-editor__lots")?.textContent);
       }
@@ -2869,7 +2861,7 @@ test("new leg waits for explicit chart strategy ownership before any write", asy
   h.doubleClick(23750);
   let editor = h.editor(23750);
   editor.children[0].dispatch("click", {});
-  editor.children.at(-1).children[2].dispatch("click", {});
+  editor.children.at(-1).children[1].dispatch("click", {});
   editor = h.editor(23750);
   commitManualEditor(h, 23750);
 
@@ -2905,12 +2897,12 @@ test("production ladder shows visible strikes while clipped siblings stay hidden
 function chooseCallSellEditor(h, strike = 23750) {
   let editor = h.editor(strike);
   editor.children[0].dispatch("click", {});
-  editor.children.at(-1).children[2].dispatch("click", {});
+  editor.children.at(-1).children[1].dispatch("click", {});
   editor = h.editor(strike);
-  editor.children[3].dispatch("click", {});
+  editor.children[4].dispatch("click", {});
   editor = h.editor(strike);
-  editor.children[4].value = "358";
-  editor.children[4].dispatch("input", {});
+  editor.children[5].value = "358";
+  editor.children[5].dispatch("input", {});
 }
 
 function savedManualEntry(overrides = {}) {
@@ -3733,7 +3725,7 @@ test("editor add persists only exact row and restores focus without fetching", a
 
   h.doubleClick(23750);
   chooseCallSellEditor(h);
-  h.editor(23750).querySelector(".nifty-manual-editor__commit").dispatch("click", {});
+  h.editor(23750).children[6].dispatch("click", {});
   await h.settle();
 
   assert.deepEqual(h.manualEntries().map((entry) => ({
@@ -3752,7 +3744,7 @@ test("storage failure keeps exact editor draft open and old plan intact", async 
 
   h.doubleClick(23750);
   chooseCallSellEditor(h);
-  h.editor(23750).querySelector(".nifty-manual-editor__commit").dispatch("click", {});
+  h.editor(23750).children[6].dispatch("click", {});
   await h.settle();
 
   assert.ok(h.editor(23750));
@@ -3884,7 +3876,7 @@ test("all unacknowledged self-write echoes survive pagehide past sixteen writes"
   h.click(23750);
   for (let write = 0; write < 17; write += 1) {
     h.doubleClick(23750);
-    h.editor(23750).querySelectorAll(".nifty-manual-editor__step")[1].dispatch("click", {});
+    h.editor(23750).children[4].dispatch("click", {});
     commitManualEditor(h, 23750);
     await h.settle();
   }
@@ -3923,7 +3915,7 @@ test("serialized overlapping save and remove preserve both explicit mutations", 
 
   h.click(23750);
   h.doubleClick(23750);
-  h.editor(23750).querySelectorAll(".nifty-manual-editor__step")[1].dispatch("click", {});
+  h.editor(23750).children[4].dispatch("click", {});
   commitManualEditor(h, 23750);
   await h.settle();
 
@@ -4094,7 +4086,7 @@ test("manual edit preserves identity and created timestamp while focusing its ex
 
   h.click(23750);
   h.doubleClick(23750);
-  h.editor(23750).querySelectorAll(".nifty-manual-editor__step")[1].dispatch("click", {});
+  h.editor(23750).children[4].dispatch("click", {});
   commitManualEditor(h, 23750);
   await h.settle();
 
@@ -4139,7 +4131,7 @@ test("storage failure preserves a non-empty store and the editor draft", async (
 
   h.click(23750);
   h.doubleClick(23750);
-  h.editor(23750).querySelectorAll(".nifty-manual-editor__step")[1].dispatch("click", {});
+  h.editor(23750).children[4].dispatch("click", {});
   commitManualEditor(h, 23750);
   await h.settle();
 

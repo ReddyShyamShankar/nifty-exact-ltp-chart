@@ -220,14 +220,10 @@ test("entry accessible name reports exact position in newest-first cycle", () =>
     "Buy Put, 3 lots, Call snapshot 223.40, Put snapshot 409.80, strike 24,450, saved entry 2 of 2");
 });
 
-test("editor model contains one mutually exclusive four-leg menu", () => {
+test("editor model contains two staged menus and no strike or flip icon", () => {
   const model = ui.editorModel(ui.createDraft({ expiry, row }));
-  assert.deepEqual(model.legChoices, [
-    { label: "BUY CALL", optionType: "CALL", direction: "BUY" },
-    { label: "BUY PUT", optionType: "PUT", direction: "BUY" },
-    { label: "SELL CALL", optionType: "CALL", direction: "SELL" },
-    { label: "SELL PUT", optionType: "PUT", direction: "SELL" }
-  ]);
+  assert.deepEqual(model.typeButtons, ["CALL", "PUT"]);
+  assert.deepEqual(model.actions, ["BUY", "SELL"]);
   assert.equal(model.visibleStrike, null);
   assert.equal(model.flipIcon, null);
   assert.equal(model.commitLabel, "ADD");
@@ -288,7 +284,7 @@ test("renderRow emphasizes only traded snapshot cell without visible trade words
     ["C 223.40", "P 409.80 ×3", "24,450"]);
 });
 
-test("editor wires one four-leg menu, lot stepper, premium, save, remove, and close", () => {
+test("editor wires staged actions, lot stepper, premium, save, remove, and close", () => {
   const document = fakeDocument();
   const calls = [];
   const editor = ui.renderEditor(document, ui.createDraft({ expiry, row, entry: { id: "e1", lots: 2, optionType: "PUT", direction: "BUY", premium: 409.8, callSnapshot: 223.4, putSnapshot: 409.8 } }), {
@@ -301,27 +297,23 @@ test("editor wires one four-leg menu, lot stepper, premium, save, remove, and cl
   });
   assert.equal(editor.classList.contains("nifty-manual-editor"), true);
   assert.equal(editor.children.some((child) => child.textContent.includes("24,450")), false);
-  assert.equal(editor.children[4].size, 6);
-  assert.equal(editor.children[4].getAttribute("aria-label"), "Premium");
-  assert.equal(editor.children[5].disabled, false);
+  assert.equal(editor.children[5].size, 6);
+  assert.equal(editor.children[5].getAttribute("aria-label"), "Premium");
+  assert.equal(editor.children[6].disabled, false);
   assert.equal(editor.children.map((child) => child.textContent).includes("REMOVE"), true);
-  assert.equal(editor.children[7].getAttribute("aria-label"), "Close editor");
-  assert.equal(editor.children[8].className, "nifty-manual-editor__validation");
+  assert.equal(editor.children[8].getAttribute("aria-label"), "Close editor");
+  assert.equal(editor.children[9].className, "nifty-manual-editor__validation");
   editor.children[0].dispatch("click");
   const menu = editor.children.at(-1);
-  assert.deepEqual(menu.children.map((child) => child.textContent), [
-    "BUY CALL", "BUY PUT", "SELL CALL", "SELL PUT"
-  ]);
-  assert.deepEqual(menu.children.map((child) => child.getAttribute("aria-pressed")), [
-    "false", "true", "false", "false"
-  ]);
-  menu.children[2].dispatch("click");
-  editor.children[3].dispatch("click");
-  editor.children[4].value = "358";
-  editor.children[4].dispatch("input");
-  editor.children[5].dispatch("click");
+  assert.deepEqual(menu.children.map((child) => child.textContent), ["BUY", "SELL"]);
+  assert.deepEqual(menu.children.map((child) => child.getAttribute("aria-pressed")), ["false", "false"]);
+  menu.children[1].dispatch("click");
+  editor.children[4].dispatch("click");
+  editor.children[5].value = "358";
+  editor.children[5].dispatch("input");
   editor.children[6].dispatch("click");
   editor.children[7].dispatch("click");
+  editor.children[8].dispatch("click");
   assert.deepEqual(calls, [["action", "CALL", "SELL"], ["lots", 3], ["premium", 358], ["save"], ["remove"], ["close"]]);
 });
 
@@ -329,21 +321,20 @@ test("editor exposes selected side and direction while invalid commit stays disa
   const document = fakeDocument();
   const blank = ui.renderEditor(document, ui.createDraft({ expiry, row }));
   assert.equal(blank.children[0].getAttribute("aria-pressed"), "false");
-  assert.equal(blank.children[0].textContent, "CHOOSE LEG ▾");
-  assert.equal(blank.children[5].disabled, true);
+  assert.equal(blank.children[1].getAttribute("aria-pressed"), "false");
+  assert.equal(blank.children[6].disabled, true);
   assert.equal(blank.children.at(-1).textContent, "CHOOSE LEG");
 
   const selected = ui.renderEditor(document, actionDraft());
   assert.equal(selected.children[0].textContent, "SELL CALL ▾");
   assert.equal(selected.children[0].getAttribute("aria-pressed"), "true");
   assert.equal(selected.children[0].classList.contains("is-selected"), true);
-  assert.equal(selected.children[5].disabled, false);
+  assert.equal(selected.children[1].getAttribute("aria-pressed"), "false");
+  assert.equal(selected.children[6].disabled, false);
   assert.equal(selected.children.at(-1).textContent, "");
 
   selected.children[0].dispatch("click");
   const menu = selected.children.at(-1);
-  assert.deepEqual(menu.children.map((child) => child.getAttribute("aria-pressed")), [
-    "false", "false", "true", "false"
-  ]);
-  assert.equal(menu.children[2].classList.contains("is-selected"), true);
+  assert.deepEqual(menu.children.map((child) => child.getAttribute("aria-pressed")), ["false", "true"]);
+  assert.equal(menu.children[1].classList.contains("is-selected"), true);
 });
