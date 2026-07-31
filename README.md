@@ -5,7 +5,7 @@ Version 0.6.0 adds multiple user-owned strategies, temporary combined previews, 
 ## Candidate workflow
 
 - Double-click any visible ladder row to add a manual Call or Put entry at that exact strike.
-- Use `CALL ▾` or `PUT ▾`, then choose Buy or Sell from that staged menu.
+- Use one `CHOOSE LEG ▾` selector, then choose exactly one: Buy Call, Buy Put, Sell Call, or Sell Put.
 - Set positive whole-number lots and an editable premium; the displayed premium is only the starting value.
 - Separate top-left `C2` and `P3` badges report saved Call and Put lots at that strike.
 - One saved ARB Desk theme controls popup, side panel, and chart ladder together. Dark is default; the header sun/moon toggle switches every surface to the exact light token set.

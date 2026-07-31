@@ -474,7 +474,9 @@
 .nifty-manual-editor__actions {
   position: absolute;
   top: calc(100% + 2px);
-  display: flex;
+  left: 3px;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--ladder-selected);
@@ -482,12 +484,10 @@
   background: var(--ladder-selected);
 }
 
-.nifty-manual-editor__actions[data-option-type="CALL"] {
-  left: 3px;
-}
-
-.nifty-manual-editor__actions[data-option-type="PUT"] {
-  left: 57px;
+.nifty-manual-editor__action {
+  min-width: 92px;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .nifty-manual-editor__action[data-direction="BUY"] {
@@ -687,4 +687,10 @@
 .nifty-strategy-owner__choice,
 .nifty-strategy-owner__cancel {
   text-align: left;
+}
+
+.nifty-manual-editor .nifty-strategy-owner__choice,
+.nifty-manual-editor .nifty-strategy-owner__cancel {
+  background: var(--plan-surface);
+  color: var(--plan-ink);
 }
