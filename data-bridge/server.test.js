@@ -27,6 +27,7 @@ async function runningServer(overrides = {}) {
       getTrades: async () => ({ status: "success", data: [] })
     })),
     chainLoader: overrides.chainLoader || (async (expiry) => ({ source: "Upstox", expiry, rows: [] })),
+    optionHistoryLoader: overrides.optionHistoryLoader,
     expiryMetadata: overrides.expiryMetadata || ((expiry) => ({ expiry, weekly: false })),
     normalizePositions: normalizeNiftyPositions,
     normalizeTrades: normalizeNiftyTrades,
@@ -34,6 +35,58 @@ async function runningServer(overrides = {}) {
     now: () => new Date("2026-07-28T18:15:00.000Z")
   });
 }
+
+test("chain formatter retains exact Call and Put provider keys", () => {
+  const result = bridgeServer.formatChain([{
+    strike_price: 24400,
+    expiry: "2026-08-25",
+    underlying_spot_price: 24392,
+    call_options: { instrument_key: "NSE_FO|CALL", market_data: { ltp: 290 } },
+    put_options: { instrument_key: "NSE_FO|PUT", market_data: { ltp: 260 } }
+  }]);
+  assert.equal(result.rows[0].callInstrumentKey, "NSE_FO|CALL");
+  assert.equal(result.rows[0].putInstrumentKey, "NSE_FO|PUT");
+});
+
+test("option history validates request before upstream and returns exact envelope", async (t) => {
+  let loads = 0;
+  const server = await runningServer({
+    optionHistoryLoader: async (request) => {
+      loads += 1;
+      return { version: 1, identity: { expiry: request.expiry, strike: request.strike }, interval: request.interval };
+    }
+  });
+  t.after(() => close(server));
+
+  const invalid = await accountFetch(server, "/api/option-history?expiry=bad&strike=24400&interval=4h&from=2026-07-01&to=2026-08-01");
+  assert.equal(invalid.status, 400);
+  assert.equal(loads, 0);
+
+  const valid = await accountFetch(server, "/api/option-history?expiry=2026-08-25&strike=24400&interval=4h&from=2026-07-01&to=2026-08-01");
+  assert.equal(valid.status, 200);
+  assert.equal(valid.headers.get("access-control-allow-origin"), EXTENSION_ORIGIN);
+  assert.deepEqual(await valid.json(), {
+    version: 1,
+    identity: { expiry: "2026-08-25", strike: 24400 },
+    interval: "4h"
+  });
+  assert.equal(loads, 1);
+});
+
+test("option history failure returns stable kind and makes no automatic retry", async (t) => {
+  let loads = 0;
+  const server = await runningServer({
+    optionHistoryLoader: async () => {
+      loads += 1;
+      throw Object.assign(new Error("History unavailable."), { status: 429, kind: "rate_limit" });
+    }
+  });
+  t.after(() => close(server));
+  const response = await accountFetch(server, "/api/option-history?expiry=2026-08-25&strike=24400&interval=4h&from=2026-07-01&to=2026-08-01");
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "History unavailable.", kind: "rate_limit" });
+  assert.equal(loads, 1);
+});
 
 function baseUrl(server) {
   return `http://127.0.0.1:${server.address().port}`;

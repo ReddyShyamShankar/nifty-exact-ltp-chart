@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import originConfig from "./origin-config.cjs";
 import { createAsyncCache } from "./chain-cache.js";
+import { createHistoryCache } from "./history-cache.js";
+import { createOptionHistoryLoader } from "./option-history.js";
 import { createZerodhaClient } from "./zerodha-client.js";
 import { createZerodhaSessionStore, ZERODHA_CALLBACK_FAILURE_MESSAGE } from "./zerodha-session.js";
 import { normalizeNiftyPositions, normalizeNiftyTrades } from "./zerodha-normalize.js";
@@ -22,6 +24,7 @@ let expiryCache = null;
 let candleCache = null;
 let keychainToken = null;
 const chainCache = createAsyncCache({ ttlMs: CHAIN_CACHE_MS });
+const optionHistoryCache = createHistoryCache();
 
 function zerodhaServices() {
   return {
@@ -142,7 +145,7 @@ function isExtensionAccountRequest(headers, allowedOrigin) {
     headers["sec-fetch-dest"] === "empty";
 }
 
-function formatChain(chain) {
+export function formatChain(chain) {
   const spot = chain.find((item) => Number.isFinite(item.underlying_spot_price))?.underlying_spot_price;
   if (!Number.isFinite(spot)) throw new Error("Upstox response did not contain NIFTY spot price.");
 
@@ -155,7 +158,9 @@ function formatChain(chain) {
       .map((item) => ({
         strike: item.strike_price,
         call: item.call_options?.market_data?.ltp ?? null,
-        put: item.put_options?.market_data?.ltp ?? null
+        put: item.put_options?.market_data?.ltp ?? null,
+        callInstrumentKey: item.call_options?.instrument_key ?? null,
+        putInstrumentKey: item.put_options?.instrument_key ?? null
       }))
   };
 }
@@ -261,6 +266,41 @@ async function niftyCandles(days = 120) {
   return payload;
 }
 
+async function fetchHistoricalCandles({ instrumentKey, interval, from, to }) {
+  const url = `${UPSTOX_CANDLES_URL}/${encodeURIComponent(instrumentKey)}/${interval.unit}/${interval.amount}/${to}/${from}`;
+  const body = await upstoxGet(url);
+  return body.data?.candles || [];
+}
+
+const loadProviderOptionHistory = createOptionHistoryLoader({
+  fetchCandles: fetchHistoricalCandles,
+  cache: optionHistoryCache
+});
+
+async function loadNiftyOptionHistory(request, chainLoader = niftyChain) {
+  const chain = await chainLoader(request.expiry);
+  if (!chain || chain.expiry !== request.expiry) {
+    throw Object.assign(new Error("Option chain expiry did not match requested history expiry."), {
+      status: 502,
+      kind: "expiry_mismatch"
+    });
+  }
+  const row = chain.rows?.find((candidate) => Number(candidate?.strike) === request.strike);
+  if (!row?.callInstrumentKey || !row?.putInstrumentKey) {
+    throw Object.assign(new Error("CONTRACT HISTORY UNAVAILABLE"), {
+      status: 404,
+      kind: "contract_unavailable"
+    });
+  }
+  return loadProviderOptionHistory({
+    ...request,
+    provider: "upstox",
+    underlyingKey: NIFTY_KEY,
+    callInstrumentKey: row.callInstrumentKey,
+    putInstrumentKey: row.putInstrumentKey
+  });
+}
+
 function exactIsoDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -271,6 +311,7 @@ export function createRequestHandler({
   sessionStore = defaultZerodhaSessionStore(),
   zerodhaClientFactory = createZerodhaClient,
   chainLoader = niftyChain,
+  optionHistoryLoader = null,
   expiryMetadata = cachedExpiryMetadata,
   normalizePositions = normalizeNiftyPositions,
   normalizeTrades = normalizeNiftyTrades,
@@ -278,7 +319,7 @@ export function createRequestHandler({
   now = () => new Date()
 } = {}) {
   const allowedOrigin = validatedExtensionOrigin(extensionOrigin);
-  const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/seller-refresh"]);
+  const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/seller-refresh", "/api/option-history"]);
   return async function requestHandler(request, response) {
   const respondPublic = (status, payload) => respondJson(response, status, payload, allowedOrigin);
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
@@ -299,7 +340,7 @@ export function createRequestHandler({
       status: "running",
       token: { configured: Boolean(token.token), source: token.source, expiresAt: token.expiresAt },
       endpoints: [
-        "/api/health", "/api/nifty-chain", "/api/nifty-expiries", "/api/nifty-candles",
+        "/api/health", "/api/nifty-chain", "/api/nifty-expiries", "/api/nifty-candles", "/api/option-history",
         "/api/zerodha/status", "/api/zerodha/login-url", "/api/zerodha/callback", "/api/seller-refresh"
       ]
     });
@@ -362,6 +403,26 @@ export function createRequestHandler({
         trades: normalizeTrades(tradesPayload, expiry, { expiryKind }),
         chain
       }, allowedOrigin);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
+    }
+    return;
+  }
+  if (url.pathname === "/api/option-history") {
+    const expiry = url.searchParams.get("expiry") || "";
+    const strike = Number(url.searchParams.get("strike"));
+    const interval = url.searchParams.get("interval") || "";
+    const from = url.searchParams.get("from") || "";
+    const to = url.searchParams.get("to") || "";
+    const supportedIntervals = new Set(["1m", "5m", "15m", "1h", "4h", "1D", "1W", "1M"]);
+    if (!exactIsoDate(expiry) || !Number.isFinite(strike) || strike <= 0
+      || !supportedIntervals.has(interval) || !exactIsoDate(from) || !exactIsoDate(to) || from > to) {
+      respondJson(response, 400, { error: "History requires exact expiry, strike, interval, from, and to." }, allowedOrigin);
+      return;
+    }
+    try {
+      const load = optionHistoryLoader || ((request) => loadNiftyOptionHistory(request, chainLoader));
+      respondJson(response, 200, await load({ expiry, strike, interval, from, to }), allowedOrigin);
     } catch (error) {
       respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
     }
