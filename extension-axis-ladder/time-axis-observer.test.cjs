@@ -44,3 +44,64 @@ test("time-axis canvas must sit directly below matching chart", () => {
   assert.equal(api.chartSourceLabel({ left: 50, top: 600, right: 900, bottom: 630 }, documentRef), "Chart for NSE_DLY:NIFTY, 4 hours");
   assert.equal(api.chartSourceLabel({ left: 920, top: 40, right: 980, bottom: 600 }, documentRef), null);
 });
+
+test("non-time canvas text is rejected before any DOM geometry read", () => {
+  let geometryReads = 0;
+  const context = { canvas: {}, getTransform: () => ({ a: 1, c: 0, e: 0 }) };
+  const candidate = api.projectedTimeFill(context, "24,400", 20, 30, () => {
+    geometryReads += 1;
+    return null;
+  }, Date.parse("2026-08-01T00:00:00.000Z"));
+
+  assert.equal(candidate, null);
+  assert.equal(geometryReads, 0);
+});
+
+test("time-axis geometry is read once per canvas per animation frame", () => {
+  let canvasRectReads = 0;
+  let chartRectReads = 0;
+  let chartQueries = 0;
+  let nextFrame = null;
+  const chart = {
+    getAttribute: () => "Chart for NSE_DLY:NIFTY, 4 hours",
+    getBoundingClientRect: () => {
+      chartRectReads += 1;
+      return { left: 50, top: 40, right: 900, bottom: 600, width: 850, height: 560 };
+    }
+  };
+  const canvas = {
+    width: 850,
+    height: 30,
+    getBoundingClientRect: () => {
+      canvasRectReads += 1;
+      return { left: 50, top: 600, right: 900, bottom: 630, width: 850, height: 30 };
+    }
+  };
+  const readGeometry = api.createFrameGeometryReader({
+    document: { querySelectorAll: () => {
+      chartQueries += 1;
+      return [chart];
+    } },
+    requestAnimationFrame: (callback) => { nextFrame = callback; }
+  });
+
+  assert.deepEqual(readGeometry(canvas), readGeometry(canvas));
+  assert.equal(canvasRectReads, 1);
+  assert.equal(chartQueries, 1);
+  assert.equal(chartRectReads, 1);
+
+  nextFrame();
+  readGeometry(canvas);
+  assert.equal(canvasRectReads, 2);
+  assert.equal(chartQueries, 2);
+  assert.equal(chartRectReads, 2);
+});
+
+test("pending time labels remain bounded during continuous repaint", () => {
+  const pending = new Map();
+  for (let index = 0; index < 5000; index += 1) {
+    api.upsertBoundedCandidate(pending, { time: index, x: index, sourceLabel: "Chart" }, 64);
+  }
+  assert.equal(pending.size, 64);
+  assert.deepEqual([...pending.values()].at(-1), { time: 4999, x: 4999, sourceLabel: "Chart" });
+});

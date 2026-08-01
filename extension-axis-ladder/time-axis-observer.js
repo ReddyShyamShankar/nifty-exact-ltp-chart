@@ -11,11 +11,12 @@
       const parsed = Date.parse(`${text}T00:00:00.000Z`);
       return Number.isFinite(parsed) ? parsed : null;
     }
+    const time = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+    const monthDay = text.match(/^([A-Za-z]{3})\s+(\d{1,2})$/);
+    if (!time && !(monthDay && MONTHS.has(monthDay[1].toLowerCase()))) return null;
     const base = new Date(anchor);
     if (!Number.isFinite(base.getTime())) return null;
-    const time = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
     if (time) return Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), Number(time[1]), Number(time[2]));
-    const monthDay = text.match(/^([A-Za-z]{3})\s+(\d{1,2})$/);
     if (monthDay && MONTHS.has(monthDay[1].toLowerCase())) {
       const parsed = Date.UTC(base.getUTCFullYear(), MONTHS.get(monthDay[1].toLowerCase()), Number(monthDay[2]));
       return Number.isFinite(parsed) ? parsed : null;
@@ -39,7 +40,7 @@
     return (time) => first.x + (Number(time) - first.time) / millisecondsPerPixel;
   }
 
-  function chartSourceLabel(rect, documentRef = root.document) {
+  function chartSourceGeometry(rect, documentRef = root.document) {
     if (!rect || !documentRef?.querySelectorAll) return null;
     const matches = [...documentRef.querySelectorAll('canvas[aria-label^="Chart for"]')]
       .map((canvas) => ({ canvas, rect: canvas.getBoundingClientRect?.(), label: canvas.getAttribute?.("aria-label") }))
@@ -49,7 +50,63 @@
         && Math.abs(Number(rect.right) - Number(item.rect.right)) <= 12)
       .sort((left, right) => Math.abs(Number(rect.top) - Number(left.rect.bottom))
         - Math.abs(Number(rect.top) - Number(right.rect.bottom)));
-    return matches[0]?.label || null;
+    const match = matches[0];
+    return match ? { sourceLabel: match.label, plotRect: match.rect } : null;
+  }
+
+  function chartSourceLabel(rect, documentRef = root.document) {
+    return chartSourceGeometry(rect, documentRef)?.sourceLabel || null;
+  }
+
+  function createFrameGeometryReader(rootRef = root) {
+    let cache = new WeakMap();
+    let resetPending = false;
+    function reset() {
+      cache = new WeakMap();
+      resetPending = false;
+    }
+    return function readGeometry(canvas) {
+      if (!canvas?.getBoundingClientRect) return null;
+      if (cache.has(canvas)) return cache.get(canvas);
+      const rect = canvas.getBoundingClientRect();
+      const match = rect?.width && rect?.height && canvas.width && canvas.height
+        ? chartSourceGeometry(rect, rootRef.document)
+        : null;
+      const geometry = match ? { rect, ...match } : null;
+      cache.set(canvas, geometry);
+      if (!resetPending && typeof rootRef.requestAnimationFrame === "function") {
+        resetPending = true;
+        rootRef.requestAnimationFrame(reset);
+      }
+      return geometry;
+    };
+  }
+
+  function projectedTimeFill(context, text, x, y, readGeometry, anchor = Date.now()) {
+    const time = parseTimeLabel(text, anchor);
+    if (time === null) return null;
+    const canvas = context?.canvas;
+    const geometry = readGeometry?.(canvas);
+    if (!geometry?.rect?.width || !canvas?.width) return null;
+    const transform = context.getTransform();
+    const deviceX = transform.a * Number(x) + transform.c * Number(y) + transform.e;
+    const screenX = Number(geometry.rect.left) + deviceX * Number(geometry.rect.width) / Number(canvas.width);
+    if (!Number.isFinite(screenX)) return null;
+    return { time, x: screenX, sourceLabel: geometry.sourceLabel, plotRect: {
+      left: geometry.plotRect.left,
+      top: geometry.plotRect.top,
+      right: geometry.plotRect.right,
+      bottom: geometry.plotRect.bottom
+    } };
+  }
+
+  function upsertBoundedCandidate(pending, candidate, maximum = 64) {
+    if (!(pending instanceof Map) || !candidate) return pending;
+    const limit = Math.max(1, Number(maximum) || 64);
+    const key = `${candidate.sourceLabel || ""}:${Number(candidate.time)}:${Math.round(Number(candidate.x) * 2)}`;
+    if (!pending.has(key) && pending.size >= limit) pending.delete(pending.keys().next().value);
+    pending.set(key, candidate);
+    return pending;
   }
 
   function signatureFor(candidates) {
@@ -75,7 +132,16 @@
     return Boolean(envelope?.signature && envelope?.stableCount >= 2 && timeToX(envelope.pairs));
   }
 
-  const api = { chartSourceLabel, observationEnvelope, parseTimeLabel, shouldPublish, timeToX };
+  const api = {
+    chartSourceLabel,
+    createFrameGeometryReader,
+    observationEnvelope,
+    parseTimeLabel,
+    projectedTimeFill,
+    shouldPublish,
+    timeToX,
+    upsertBoundedCandidate
+  };
   root.OptionsTimeAxisObserver = api;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
@@ -86,39 +152,33 @@
   if (!prototype || prototype.__optionsTimeAxisObserver) return;
   prototype.__optionsTimeAxisObserver = true;
   const originalFillText = prototype.fillText;
-  let pending = [];
+  const readGeometry = createFrameGeometryReader(root);
+  let pending = new Map();
   let previous = null;
-  let timer = null;
+  let publishScheduled = false;
 
   function publish() {
-    timer = null;
-    const envelope = observationEnvelope(pending, previous);
-    pending = [];
+    publishScheduled = false;
+    const envelope = observationEnvelope([...pending.values()], previous);
+    pending = new Map();
     previous = envelope;
     if (!shouldPublish(envelope) || !root.document?.documentElement) return;
     root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(envelope));
   }
 
+  function schedulePublish() {
+    if (publishScheduled) return;
+    publishScheduled = true;
+    if (typeof root.requestAnimationFrame === "function") root.requestAnimationFrame(publish);
+    else root.setTimeout(publish, 16);
+  }
+
   prototype.fillText = function (text, x, y, ...rest) {
     try {
-      const canvas = this.canvas;
-      const rect = canvas?.getBoundingClientRect?.();
-      const time = parseTimeLabel(text);
-      const sourceLabel = rect && chartSourceLabel(rect);
-      if (time !== null && sourceLabel && rect?.width && canvas?.width) {
-        const transform = this.getTransform();
-        const deviceX = transform.a * Number(x) + transform.c * Number(y) + transform.e;
-        const screenX = Number(rect.left) + deviceX * Number(rect.width) / Number(canvas.width);
-        const chart = [...root.document.querySelectorAll('canvas[aria-label^="Chart for"]')]
-          .find((candidate) => candidate.getAttribute("aria-label") === sourceLabel);
-        const plotRect = chart?.getBoundingClientRect?.();
-        if (Number.isFinite(screenX) && plotRect) {
-          pending.push({ time, x: screenX, sourceLabel, plotRect: {
-            left: plotRect.left, top: plotRect.top, right: plotRect.right, bottom: plotRect.bottom
-          } });
-          root.clearTimeout(timer);
-          timer = root.setTimeout(publish, 80);
-        }
+      const candidate = projectedTimeFill(this, text, x, y, readGeometry);
+      if (candidate) {
+        upsertBoundedCandidate(pending, candidate);
+        schedulePublish();
       }
     } catch {
       // Time-axis diagnostics must never interrupt TradingView rendering.
