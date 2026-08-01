@@ -90,3 +90,11 @@ test("renderer descriptors preserve same data across modes", () => {
   assert.deepEqual(api.rendererDescriptor("SPLIT", "CALL"), { mode: "SPLIT", call: "candles", put: "candles" });
   assert.deepEqual(api.rendererDescriptor("FOCUS", "PUT"), { mode: "FOCUS", focus: "PUT", secondary: "CALL" });
 });
+
+test("loaded history waiting for chart calibration is not reported as missing", () => {
+  assert.equal(api.emptyHistoryContext({ view: { points: [{ time: 1 }] }, timeAxis: null }),
+    "CONTRACT HISTORY READY · WAITING FOR TIME AXIS");
+  assert.equal(api.emptyHistoryContext({ view: { points: [{ time: 1 }] }, timeAxis: { pairs: [] } }),
+    "NO HISTORY INSIDE VISIBLE CHART RANGE");
+  assert.equal(api.emptyHistoryContext({ view: { points: [] }, timeAxis: null }), "NO CONTRACT HISTORY");
+});

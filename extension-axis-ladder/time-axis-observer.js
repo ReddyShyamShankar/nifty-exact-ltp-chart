@@ -13,13 +13,20 @@
     }
     const time = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
     const monthDay = text.match(/^([A-Za-z]{3})\s+(\d{1,2})$/);
-    if (!time && !(monthDay && MONTHS.has(monthDay[1].toLowerCase()))) return null;
+    const monthOnly = text.match(/^([A-Za-z]{3})$/);
+    const monthOnlyIndex = MONTHS.get(monthOnly?.[1]?.toLowerCase());
+    if (!time && !(monthDay && MONTHS.has(monthDay[1].toLowerCase())) && monthOnlyIndex === undefined) return null;
     const base = new Date(anchor);
     if (!Number.isFinite(base.getTime())) return null;
     if (time) return Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), Number(time[1]), Number(time[2]));
     if (monthDay && MONTHS.has(monthDay[1].toLowerCase())) {
       const parsed = Date.UTC(base.getUTCFullYear(), MONTHS.get(monthDay[1].toLowerCase()), Number(monthDay[2]));
       return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (monthOnlyIndex !== undefined) {
+      const candidates = [-1, 0, 1].map((offset) => Date.UTC(base.getUTCFullYear() + offset, monthOnlyIndex, 1));
+      return candidates.reduce((nearest, candidate) =>
+        Math.abs(candidate - anchor) < Math.abs(nearest - anchor) ? candidate : nearest);
     }
     return null;
   }
@@ -132,8 +139,14 @@
     return Boolean(envelope?.signature && envelope?.stableCount >= 2 && timeToX(envelope.pairs));
   }
 
+  function confirmStableEnvelope(previous, at = Date.now()) {
+    if (!previous?.signature || !Array.isArray(previous.pairs) || previous.pairs.length < 2) return null;
+    return observationEnvelope(previous.pairs, previous, at);
+  }
+
   const api = {
     chartSourceLabel,
+    confirmStableEnvelope,
     createFrameGeometryReader,
     observationEnvelope,
     parseTimeLabel,
@@ -156,14 +169,30 @@
   let pending = new Map();
   let previous = null;
   let publishScheduled = false;
+  let confirmTimer = null;
 
   function publish() {
     publishScheduled = false;
     const envelope = observationEnvelope([...pending.values()], previous);
     pending = new Map();
     previous = envelope;
-    if (!shouldPublish(envelope) || !root.document?.documentElement) return;
-    root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(envelope));
+    if (shouldPublish(envelope) && root.document?.documentElement) {
+      root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(envelope));
+    }
+    scheduleStableConfirmation(envelope);
+  }
+
+  function scheduleStableConfirmation(envelope) {
+    if (!envelope?.signature || envelope.stableCount >= 2) return;
+    root.clearTimeout(confirmTimer);
+    confirmTimer = root.setTimeout(() => {
+      confirmTimer = null;
+      if (pending.size || previous !== envelope || !root.document?.documentElement) return;
+      const confirmed = confirmStableEnvelope(envelope);
+      if (!confirmed || !shouldPublish(confirmed)) return;
+      previous = confirmed;
+      root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(confirmed));
+    }, 120);
   }
 
   function schedulePublish() {
@@ -177,6 +206,8 @@
     try {
       const candidate = projectedTimeFill(this, text, x, y, readGeometry);
       if (candidate) {
+        root.clearTimeout(confirmTimer);
+        confirmTimer = null;
         upsertBoundedCandidate(pending, candidate);
         schedulePublish();
       }

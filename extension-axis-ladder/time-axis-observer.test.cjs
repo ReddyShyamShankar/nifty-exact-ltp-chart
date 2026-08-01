@@ -11,6 +11,13 @@ test("parses exact date month-day and intraday labels against anchor", () => {
   assert.equal(api.parseTimeLabel("24,400", anchor), null);
 });
 
+test("parses TradingView month-only labels against nearest calendar occurrence", () => {
+  const anchor = Date.parse("2026-08-01T00:00:00.000Z");
+  assert.equal(api.parseTimeLabel("Mar", anchor), Date.parse("2026-03-01T00:00:00.000Z"));
+  assert.equal(api.parseTimeLabel("Aug", anchor), Date.parse("2026-08-01T00:00:00.000Z"));
+  assert.equal(api.parseTimeLabel("Nov", anchor), Date.parse("2026-11-01T00:00:00.000Z"));
+});
+
 test("stable monotonic pairs map timestamp to x", () => {
   const toX = api.timeToX([
     { time: Date.parse("2026-07-30T09:15:00Z"), x: 100 },
@@ -33,6 +40,13 @@ test("observation becomes stable only after repeated signature", () => {
   assert.equal(first.stableCount, 1);
   assert.equal(second.stableCount, 2);
   assert.equal(api.shouldPublish(second), true);
+});
+
+test("one valid idle paint can self-confirm without another TradingView redraw", () => {
+  const first = api.observationEnvelope([{ time: 1, x: 100 }, { time: 2, x: 200 }], null, 1);
+  const confirmed = api.confirmStableEnvelope(first, 2);
+  assert.equal(confirmed.stableCount, 2);
+  assert.equal(api.shouldPublish(confirmed), true);
 });
 
 test("time-axis canvas must sit directly below matching chart", () => {

@@ -24,6 +24,13 @@
     return null;
   }
 
+  function emptyHistoryContext(state) {
+    if (!Array.isArray(state?.view?.points) || !state.view.points.length) return "NO CONTRACT HISTORY";
+    return state.timeAxis
+      ? "NO HISTORY INSIDE VISIBLE CHART RANGE"
+      : "CONTRACT HISTORY READY · WAITING FOR TIME AXIS";
+  }
+
   function createPremiumHistoryPane({ loadHistory, render = () => {} }) {
     if (typeof loadHistory !== "function") throw new TypeError("Premium-history loader is required.");
     const cache = new Map();
@@ -251,7 +258,7 @@
       const assumptions = state.view?.assumptions;
       element.querySelector(".options-premium-history__context").textContent = last
         ? `UNDERLYING ${formatNumber(last.underlying?.close)} · DIST ${formatNumber(last.distance)} · DTE ${formatNumber(last.dteDays, 1)} · C ${formatNumber(last.call?.close)} · P ${formatNumber(last.put?.close)} · C+P ${formatNumber(last.combinedClose)} · ESTIMATED IV C ${formatNumber(last.callIv?.value == null ? null : last.callIv.value * 100)}% P ${formatNumber(last.putIv?.value == null ? null : last.putIv.value * 100)}%${assumptions ? ` · ${assumptions.model} r ${formatNumber(assumptions.rate * 100)}% q ${formatNumber(assumptions.carry * 100)}%` : ""}`
-        : "NO CONTRACT HISTORY";
+        : emptyHistoryContext(state);
       const rect = state.timeAxis?.plotRect || state.plotRect;
       canvas.hidden = !state.timeAxis;
       if (rect && Number.isFinite(Number(rect.left)) && Number.isFinite(Number(rect.right))) {
@@ -325,7 +332,7 @@
     };
   }
 
-  const api = { clipPoints, createDomRenderer, createPremiumHistoryPane, rendererDescriptor, selectionKey, timeXMapper };
+  const api = { clipPoints, createDomRenderer, createPremiumHistoryPane, emptyHistoryContext, rendererDescriptor, selectionKey, timeXMapper };
   root.OptionsPremiumHistoryPane = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);
