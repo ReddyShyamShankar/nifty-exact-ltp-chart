@@ -47,7 +47,7 @@
     },
     {
       "matches": ["https://tradingview.com/*", "https://www.tradingview.com/*"],
-      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "risk-overlay.js", "seller-view-identity.js", "breakeven-rails.js", "tradingview-live-badge.js", "manual-plan.js", "manual-payoff.js", "manual-interaction.js", "manual-ui.js", "strategy-store.js", "strategy-preview.js", "strategy-chart.js", "strategy-panel.js", "content.js"],
+      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "risk-overlay.js", "seller-view-identity.js", "breakeven-rails.js", "tradingview-live-badge.js", "manual-plan.js", "manual-payoff.js", "manual-interaction.js", "manual-ui.js", "strategy-store.js", "strategy-preview.js", "strategy-chart.js", "strategy-panel.js", "estimated-iv.js", "premium-history-model.js", "premium-history-pane.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }
