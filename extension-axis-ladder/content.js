@@ -30,6 +30,12 @@
     || (typeof module !== "undefined" && module.exports ? require("./strategy-preview.js") : null);
   const strategyChartApi = root.OptionsStrategyChart
     || (typeof module !== "undefined" && module.exports ? require("./strategy-chart.js") : null);
+  const strategyPanelApi = root.OptionsStrategyPanel
+    || (typeof module !== "undefined" && module.exports ? require("./strategy-panel.js") : null);
+  const premiumHistoryModelApi = root.OptionsPremiumHistoryModel
+    || (typeof module !== "undefined" && module.exports ? require("./premium-history-model.js") : null);
+  const premiumHistoryPaneApi = root.OptionsPremiumHistoryPane
+    || (typeof module !== "undefined" && module.exports ? require("./premium-history-pane.js") : null);
   const DEFAULTS = {
     enabled: false,
     uiTheme: "dark",
@@ -138,6 +144,39 @@
     if (!instrumentKey) return null;
     const underlying = instrumentKey.split(":").at(-1)?.replace(/\s+\d+$/, "").trim() || instrumentKey;
     return { instrumentKey, underlying };
+  }
+
+  function premiumHistoryRange(expiry, now = Date.now()) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(expiry || ""))) return null;
+    const expiryAt = Date.parse(`${expiry}T00:00:00.000Z`);
+    const nowAt = Number(now);
+    if (!Number.isFinite(expiryAt) || !Number.isFinite(nowAt)) return null;
+    const toAt = Math.min(expiryAt, nowAt);
+    const contractStartAt = expiryAt - 365 * 86400000;
+    const fromAt = Math.min(contractStartAt, toAt);
+    return {
+      from: new Date(fromAt).toISOString().slice(0, 10),
+      to: new Date(toAt).toISOString().slice(0, 10)
+    };
+  }
+
+  function normalizePremiumTimeAxis(raw) {
+    let parsed = raw;
+    if (typeof raw === "string") {
+      try { parsed = JSON.parse(raw); } catch { return null; }
+    }
+    const pairs = Array.isArray(parsed?.pairs) ? parsed.pairs.map((pair) => ({
+      ...pair,
+      time: Number(pair?.time),
+      x: Number(pair?.x)
+    })).filter((pair) => Number.isFinite(pair.time) && Number.isFinite(pair.x)) : [];
+    if (Number(parsed?.stableCount) < 2 || pairs.length < 2) return null;
+    for (let index = 1; index < pairs.length; index += 1) {
+      if (pairs[index].time <= pairs[index - 1].time || pairs[index].x <= pairs[index - 1].x) return null;
+    }
+    const plotRect = pairs.find((pair) => pair?.plotRect)?.plotRect || parsed?.plotRect;
+    if (!plotRect || ![plotRect.left, plotRect.top, plotRect.right, plotRect.bottom].every((value) => Number.isFinite(Number(value)))) return null;
+    return { ...parsed, pairs, plotRect: { ...plotRect } };
   }
 
   function riskLabelLayout(laneZeroRows) {
@@ -886,6 +925,8 @@
     rowsFitPlot,
     strategyOwnershipChoices,
     chartInstrumentIdentity,
+    normalizePremiumTimeAxis,
+    premiumHistoryRange,
     visibleRowIndexes,
     priceScaleFailure
   };
@@ -940,6 +981,8 @@
   let strategyChartController = null;
   let openedStrategyId = null;
   let strategyOwnershipChooser = null;
+  let premiumHistoryPane = null;
+  let premiumHistoryDom = null;
 
   function collapseExpandedManualRailDisclosure() {
     const active = expandedManualRailDisclosure;
@@ -1013,6 +1056,111 @@
       .flatMap((strategy) => strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id))
       .map((leg) => leg.id));
     return entries.filter((entry) => !knownLegIds.has(entry.id) || activeLegIds.has(entry.id));
+  }
+
+  function exactHistoryExpiry() {
+    return [controller?.membership()?.expiry, controller?.chain()?.expiry, settings.expiry]
+      .find((value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) || null;
+  }
+
+  function currentPremiumTimeAxis() {
+    return normalizePremiumTimeAxis(document.documentElement.getAttribute("data-options-time-axis") || "");
+  }
+
+  function premiumHistorySelection(strike, interval = null) {
+    const identity = currentStrategyIdentity();
+    const expiry = exactHistoryExpiry();
+    const range = premiumHistoryRange(expiry);
+    const timeframe = interval || controller?.membership()?.timeframe
+      || timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || "");
+    if (!identity || !expiry || !range || !Number.isFinite(Number(strike)) || !timeframe) return null;
+    return {
+      instrumentKey: identity.instrumentKey,
+      underlying: identity.underlying,
+      expiry,
+      strike: Number(strike),
+      interval: timeframe,
+      ...range
+    };
+  }
+
+  function premiumHistoryError(result) {
+    if (result?.kind === "auth") return "STALE · AUTH REQUIRED";
+    if (result?.kind === "contract_unavailable") return "CONTRACT HISTORY UNAVAILABLE";
+    if (result?.kind === "invalid_request") return result?.error || "CONTRACT HISTORY REQUEST INVALID";
+    return result?.error || "STALE · REFRESH FAILED";
+  }
+
+  async function loadPremiumHistory(selection, signal) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const result = await chrome.runtime.sendMessage({
+      type: "FETCH_OPTION_HISTORY",
+      expiry: selection.expiry,
+      strike: selection.strike,
+      interval: selection.interval,
+      from: selection.from,
+      to: selection.to
+    });
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (!result?.ok || !result.history) {
+      throw Object.assign(new Error(premiumHistoryError(result)), { kind: result?.kind || "upstream" });
+    }
+    const expiryAt = selection.instrumentKey.startsWith("NSE")
+      ? `${selection.expiry}T15:30:00+05:30`
+      : `${selection.expiry}T23:59:59.000Z`;
+    return premiumHistoryModelApi.buildViewModel(result.history, {
+      expiryAt,
+      trades: manualPlanApi.entriesFor(settings.manualPlans, selection.expiry),
+      ivAssumptions: selection.instrumentKey.startsWith("NSE") ? {
+        model: "BLACK_SCHOLES",
+        rate: 0.06,
+        carry: 0,
+        version: "nse-trial-2026-08",
+        calculatedAt: new Date().toISOString()
+      } : null
+    });
+  }
+
+  function ensurePremiumHistoryPane() {
+    if (premiumHistoryPane || !premiumHistoryPaneApi?.createPremiumHistoryPane
+      || !premiumHistoryPaneApi?.createDomRenderer || !premiumHistoryModelApi?.buildViewModel) return premiumHistoryPane;
+    premiumHistoryDom = premiumHistoryPaneApi.createDomRenderer(document, rootNode());
+    premiumHistoryPane = premiumHistoryPaneApi.createPremiumHistoryPane({
+      loadHistory: loadPremiumHistory,
+      render: premiumHistoryDom.render
+    });
+    premiumHistoryDom.bind(premiumHistoryPane);
+    return premiumHistoryPane;
+  }
+
+  function closePremiumHistory() {
+    premiumHistoryPane?.close?.();
+  }
+
+  async function openPremiumHistory(strike, interval = null) {
+    const pane = ensurePremiumHistoryPane();
+    const selection = premiumHistorySelection(strike, interval);
+    if (!pane || !selection) {
+      showStatus("CONTRACT HISTORY UNAVAILABLE");
+      return false;
+    }
+    pane.setTimeAxis(currentPremiumTimeAxis());
+    return pane.open(selection);
+  }
+
+  function syncPremiumHistoryTimeframe(label) {
+    const pane = premiumHistoryPane;
+    const state = pane?.state?.();
+    if (!state?.selection) return false;
+    const identity = chartInstrumentIdentity(label);
+    if (!identity || identity.instrumentKey !== state.selection.instrumentKey) {
+      closePremiumHistory();
+      return false;
+    }
+    const interval = timeframeApi.timeframeKey(label);
+    if (!interval || interval === state.selection.interval) return false;
+    void openPremiumHistory(state.selection.strike, interval);
+    return true;
   }
 
   function manualEntriesByStrike() {
@@ -2388,6 +2536,7 @@
     currentLabel = label;
     if (!isNiftyChartLabel(label)) {
       clearRetries();
+      closePremiumHistory();
       clearBreakEvenSelection();
       clearStrategyPreview();
       clearManualTransientState();
@@ -2416,6 +2565,7 @@
       const latestMembership = controller?.membership();
       if (label !== currentLabel || !latestMembership) await rebuildCurrent(false);
       else await controller.place();
+      syncPremiumHistoryTimeframe(label);
     }, 250);
   }
 
@@ -2439,6 +2589,7 @@
     if (nextUrl !== currentUrl) {
       currentUrl = nextUrl;
       manualRowsConcealed = true;
+      closePremiumHistory();
       clearBreakEvenSelection();
       clearStrategyPreview();
       clearManualTransientState();
@@ -2447,6 +2598,9 @@
     if (records.some((record) => record.type === "attributes" && record.attributeName === "data-nifty-axis-ticks")) {
       scheduleAxisPlacement();
     }
+    if (records.some((record) => record.type === "attributes" && record.attributeName === "data-options-time-axis")) {
+      premiumHistoryPane?.setTimeAxis?.(currentPremiumTimeAxis());
+    }
     const label = chartCanvas()?.getAttribute("aria-label") || "";
     if (label !== currentLabel) scheduleTimeframeCheck();
   }
@@ -2454,6 +2608,7 @@
   function handleUrlNavigation() {
     currentUrl = String(root.location?.href || "");
     manualRowsConcealed = true;
+    closePremiumHistory();
     clearBreakEvenSelection();
     clearStrategyPreview();
     clearManualTransientState();
@@ -2462,6 +2617,7 @@
 
   function handlePageHide() {
     manualRowsConcealed = true;
+    closePremiumHistory();
     clearBreakEvenSelection();
     clearStrategyPreview();
     clearManualTransientState();
@@ -2514,6 +2670,13 @@
     if (event.target?.closest?.(".nifty-manual-editor")) return;
     const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
     if (!context) return;
+    if (event.target?.closest?.(".nifty-axis-ladder__strike-face")) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      closeManualEditorForOtherRow(context.strike);
+      void openPremiumHistory(context.strike);
+      return;
+    }
     closeManualEditorForOtherRow(context.strike);
     const entryId = event.target?.closest?.(".nifty-axis-ladder__badge")?.dataset?.entryId;
     if (entryId) {
@@ -2528,6 +2691,7 @@
 
   function handleLadderDoubleClick(event) {
     if (event.target?.closest?.(".nifty-manual-editor")) return;
+    if (event.target?.closest?.(".nifty-axis-ladder__strike-face")) return;
     const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
     if (!context) return;
     closeManualEditorForOtherRow(context.strike);
@@ -2584,7 +2748,7 @@
     runtimeObserver = new MutationObserver(handleRuntimeMutations);
     runtimeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["aria-label", "data-nifty-axis-ticks"],
+      attributeFilter: ["aria-label", "data-nifty-axis-ticks", "data-options-time-axis"],
       childList: true,
       subtree: true
     });
@@ -2600,6 +2764,9 @@
   }
 
   function stop() {
+    premiumHistoryPane?.destroy?.();
+    premiumHistoryPane = null;
+    premiumHistoryDom = null;
     clearBreakEvenSelection();
     clearStrategyPreview();
     clearManualTransientState();
@@ -2642,6 +2809,8 @@
       settings.uiTheme = changes.uiTheme.newValue === "light" ? "light" : "dark";
       const node = document.getElementById(LABELS_ID);
       if (node) node.dataset.theme = settings.uiTheme;
+      const historyState = premiumHistoryPane?.state?.();
+      if (historyState) premiumHistoryPane.setMode(historyState.mode);
     }
     if (changes.enabled) {
       settings.enabled = Boolean(changes.enabled.newValue);
@@ -2661,6 +2830,7 @@
       if (settings.enabled) void controller?.place();
     }
     if (changes.expiry) {
+      closePremiumHistory();
       clearBreakEvenSelection();
       clearStrategyPreview();
       clearManualTransientState();

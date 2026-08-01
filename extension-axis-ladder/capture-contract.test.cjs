@@ -95,14 +95,15 @@ test("exports native-axis capture and single-writer manual mutation API", () => 
   assert.deepEqual(Object.keys(api).sort(), [
     "applyManualPlanMutation", "axisPairsFromCandidates", "captureAxisScale",
     "enqueueManualPlanMutation", "enqueueStrategyMigration", "enqueueStrategyMutation",
-    "extractAxisPrices", "fetchNiftyChain",
-    "isCaptureMessage", "isChainFetchMessage", "isManualPlanMutationMessage",
+    "extractAxisPrices", "fetchNiftyChain", "fetchOptionHistory",
+    "isCaptureMessage", "isChainFetchMessage", "isHistoryFetchMessage", "isManualPlanMutationMessage",
     "isStrategyMigrationMessage", "isStrategyMutationMessage", "isolateAxisCandidates"
   ]);
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), false);
   assert.equal(api.isManualPlanMutationMessage("MUTATE_MANUAL_PLANS"), true);
   assert.equal(api.isChainFetchMessage("FETCH_NIFTY_CHAIN"), true);
+  assert.equal(api.isHistoryFetchMessage("FETCH_OPTION_HISTORY"), true);
   assert.equal(api.isStrategyMutationMessage("MUTATE_STRATEGY_BOOK"), true);
   assert.equal(api.isStrategyMigrationMessage("MIGRATE_MANUAL_PLANS"), true);
 });
@@ -298,6 +299,59 @@ test("background chain proxy rejects invalid expiry and non-TradingView callers 
       assert.equal(handled, true);
     });
     assert.deepEqual(response, { ok: false, error: expectedError });
+  }
+  assert.equal(requests, 0);
+});
+
+test("background history proxy sends one exact read-only request", async () => {
+  const requests = [];
+  const history = { version: 1, identity: { expiry: "2026-08-25", strike: 24400 }, call: {}, put: {}, underlying: {} };
+  const { listeners } = loadBackground({
+    fetchImpl: async (url, options) => {
+      requests.push({ url: String(url), options });
+      return { ok: true, async json() { return history; } };
+    }
+  });
+  const response = await new Promise((resolve) => {
+    const handled = listeners.message({
+      type: "FETCH_OPTION_HISTORY",
+      expiry: "2026-08-25",
+      strike: 24400,
+      interval: "4h",
+      from: "2025-08-25",
+      to: "2026-08-01"
+    }, { tab: { id: 7 }, url: "https://www.tradingview.com/chart/test/" }, resolve);
+    assert.equal(handled, true);
+  });
+
+  assert.deepEqual(response, { ok: true, history });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url,
+    "http://127.0.0.1:8787/api/option-history?expiry=2026-08-25&strike=24400&interval=4h&from=2025-08-25&to=2026-08-01");
+  assert.deepEqual(requests[0].options, { cache: "no-store" });
+});
+
+test("background history proxy rejects malformed and foreign requests without network", async () => {
+  let requests = 0;
+  const { listeners } = loadBackground({ fetchImpl: async () => { requests += 1; } });
+  for (const [message, sender, expectedError] of [
+    [
+      { type: "FETCH_OPTION_HISTORY", expiry: "bad", strike: 24400, interval: "4h", from: "2025-08-25", to: "2026-08-01" },
+      { tab: { id: 7 }, url: "https://www.tradingview.com/chart/test/" },
+      "Premium history request is invalid."
+    ],
+    [
+      { type: "FETCH_OPTION_HISTORY", expiry: "2026-08-25", strike: 24400, interval: "4h", from: "2025-08-25", to: "2026-08-01" },
+      { tab: { id: 7 }, url: "https://example.com/" },
+      "Option history is limited to TradingView tabs."
+    ]
+  ]) {
+    const response = await new Promise((resolve) => {
+      const handled = listeners.message(message, sender, resolve);
+      assert.equal(handled, true);
+    });
+    assert.equal(response.ok, false);
+    assert.equal(response.error, expectedError);
   }
   assert.equal(requests, 0);
 });

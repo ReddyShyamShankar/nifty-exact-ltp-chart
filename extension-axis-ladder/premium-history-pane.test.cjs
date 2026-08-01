@@ -23,10 +23,21 @@ test("one open loads once while renderer switches reuse same view", async () => 
 
 test("concurrent identical opens deduplicate and cached reopen makes no request", async () => {
   let requests = 0;
+  let release;
+  let requestSignal;
   const pane = api.createPremiumHistoryPane({
-    loadHistory: async () => { requests += 1; return view; }, render: () => {}
+    loadHistory: (_selection, signal) => {
+      requests += 1;
+      requestSignal = signal;
+      return new Promise((resolve) => { release = () => resolve(view); });
+    },
+    render: () => {}
   });
-  await Promise.all([pane.open(selection), pane.open(selection)]);
+  const first = pane.open(selection);
+  const second = pane.open(selection);
+  assert.equal(requestSignal.aborted, false);
+  release();
+  await Promise.all([first, second]);
   pane.close();
   await pane.open(selection);
   assert.equal(requests, 1);
@@ -61,6 +72,17 @@ test("viewport clipping limits draw work before renderer", () => {
   const points = Array.from({ length: 10000 }, (_, time) => ({ time }));
   const clipped = api.clipPoints(points, { from: 100, to: 199 });
   assert.equal(clipped.length, 100);
+});
+
+test("pane x coordinates follow TradingView time-axis calibration", () => {
+  const xOf = api.timeXMapper({
+    plotRect: { left: 100 },
+    pairs: [{ time: 1000, x: 150 }, { time: 3000, x: 350 }]
+  }, 400);
+  assert.equal(xOf(1000), 50);
+  assert.equal(xOf(2000), 150);
+  assert.equal(xOf(3000), 250);
+  assert.equal(xOf(4000), 350);
 });
 
 test("renderer descriptors preserve same data across modes", () => {

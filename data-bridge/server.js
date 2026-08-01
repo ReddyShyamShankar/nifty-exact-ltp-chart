@@ -266,10 +266,37 @@ async function niftyCandles(days = 120) {
   return payload;
 }
 
+export function splitHistoricalRange(interval, from, to) {
+  const dayMs = 86400000;
+  const maxDays = interval?.unit === "minutes" && Number(interval?.amount) <= 15
+    ? 28
+    : interval?.unit === "hours" || interval?.unit === "minutes"
+      ? 89
+      : null;
+  if (!maxDays) return [{ from, to }];
+  const start = Date.parse(`${from}T00:00:00.000Z`);
+  let cursor = Date.parse(`${to}T00:00:00.000Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(cursor) || start > cursor) return [];
+  const chunks = [];
+  while (cursor >= start) {
+    const chunkStart = Math.max(start, cursor - (maxDays - 1) * dayMs);
+    chunks.push({
+      from: new Date(chunkStart).toISOString().slice(0, 10),
+      to: new Date(cursor).toISOString().slice(0, 10)
+    });
+    cursor = chunkStart - dayMs;
+  }
+  return chunks.reverse();
+}
+
 async function fetchHistoricalCandles({ instrumentKey, interval, from, to }) {
-  const url = `${UPSTOX_CANDLES_URL}/${encodeURIComponent(instrumentKey)}/${interval.unit}/${interval.amount}/${to}/${from}`;
-  const body = await upstoxGet(url);
-  return body.data?.candles || [];
+  const rows = [];
+  for (const chunk of splitHistoricalRange(interval, from, to)) {
+    const url = `${UPSTOX_CANDLES_URL}/${encodeURIComponent(instrumentKey)}/${interval.unit}/${interval.amount}/${chunk.to}/${chunk.from}`;
+    const body = await upstoxGet(url);
+    rows.push(...(body.data?.candles || []));
+  }
+  return rows;
 }
 
 const loadProviderOptionHistory = createOptionHistoryLoader({

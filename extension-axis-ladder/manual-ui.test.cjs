@@ -241,8 +241,10 @@ test("renderRow replaces children with safe cells and omits badges for incomplet
   assert.deepEqual(element.children.map((child) => [child.className, child.textContent]), [
     ["nifty-axis-ladder__cell", "C 223.40"],
     ["nifty-axis-ladder__cell", "P 409.80"],
-    ["nifty-axis-ladder__cell", "24,450"]
+    ["nifty-axis-ladder__cell nifty-axis-ladder__strike-face", "24,450"]
   ]);
+  assert.equal(element.children[2].tagName, "BUTTON");
+  assert.equal(element.children[2].getAttribute("aria-label"), "Open 24,450 premium history");
   assert.equal(element.getAttribute("aria-label"), "Call 223.40, Put 409.80, strike 24,450, 1 saved entry");
 });
 
@@ -280,7 +282,7 @@ test("renderRow emphasizes only traded snapshot cell without visible trade words
   assert.deepEqual(element.children.slice(1, 4).map((child) => child.className), [
     "nifty-axis-ladder__cell",
     "nifty-axis-ladder__cell is-traded",
-    "nifty-axis-ladder__cell"
+    "nifty-axis-ladder__cell nifty-axis-ladder__strike-face"
   ]);
   assert.deepEqual(element.children.slice(1, 4).map((child) => child.textContent),
     ["C 223.40", "P 409.80 ×3", "24,450"]);

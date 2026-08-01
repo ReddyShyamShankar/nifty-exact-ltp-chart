@@ -72,6 +72,73 @@
   --ladder-selected-ink: #ffffff;
 }
 
+#options-premium-history {
+  position: fixed;
+  z-index: 2147483646;
+  left: 12px;
+  right: 96px;
+  bottom: 12px;
+  min-width: 320px;
+  border: 1px solid var(--theme-line-2);
+  border-radius: 4px;
+  background: var(--theme-panel);
+  color: var(--theme-ink);
+  box-shadow: none;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.options-premium-history__header,
+.options-premium-history__context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--theme-line);
+  background: var(--theme-panel);
+}
+
+.options-premium-history__identity { margin-right: auto; font-weight: 700; }
+.options-premium-history__modes,
+.options-premium-history__focus { display: inline-flex; gap: 2px; }
+.options-premium-history__header button {
+  min-height: 24px;
+  border: 1px solid var(--theme-line-2);
+  border-radius: 2px;
+  background: var(--theme-panel-2);
+  color: var(--theme-ink-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.options-premium-history__header button[aria-pressed="true"] {
+  background: var(--theme-ink);
+  color: var(--theme-bg);
+}
+.options-premium-history__header button:focus-visible,
+.options-premium-history__canvas:focus-visible { outline: 1px solid var(--theme-accent); outline-offset: -2px; }
+.options-premium-history__context { color: var(--theme-ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.options-premium-history__status { padding: 4px 10px; color: var(--theme-warn); background: var(--theme-panel-2); }
+.options-premium-history__status:empty { display: none; }
+.options-premium-history__canvas { display: block; width: 100%; height: 220px; background: var(--theme-panel); }
+.options-premium-history__canvas[hidden] { display: none; }
+.options-premium-history__tooltip { position: absolute; padding: 4px 6px; border: 1px solid var(--theme-line-2); background: var(--theme-panel); color: var(--theme-ink); }
+
+.nifty-axis-ladder__strike-face {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.nifty-axis-ladder__strike-face:focus-visible {
+  outline: 1px solid var(--theme-accent);
+  outline-offset: 2px;
+}
+
 #nifty-seller-risk {
   position: fixed;
   z-index: 0;

@@ -50,7 +50,7 @@ GET http://127.0.0.1:8787/api/seller-refresh?expiry=YYYY-MM-DD
 GET http://127.0.0.1:8787/api/option-history?expiry=YYYY-MM-DD&strike=24400&interval=4h&from=YYYY-MM-DD&to=YYYY-MM-DD
 ```
 
-`/api/option-history` is read-only exact-contract history. Bridge resolves Call and Put provider keys from selected expiry chain, then coordinates Call, Put, and underlying candles through one deduplicated cache. Missing candles remain gaps. Failed history requests do not retry automatically.
+`/api/option-history` is read-only exact-contract history. Bridge resolves Call and Put provider keys from selected expiry chain, then coordinates Call, Put, and underlying candles through one deduplicated cache. Long minute and hourly ranges are split into provider-safe date chunks inside that single user-requested load. Missing candles remain gaps. Failed history requests do not retry automatically.
 
 ## Daily workflow
 

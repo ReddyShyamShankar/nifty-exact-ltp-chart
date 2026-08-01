@@ -48,6 +48,25 @@ test("chain formatter retains exact Call and Put provider keys", () => {
   assert.equal(result.rows[0].putInstrumentKey, "NSE_FO|PUT");
 });
 
+test("Upstox history range splits inside documented minute and hourly limits", () => {
+  const minute = bridgeServer.splitHistoricalRange({ unit: "minutes", amount: 1 }, "2026-05-01", "2026-08-01");
+  assert.ok(minute.length >= 4);
+  assert.equal(minute[0].from, "2026-05-01");
+  assert.equal(minute.at(-1).to, "2026-08-01");
+  minute.forEach((chunk) => {
+    assert.ok((Date.parse(`${chunk.to}T00:00:00Z`) - Date.parse(`${chunk.from}T00:00:00Z`)) / 86400000 < 28);
+  });
+
+  const hourly = bridgeServer.splitHistoricalRange({ unit: "hours", amount: 4 }, "2025-08-25", "2026-08-01");
+  assert.ok(hourly.length >= 4);
+  hourly.forEach((chunk) => {
+    assert.ok((Date.parse(`${chunk.to}T00:00:00Z`) - Date.parse(`${chunk.from}T00:00:00Z`)) / 86400000 < 89);
+  });
+  assert.deepEqual(bridgeServer.splitHistoricalRange({ unit: "days", amount: 1 }, "2025-08-25", "2026-08-01"), [
+    { from: "2025-08-25", to: "2026-08-01" }
+  ]);
+});
+
 test("option history validates request before upstream and returns exact envelope", async (t) => {
   let loads = 0;
   const server = await runningServer({

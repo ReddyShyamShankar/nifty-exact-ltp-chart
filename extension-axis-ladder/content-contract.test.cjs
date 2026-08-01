@@ -73,6 +73,33 @@ test("content delegates bridge chain requests to extension service worker", () =
   assert.doesNotMatch(source, /fetch\([^)]*api\/nifty-chain/);
 });
 
+test("premium history uses exact range and stable TradingView time-axis evidence", () => {
+  assert.deepEqual(api.premiumHistoryRange("2026-08-25", Date.parse("2026-08-01T12:00:00Z")), {
+    from: "2025-08-25",
+    to: "2026-08-01"
+  });
+  assert.equal(api.premiumHistoryRange("current_month"), null);
+  assert.equal(api.normalizePremiumTimeAxis(JSON.stringify({ stableCount: 1, pairs: [] })), null);
+  const axis = api.normalizePremiumTimeAxis(JSON.stringify({
+    stableCount: 2,
+    pairs: [
+      { time: 1, x: 100, plotRect: { left: 20, top: 40, right: 900, bottom: 600 } },
+      { time: 2, x: 200, plotRect: { left: 20, top: 40, right: 900, bottom: 600 } }
+    ]
+  }));
+  assert.deepEqual(axis.plotRect, { left: 20, top: 40, right: 900, bottom: 600 });
+});
+
+test("strike-number history action does not replace row click or double-click behavior", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /type:\s*"FETCH_OPTION_HISTORY"/);
+  assert.match(source, /closest\?\.\("\.nifty-axis-ladder__strike-face"\)[\s\S]*?stopPropagation\?\.\(\)[\s\S]*?openPremiumHistory\(context\.strike\)/);
+  assert.match(source, /function handleLadderDoubleClick\(event\)[\s\S]*?nifty-axis-ladder__strike-face[\s\S]*?return;/);
+  assert.match(source, /attributeFilter:\s*\["aria-label",\s*"data-nifty-axis-ticks",\s*"data-options-time-axis"\]/);
+  assert.match(source, /if \(changes\.expiry\) \{\s*closePremiumHistory\(\);/);
+  assert.doesNotMatch(source, /debugger;/);
+});
+
 test("render transaction never exposes an axis row before placement coordinates commit", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const renderRows = source.match(/function renderRows\(rows, membership\)\s*\{[\s\S]*?\n  \}/)?.[0] || "";

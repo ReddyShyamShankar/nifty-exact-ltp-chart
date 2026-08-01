@@ -222,8 +222,14 @@
     element.classList.remove("is-atm", "is-manual-entry", "is-buy", "is-sell");
     model.className.split(/\s+/).filter(Boolean).forEach((name) => element.classList.add(name));
     const cells = model.columns.map((value, index) => {
-      const cell = document.createElement("span");
+      const strikeFace = index === model.columns.length - 1;
+      const cell = document.createElement(strikeFace ? "button" : "span");
       cell.className = "nifty-axis-ladder__cell";
+      if (strikeFace) {
+        cell.type = "button";
+        cell.classList.add("nifty-axis-ladder__strike-face");
+        cell.setAttribute("aria-label", `Open ${value} premium history`);
+      }
       if (index === model.tradedCellIndex) cell.classList.add("is-traded");
       cell.textContent = value;
       return cell;

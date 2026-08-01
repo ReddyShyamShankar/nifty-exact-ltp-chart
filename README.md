@@ -25,6 +25,8 @@ Version 0.6.0 adds multiple user-owned strategies, temporary combined previews, 
 
 Strategies and immutable versions stay in local extension storage, keyed by instrument and exact expiry. Background service worker serializes mutations across tabs so one valid edit cannot overwrite another. Duplicate commands remain idempotent, storage failure preserves current version, and malformed records enter recovery quarantine. Entry premiums and captured snapshots remain fixed through refresh, reload, timeframe changes, zoom, pan, and side-panel activity. Invalid axis data fails closed.
 
+Premium-history trial opens by clicking only rightmost strike number. It shows exact-expiry Call and Put history in temporary **LINES**, **SPLIT**, and **FOCUS** modes, aligned to stable TradingView dates. Mode changes, crosshair, pan, and zoom reuse one cached dataset; timeframe change loads matching interval only when missing. Context shows underlying close, strike distance, DTE, Call + Put, repeated trade markers, and clearly labelled **ESTIMATED IV** assumptions. Row click and row double-click retain existing break-even and manual-editor actions.
+
 Extension never changes TradingView price scale or Auto-fit state and requests no Chrome debugger access. Visible ladder rows use one column and follow TradingView's current native right-axis ticks; timeframe-specific 50/100/250/500 rules are not used. True ATM stays included. Zoom and pan remap cached rows without requesting option data.
 
 ## Setup

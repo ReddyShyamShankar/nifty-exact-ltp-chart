@@ -10,6 +10,7 @@ const MANUAL_PLAN_MUTATION = "MUTATE_MANUAL_PLANS";
 const STRATEGY_BOOK_MUTATION = "MUTATE_STRATEGY_BOOK";
 const STRATEGY_BOOK_MIGRATION = "MIGRATE_MANUAL_PLANS";
 const CHAIN_FETCH = "FETCH_NIFTY_CHAIN";
+const HISTORY_FETCH = "FETCH_OPTION_HISTORY";
 const BRIDGE_API = "http://127.0.0.1:8787";
 let manualPlanMutationTail = Promise.resolve();
 let strategyMutationTail = Promise.resolve();
@@ -61,6 +62,10 @@ function isChainFetchMessage(type) {
   return type === CHAIN_FETCH;
 }
 
+function isHistoryFetchMessage(type) {
+  return type === HISTORY_FETCH;
+}
+
 function isStrategyMutationMessage(type) {
   return type === STRATEGY_BOOK_MUTATION;
 }
@@ -101,6 +106,27 @@ async function fetchNiftyChain(expiry, fetchImpl = globalThis.fetch) {
   const chain = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(chain.error || "Option chain unavailable.");
   return chain;
+}
+
+async function fetchOptionHistory(request, fetchImpl = globalThis.fetch) {
+  const strike = Number(request?.strike);
+  const supportedIntervals = new Set(["1m", "5m", "15m", "1h", "4h", "1D", "1W", "1M"]);
+  if (!manualPlanApi.isIsoDate(request?.expiry) || !Number.isFinite(strike) || strike <= 0
+    || !supportedIntervals.has(request?.interval) || !manualPlanApi.isIsoDate(request?.from)
+    || !manualPlanApi.isIsoDate(request?.to) || request.from > request.to) {
+    throw Object.assign(new Error("Premium history request is invalid."), { kind: "invalid_request" });
+  }
+  const query = new URLSearchParams({
+    expiry: request.expiry,
+    strike: String(strike),
+    interval: request.interval,
+    from: request.from,
+    to: request.to
+  });
+  const response = await fetchImpl(`${BRIDGE_API}/api/option-history?${query}`, { cache: "no-store" });
+  const history = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(history.error || "CONTRACT HISTORY UNAVAILABLE"), { kind: history.kind || "upstream" });
+  return history;
 }
 
 function applyManualPlanMutation(store, mutation) {
@@ -348,15 +374,18 @@ async function captureAxisScale(_sender, message) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const manualMutation = isManualPlanMutationMessage(message?.type);
   const chainFetch = isChainFetchMessage(message?.type);
+  const historyFetch = isHistoryFetchMessage(message?.type);
   const strategyMutation = isStrategyMutationMessage(message?.type);
   const strategyMigration = isStrategyMigrationMessage(message?.type);
-  if (!isCaptureMessage(message?.type) && !manualMutation && !chainFetch
+  if (!isCaptureMessage(message?.type) && !manualMutation && !chainFetch && !historyFetch
     && !strategyMutation && !strategyMigration) return;
   const trustedStrategySender = (strategyMutation || strategyMigration) && isExtensionSender(sender);
   if (!isTradingViewSender(sender) && !trustedStrategySender) {
     sendResponse({
       ok: false,
-      error: chainFetch
+      error: historyFetch
+        ? "Option history is limited to TradingView tabs."
+        : chainFetch
         ? "Option-chain refresh is limited to TradingView tabs."
         : strategyMutation || strategyMigration
         ? "Strategy mutations are limited to TradingView tabs."
@@ -364,10 +393,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ? "Manual plan mutations are limited to TradingView tabs."
         : "Axis capture is limited to TradingView tabs."
     });
-    return chainFetch || strategyMutation || strategyMigration || undefined;
+    return chainFetch || historyFetch || strategyMutation || strategyMigration || undefined;
   }
   const operation = chainFetch
     ? fetchNiftyChain(message.expiry).then((chain) => ({ ok: true, chain }))
+    : historyFetch
+    ? fetchOptionHistory(message).then((history) => ({ ok: true, history }))
     : strategyMutation
     ? enqueueStrategyMutation(message.command)
       .then((strategyBook) => ({ ok: true, strategyBook }))
@@ -380,7 +411,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     : captureAxisScale(sender, message);
   operation
     .then(sendResponse)
-    .catch((error) => sendResponse({ ok: false, error: error.message }));
+    .catch((error) => sendResponse(historyFetch
+      ? { ok: false, error: error.message, kind: error.kind || "upstream" }
+      : { ok: false, error: error.message }));
   return true;
 });
 
@@ -392,8 +425,10 @@ if (typeof module !== "undefined" && module.exports) {
     enqueueManualPlanMutation,
     extractAxisPrices,
     fetchNiftyChain,
+    fetchOptionHistory,
     isCaptureMessage,
     isChainFetchMessage,
+    isHistoryFetchMessage,
     isManualPlanMutationMessage,
     isolateAxisCandidates,
     isStrategyMigrationMessage,

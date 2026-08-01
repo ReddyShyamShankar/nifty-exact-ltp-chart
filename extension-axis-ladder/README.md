@@ -29,6 +29,12 @@ Version 0.6.0 is a chart-first options planning candidate for TradingView. NIFTY
 
 Add, edit, remove, merge, split, archive, and restore each send one atomic mutation to background service worker, which serializes writes from every open TradingView tab before updating exact-expiry local storage. Storage failure preserves current version and temporary preview. Duplicate command does not duplicate strategy. Close, outside click, or `Escape` cancels unsaved draft. Reload, timeframe changes, zoom, and pan rebuild strategy rails from local evidence and TradingView's validated native price axis.
 
+## Premium history trial
+
+Click only the rightmost strike number, such as `24,400`, to open exact-expiry Call and Put premium history. Clicking rest of row keeps quick break-even behavior; double-clicking rest of row keeps manual editor behavior. Pane starts in **LINES** and temporarily includes **SPLIT** and **FOCUS** so one can be selected after live use. Mode changes, hover, pan, and zoom reuse cached history and make no request. TradingView timeframe change requests matching interval only when absent from cache.
+
+Pane clips full available contract history to stable TradingView time-axis dates and shows underlying close, signed strike distance, DTE, Call, Put, Call + Put, separate repeated trade markers, and clearly labelled **ESTIMATED IV** assumptions. Missing candles remain gaps. Unsafe time-axis evidence hides chart instead of guessing. Expiry/instrument change, navigation, close, or disable clears transient pane selection. Current NIFTY connector reads Upstox history; provider-specific minute/hour limits are chunked inside one explicit load with no automatic retry.
+
 ## Ladder and quick break-evens
 
 The ladder has no fixed row count and no ATM-centered membership window. It considers every real strike returned for selected instrument and expiry, then shows strikes intersecting TradingView's stable visible right-axis grid. One explicit reference exception keeps the real nearest available ATM strike visible when its exact price remains inside the chart's visible range, even if it falls between printed axis labels. ATM never changes range or density. Light mode uses the ARB Desk brown warning token; dark mode uses the ARB Desk orange warning token. When live-price marker covers one expected grid label, surrounding stable cadence supplies rounded slot, such as `24,300` beneath `24,296.60`. Row order stays `C <Call> | P <Put> | <strike>`. Every visible row stays in one right-edge column at exact price coordinate.
