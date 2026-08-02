@@ -555,6 +555,7 @@ test("content load independently gates an unversioned accepted chart and places 
   let requests = 0;
   const controller = content.createLadderController({
     expiry: "2026-08-25",
+    now: () => Date.parse("2026-08-01T09:05:00+05:30"),
     chainSnapshot: storedChain("2026-08-25", 24120),
     riskView: legacy,
     fetchChain: async () => { requests += 1; throw new Error("network forbidden"); },
@@ -605,7 +606,7 @@ test("strategy switch restores same-expiry and September accepted views without 
       { expiry: "2026-09-01", daysToExpiry: 31 }
     ]
   };
-  const harness = popupHarness(initial, options);
+  const harness = popupHarness(initial, { ...options, Date: fixedDate("2026-08-01T09:05:00+05:30") });
   await settle();
 
   const selector = harness.nodes.get("selected-strategy");
@@ -621,7 +622,7 @@ test("strategy switch restores same-expiry and September accepted views without 
   assert.equal(Object.keys(harness.storage.sellerSafetyViewsByStrategy).length, 3);
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 0);
 
-  const reopened = popupHarness(structuredClone(harness.storage), options);
+  const reopened = popupHarness(structuredClone(harness.storage), { ...options, Date: fixedDate("2026-08-01T09:05:00+05:30") });
   await settle();
   assert.equal(reopened.nodes.get("current-lower").textContent, "23,700.00");
   assert.equal(reopened.storage.sellerSafetyViewsByStrategy["stored-strategy"].candidateId, "candidate-stored");
@@ -637,6 +638,7 @@ test("popup storage and content controller restore August to September cached vi
     "2026-09-01": september
   };
   const harness = popupHarness(initial, {
+    Date: fixedDate("2026-08-01T09:05:00+05:30"),
     expiries: [
       { expiry: "2026-08-25", daysToExpiry: 24 },
       { expiry: "2026-09-01", daysToExpiry: 31 }
@@ -927,7 +929,7 @@ test("allocated pending review survives popup close and still withholds publicat
 });
 
 test("explicit strategy, whole-lot allocation, CSV import, and acceptance publish one reviewed snapshot", async () => {
-  const harness = popupHarness();
+  const harness = popupHarness({}, { Date: fixedDate("2026-08-01T09:30:00+05:30") });
   await settle();
   await harness.listeners.get("refresh-all:click")();
 

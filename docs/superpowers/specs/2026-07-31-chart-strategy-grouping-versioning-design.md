@@ -151,6 +151,10 @@ Save always asks:
 - create new strategy from selected strategies; or
 - merge selected strategies into one chosen existing strategy.
 
+Chart preview bar exposes `Save`, `Compare`, and `Clear`. `Save` opens chart-native
+destination choices; choosing one is explicit permanent confirmation. Side panel
+retains same versioned save operation for management use.
+
 Create-new produces next strategy identity, such as T3 from T1 + T2. Merge-into-existing creates new version of selected destination strategy.
 
 After successful permanent merge:

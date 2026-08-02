@@ -1,8 +1,8 @@
-# Premium History Pane — Trial Design
+# Premium History — On-Chart Skyline Design
 
 **Date:** 2026-08-01  
-**Status:** APPROVED FOR TRIAL BUILD  
-**Scope:** Premium history for one exact strike and one exact expiry, synchronized with TradingView.
+**Status:** APPROVED — SKYLINE FINAL
+**Scope:** Premium history for one exact strike and one exact expiry, rendered directly on TradingView.
 
 ## Universal product rule
 
@@ -10,74 +10,66 @@ Premium history must work from instrument metadata and market-data provider capa
 
 ## Goal
 
-Click one ladder strike and understand how Call and Put premiums changed through same dates as underlying TradingView candles. User must be able to compare repeated trades on same contract, understand why premiums differed, and separate four forces:
+Select one ladder strike and understand how Call and Put premiums changed through same dates as underlying TradingView candles. User must be able to compare repeated trades on same contract, understand why premiums differed, and separate four forces:
 
 1. Underlying distance from strike.
 2. Time remaining until exact expiry.
 3. Market uncertainty represented by estimated implied volatility.
 4. Call/Put demand represented by traded option prices.
 
-Underlying candle volatility alone does not fully explain option premium. Pane therefore shows market prices and modelled context together without claiming modelled values are exchange facts.
+Underlying candle volatility alone does not fully explain option premium. History model therefore keeps market prices and modelled context distinct without claiming modelled values are exchange facts.
 
 ## Locked product decisions
 
 - History identity is `instrument + exact expiry + strike + option right`.
 - Call and Put histories appear together by default.
-- History covers full available contract life, then clips rendering to TradingView's visible dates.
+- Stable TradingView time-axis evidence controls visible date window and shared crosshair. Missing evidence fails closed; no independent lower-pane axis remains in production.
 - History exists even when user never traded contract.
 - Every trade remains separate with immutable timestamp, direction, quantity, and entry premium. Repeated entries in same contract never collapse into one average marker.
 - Premium candle interval follows TradingView timeframe. Example: 1-minute TradingView chart uses 1-minute premium candles; 4-hour chart uses 4-hour premium candles.
 - Current row click keeps quick break-even behavior.
 - Current row double-click keeps manual trade editor behavior.
-- Clicking rightmost strike number opens premium-history pane. Example: clicking `24,400` opens exact selected-expiry Call and Put history.
-- Pane ships with three temporary render modes:
-  - **LINES** — default; Call close is solid neutral line and Put close is dashed neutral line.
-  - **SPLIT** — two stacked Call and Put candle panes.
-  - **FOCUS** — one selected side uses large candles while other side stays available through Call/Put toggle.
-- All modes use one normalized dataset and one cache. Switching mode never makes another market-data request.
-- Trial keeps all three modes. User testing chooses winner; two rejected renderers are deleted later.
+- Clicking rightmost strike number opens exact selected-expiry Call and Put history on chart. Example: clicking `24,400` selects that contract identity.
+- Skyline shows Call and Put together: Call solid above selected-strike baseline, Put dashed below.
 - Single stored ARB Desk theme controls pane, ladder, popup, and side panel. No new colors enter palette.
 - Estimated IV is always labelled **ESTIMATED IV**. It is never described as broker, exchange, or exact IV.
+- Skyline and selected-strike map coexist. Neither deletes row highlight, guide, or existing square markers.
+- Selected history strike remains highlighted in the ladder while pane is open.
+- A passive guide follows selected strike's exact TradingView price coordinate.
+- Small square markers appear only where a real visible underlying candle satisfies `low <= selected strike <= high`.
+- **SKYLINE** is sole production premium-history projection.
+- Skyline uses exact point arithmetic: Call close maps to `strike + premium`; Put close maps to `strike - premium`. No missing value is inferred.
+- No on-chart premium-mode selector remains.
 
-## Pane layout
+## On-chart Skyline layout
 
-Pane docks below TradingView plot and uses same horizontal plot bounds. Header contains:
+Skyline uses same TradingView plot rectangle. Selected strike is central baseline. Call history occupies area above baseline; Put history occupies area below. Compact chart label contains:
 
 - Exact strike and expiry.
 - Active TradingView timeframe.
-- Current Call and Put premiums.
-- `LINES`, `SPLIT`, and `FOCUS` mode controls.
-- Close control.
+- Direction key: `CALL ↑ / PUT ↓`.
 
-Context strip contains values at active crosshair timestamp:
+Shared crosshair tooltip contains values at active timestamp:
 
-- Underlying close.
-- Signed strike distance: `underlying close − strike`.
-- DTE — remaining time to exact expiry, expressed in days.
-- Call premium and estimated Call IV.
-- Put premium and estimated Put IV.
-- Call + Put premium.
+- Exact timestamp.
+- Selected strike.
+- Call close premium.
+- Put close premium.
+- Explicit `NO PREMIUM CANDLE` gap state.
 
-Plot contains premium history plus optional estimated-IV history. Shared crosshair shows same timestamp across TradingView and premium pane. Hover card contains:
-
-- Underlying OHLC.
-- Call OHLC and estimated Call IV.
-- Put OHLC and estimated Put IV.
-- Call + Put close premium.
-- DTE and signed strike distance.
-
-Trade markers use existing semantic tokens: Buy uses existing accent token; Sell uses existing danger token. Call-versus-Put distinction never consumes profit/loss colors. LINES mode uses solid versus dashed neutral strokes so profit green, loss red, and ATM warning colors keep existing meanings.
+Call-versus-Put distinction never consumes profit/loss colors. Solid versus dashed neutral strokes keep profit green, loss red, and ATM warning colors reserved for existing meanings.
 
 ## Interaction model
 
 1. User selects exact expiry through existing controls.
 2. User clicks strike number inside one visible ladder row.
-3. Pane opens and starts one explicit history load for exact contract identity and current TradingView interval.
-4. User pans or zooms TradingView. Pane redraws cached history against stable time-axis evidence; pan and zoom make no option-history request.
-5. User changes TradingView timeframe. Pane requests matching interval only when normalized cache lacks it.
-6. User switches LINES, SPLIT, or FOCUS. Rendering changes immediately from same data.
-7. User hovers either chart. Shared crosshair exposes one timestamp and matching values.
-8. User closes pane, changes expiry, changes instrument, or navigates away. Transient pane selection clears. Cached historical data remains available locally.
+3. History controller starts one explicit load for exact contract identity and current TradingView interval.
+4. User pans or zooms TradingView. Skyline follows stable visible date window and horizontal coordinates from cached history; pan and zoom make no option-history request.
+5. User changes TradingView timeframe. History controller requests matching interval only when normalized cache lacks it.
+6. User moves TradingView pointer. Shared crosshair exposes one timestamp and matching values.
+7. User closes history, changes expiry, changes instrument, or navigates away. Transient selection clears. Cached historical data remains available locally.
+
+While history remains open, chart also shows selected-strike map: highlighted ladder row, horizontal strike guide, and square candle-touch markers. TradingView timeframe, zoom, and pan remap guide and markers from stable price/time-axis evidence and cached underlying OHLC. Map and Skyline are display-only: they cannot fetch data, move TradingView, or intercept pointer input.
 
 ## Architecture
 
@@ -101,9 +93,11 @@ Bridge caches normalized candle chunks by:
 
 Extension stores only view selection and immutable user trade markers. Large candle series stay outside `chrome.storage.local`. Cache returns complete chunks or explicit gaps; it never fills missing market candles with zero or invented interpolation.
 
-### 4. TradingView time-axis adapter
+### 4. TradingView-synchronized time axis
 
-Adapter observes TradingView-owned time-axis evidence and plot bounds without debugger permission, synthetic drag, or Auto-fit control. It validates stable linear time mapping before drawing synchronized points. Unsafe, incomplete, or contradictory mapping hides synchronized rendering while preserving cached data.
+While history is open, bounded MAIN-world observation reads stable TradingView time-axis labels and matching plot geometry. Skyline then uses same visible date window, same horizontal plot bounds, and same pointer x-coordinate as TradingView. Crosshair first snaps to exact joined underlying candle occupying that horizontal candle slot, then reads Call and Put only from that same timestamp. Underlying candle without option candle shows **NO PREMIUM CANDLE**. Pointer outside every real candle slot produces no invented clock time or substituted distant history.
+
+Observation is disabled while history is closed. Missing or unstable TradingView evidence hides Skyline until stable evidence returns. No guessed axis, debugger permission, synthetic drag, or Auto-fit change is allowed. TradingView timeframe still selects requested candle interval.
 
 ### 5. IV engine
 
@@ -119,9 +113,13 @@ IV engine calculates one estimated IV value from each valid option close and mat
 
 Every output stores model name, assumption version, and calculation timestamp. Tooltip exposes assumptions. Engine enforces no-arbitrage price bounds and convergence checks. Missing input, impossible price, expiry boundary, or failed convergence returns `—` for that IV point. Premium history remains visible.
 
-### 6. Renderers
+### 6. Renderer
 
-LINES, SPLIT, and FOCUS implement one renderer interface and consume same immutable view model. Renderer owns pixels only; it cannot fetch, mutate trades, change cache, or alter TradingView chart state.
+Skyline renderer consumes one immutable view model. Call uses solid neutral stroke above baseline; Put uses dashed neutral stroke below. Renderer owns pixels only; it cannot fetch, mutate trades, change cache, or alter TradingView chart state. One reusable passive canvas and animation-frame coalescing bound pointer-move work.
+
+### 7. Selected-strike chart map
+
+Chart map consumes same selected contract, joined underlying candles, and TradingView axis evidence as pane. Guide y-position comes from selected ladder row after price-axis placement. Marker x-position comes from TradingView visible time-axis range. Marker eligibility uses real underlying OHLC only: candle qualifies when selected strike lies inclusively between candle low and high. Missing low/high never qualifies. Canvas remains pointer-passive and sits below ladder rows so existing row, crosshair, and chart interactions keep ownership.
 
 ## Data flow
 
@@ -133,8 +131,9 @@ Strike-number click
   → interval normalization and timestamp join
   → estimated-IV engine
   → immutable premium-history view model
-  → LINES / SPLIT / FOCUS renderer
-  → stable TradingView time-axis placement
+  → Skyline renderer with Call above / Put below
+  → TradingView-synchronized time scale
+  → shared crosshair at exact matching timestamp
 ```
 
 Trade evidence joins after market-data normalization. Actual trade timestamp remains exact; marker is projected to containing chart interval without rewriting stored trade time or fill premium.
@@ -142,7 +141,7 @@ Trade evidence joins after market-data normalization. Actual trade timestamp rem
 ## Refresh and network boundaries
 
 - Opening history is explicit user action and may fetch history once.
-- Mode switching makes no request.
+- Skyline repaint makes no request.
 - Crosshair movement makes no request.
 - Pan and zoom make no request.
 - Timeframe change may fetch one missing interval because user explicitly changed requested view.
@@ -158,11 +157,11 @@ Trade evidence joins after market-data normalization. Actual trade timestamp rem
 - Missing Call or Put series: show available side and explicit missing-side state.
 - Timestamp mismatch: show gaps; never forward-fill premium or IV.
 - Unsupported timeframe: offer nearest exact supported aggregation only when smaller source candles produce mathematically exact interval. Otherwise fail closed.
-- Unsafe TradingView time mapping: hide synchronized plot and show `TIME AXIS UNAVAILABLE`; never place points approximately.
+- Missing or invalid history timestamps: hide Skyline and show `NO CONTRACT HISTORY`; never invent dates.
 - Invalid IV input: premium remains; IV point shows `—` with reason available on hover.
 - Instrument or expiry change during request: abort stale request and prevent old data from rendering.
 
-History-pane failure must never hide ladder, strategy rails, saved trades, or break-even evidence.
+History failure must never hide ladder, strategy rails, saved trades, or break-even evidence.
 
 ## Performance boundaries
 
@@ -196,19 +195,23 @@ History-pane failure must never hide ladder, strategy rails, saved trades, or br
 
 - Strike number click opens history; row click and double-click retain existing actions.
 - Shared crosshair aligns underlying, premiums, IV, and tooltip timestamp.
-- All three modes render from same view model and make zero mode-switch requests.
+- Call and Put Skyline sides render from same view model and make zero requests.
 - Buy/Sell markers remain distinct and accessible in dark and light themes.
 - No new color literal enters locked ARB Desk palette.
-- Pane close, expiry change, and instrument change clear transient selection.
+- History close, expiry change, and instrument change clear transient selection.
+- Selected ladder highlight, strike guide, candle-touch markers, and Skyline clear with same lifecycle.
+- Candle-touch markers use squares, never circles, and appear only for real inclusive high-low crossings.
+- ATM styling keeps its semantic fill when ATM is selected; selected-state contrast remains visible in light and dark themes.
 - Keyboard and screen-reader names expose exact strike, expiry, mode, and data state.
 
 ### Runtime and performance
 
-- Pan, zoom, crosshair, and mode switch make no bridge request.
+- Pan, zoom, crosshair, and CALL/PUT emphasis switch make no bridge request.
+- Pan, zoom, and timeframe placement redraw selected-strike guide and visible candle-touch markers from cached evidence.
 - Concurrent identical history requests deduplicate.
 - Stale responses cannot replace newer selection.
 - Missing or malformed provider data fails closed.
-- Cached 10,000-point series supports mode switch and crosshair without visible blocking.
+- Cached 10,000-point series supports side-emphasis switch and crosshair without visible blocking.
 
 ### Chrome UAT
 
@@ -217,8 +220,7 @@ Use exact NIFTY test contract selected by user, including strike `24,400` when a
 1. Compare same expiry Call and Put premiums across two dates.
 2. Confirm underlying candle, DTE, strike distance, combined premium, and estimated IV at both timestamps.
 3. Confirm multiple trade markers retain original timestamps and fill premiums.
-4. Compare LINES, SPLIT, and FOCUS in light and dark modes.
-5. User selects winning renderer after real use; remove remaining two in follow-up change.
+4. Confirm solid Call Skyline above strike and dashed Put Skyline below strike in light and dark modes.
 
 ## Explicit exclusions for trial
 

@@ -92,6 +92,28 @@ test("stacking stays inside plot and keeps stable rail order", () => {
   assert.ok(result[1].cardY + result[1].height <= 300);
 });
 
+test("expanded strategy card height includes every trade and disclosure row", () => {
+  assert.equal(chart.strategyCardHeight({
+    kind: "STRATEGY",
+    strategyId: "s1",
+    entries: [{ id: "leg-1" }],
+    disclosure: "EXCLUDING UNKNOWN CHARGES"
+  }, "s1"), 78);
+  assert.equal(chart.strategyCardHeight({
+    kind: "STRATEGY",
+    strategyId: "s1",
+    entries: [{ id: "leg-1" }, { id: "leg-2" }],
+    disclosure: null
+  }, "s1"), 78);
+  assert.equal(chart.strategyCardHeight({
+    kind: "STRATEGY",
+    strategyId: "s1",
+    entries: [{ id: "leg-1" }],
+    disclosure: "EXCLUDING UNKNOWN CHARGES"
+  }, null), 24);
+  assert.equal(chart.strategyCardHeight({ kind: "COMBINED" }, "s1"), 24);
+});
+
 test("accessible labels expose identity, exact price, edge direction, and action", () => {
   assert.equal(chart.accessibleLabel({
     strategyLabel: "T1", exact: 24874, mode: "EDGE", edge: "TOP", selected: true

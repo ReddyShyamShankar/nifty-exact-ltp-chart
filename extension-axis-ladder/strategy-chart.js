@@ -101,6 +101,14 @@
     }));
   }
 
+  function strategyCardHeight(model, openedStrategyId) {
+    const baseHeight = 24;
+    if (model?.kind !== "STRATEGY" || model.strategyId !== openedStrategyId) return baseHeight;
+    const tradeCount = Array.isArray(model.entries) ? model.entries.length : 0;
+    const detailCount = tradeCount + (model.disclosure ? 1 : 0);
+    return detailCount > 0 ? baseHeight + detailCount * 27 : baseHeight;
+  }
+
   function accessibleLabel(model) {
     const label = typeof model?.strategyLabel === "string" && model.strategyLabel ? model.strategyLabel : "Strategy";
     const exact = Number(model?.exact);
@@ -112,7 +120,7 @@
     return `${label} break-even ${price}, ${location}, ${selection} for combined preview. Open positions and P&L.`;
   }
 
-  const api = { createController, projectBreakEven, stackCards, accessibleLabel };
+  const api = { createController, projectBreakEven, stackCards, strategyCardHeight, accessibleLabel };
   root.OptionsStrategyChart = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

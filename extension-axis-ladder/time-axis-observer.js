@@ -1,8 +1,13 @@
 (function (root) {
   "use strict";
   const ATTRIBUTE = "data-options-time-axis";
+  const SYNC_ATTRIBUTE = "data-options-time-sync";
   const MONTHS = new Map([["jan", 0], ["feb", 1], ["mar", 2], ["apr", 3], ["may", 4], ["jun", 5],
     ["jul", 6], ["aug", 7], ["sep", 8], ["oct", 9], ["nov", 10], ["dec", 11]]);
+
+  function timeSyncEnabled(value) {
+    return String(value || "").toLowerCase() === "on";
+  }
 
   function parseTimeLabel(value, anchor = Date.now()) {
     const text = String(value || "").trim();
@@ -152,6 +157,7 @@
     parseTimeLabel,
     projectedTimeFill,
     shouldPublish,
+    timeSyncEnabled,
     timeToX,
     upsertBoundedCandidate
   };
@@ -170,14 +176,40 @@
   let previous = null;
   let publishScheduled = false;
   let confirmTimer = null;
+  let syncActive = timeSyncEnabled(root.document?.documentElement?.getAttribute?.(SYNC_ATTRIBUTE));
+  let lastStable = null;
+
+  function clearObservation() {
+    pending = new Map();
+    previous = null;
+    publishScheduled = false;
+    root.clearTimeout(confirmTimer);
+    confirmTimer = null;
+  }
+
+  const syncObserver = root.MutationObserver && root.document?.documentElement
+    ? new root.MutationObserver(() => {
+      const next = timeSyncEnabled(root.document.documentElement.getAttribute(SYNC_ATTRIBUTE));
+      if (next === syncActive) return;
+      syncActive = next;
+      clearObservation();
+      if (syncActive && lastStable && root.document?.documentElement) {
+        root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(lastStable));
+      }
+    })
+    : null;
+  syncObserver?.observe(root.document.documentElement, { attributes: true, attributeFilter: [SYNC_ATTRIBUTE] });
 
   function publish() {
     publishScheduled = false;
     const envelope = observationEnvelope([...pending.values()], previous);
     pending = new Map();
     previous = envelope;
-    if (shouldPublish(envelope) && root.document?.documentElement) {
-      root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(envelope));
+    if (shouldPublish(envelope)) {
+      lastStable = envelope;
+      if (syncActive && root.document?.documentElement) {
+        root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(envelope));
+      }
     }
     scheduleStableConfirmation(envelope);
   }
@@ -191,7 +223,8 @@
       const confirmed = confirmStableEnvelope(envelope);
       if (!confirmed || !shouldPublish(confirmed)) return;
       previous = confirmed;
-      root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(confirmed));
+      lastStable = confirmed;
+      if (syncActive) root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(confirmed));
     }, 120);
   }
 

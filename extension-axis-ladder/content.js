@@ -3,6 +3,8 @@
 
   const RETRY_DELAYS = [0, 250, 650, 1200];
   const LABELS_ID = "nifty-axis-ladder";
+  const PREMIUM_STRIKE_MAP_ID = "options-premium-strike-map";
+  const PREMIUM_CHART_TRIALS_ID = "options-premium-chart-trials";
   const RISK_LABEL_GAP_PX = 12;
   const BREAK_EVEN_LABEL_HEIGHT = 15;
   const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
@@ -34,13 +36,14 @@
     || (typeof module !== "undefined" && module.exports ? require("./strategy-panel.js") : null);
   const premiumHistoryModelApi = root.OptionsPremiumHistoryModel
     || (typeof module !== "undefined" && module.exports ? require("./premium-history-model.js") : null);
+  const premiumChartTrialsApi = root.OptionsPremiumChartTrials
+    || (typeof module !== "undefined" && module.exports ? require("./premium-chart-trials.js") : null);
   const premiumHistoryPaneApi = root.OptionsPremiumHistoryPane
     || (typeof module !== "undefined" && module.exports ? require("./premium-history-pane.js") : null);
   const DEFAULTS = {
     enabled: false,
     uiTheme: "dark",
     expiry: "current_month",
-    labelCount: "5",
     panelOpen: false,
     selectedStrategyId: "",
     sellerSafetyView: null,
@@ -160,6 +163,13 @@
     };
   }
 
+  function premiumHistoryStatusMessage(state) {
+    if (state?.status !== "unavailable") return null;
+    return /extension context invalidated/i.test(String(state?.error || ""))
+      ? "RELOAD TRADINGVIEW · EXTENSION UPDATED"
+      : null;
+  }
+
   function normalizePremiumTimeAxis(raw) {
     let parsed = raw;
     if (typeof raw === "string") {
@@ -177,6 +187,22 @@
     const plotRect = pairs.find((pair) => pair?.plotRect)?.plotRect || parsed?.plotRect;
     if (!plotRect || ![plotRect.left, plotRect.top, plotRect.right, plotRect.bottom].every((value) => Number.isFinite(Number(value)))) return null;
     return { ...parsed, pairs, plotRect: { ...plotRect } };
+  }
+
+  function setPremiumTimeSync(documentRef, enabled) {
+    const element = documentRef?.documentElement;
+    if (!element?.setAttribute || !element?.removeAttribute) return false;
+    if (enabled) element.setAttribute("data-options-time-sync", "on");
+    else {
+      element.removeAttribute("data-options-time-axis");
+      element.removeAttribute("data-options-time-sync");
+    }
+    return Boolean(enabled);
+  }
+
+  function samePlotRect(left, right) {
+    return Boolean(left && right && ["left", "top", "right", "bottom"]
+      .every((key) => Number(left[key]) === Number(right[key])));
   }
 
   function riskLabelLayout(laneZeroRows) {
@@ -927,6 +953,8 @@
     chartInstrumentIdentity,
     normalizePremiumTimeAxis,
     premiumHistoryRange,
+    premiumHistoryStatusMessage,
+    setPremiumTimeSync,
     visibleRowIndexes,
     priceScaleFailure
   };
@@ -982,7 +1010,322 @@
   let openedStrategyId = null;
   let strategyOwnershipChooser = null;
   let premiumHistoryPane = null;
-  let premiumHistoryDom = null;
+  let premiumChartPlacement = null;
+  let premiumSkylineState = null;
+  let premiumSkylineCrosshair = null;
+  let premiumSkylinePointerListener = null;
+  let premiumSkylinePaintFrame = null;
+
+  function clearPremiumChartTrials() {
+    if (premiumSkylinePointerListener) {
+      document.removeEventListener("pointermove", premiumSkylinePointerListener, true);
+      premiumSkylinePointerListener = null;
+    }
+    if (premiumSkylinePaintFrame !== null) {
+      root.cancelAnimationFrame?.(premiumSkylinePaintFrame);
+      root.clearTimeout?.(premiumSkylinePaintFrame);
+      premiumSkylinePaintFrame = null;
+    }
+    premiumSkylineState = null;
+    premiumSkylineCrosshair = null;
+    document.getElementById(PREMIUM_CHART_TRIALS_ID)?.remove();
+  }
+
+  function drawPremiumSkyline(context, segments, color, dashed) {
+    segments.forEach((segment) => {
+      if (!segment.length) return;
+      context.save();
+      context.fillStyle = color;
+      context.globalAlpha = dashed ? 0.06 : 0.1;
+      context.beginPath();
+      context.moveTo(segment[0].x, segment[0].anchorY);
+      segment.forEach((point) => context.lineTo(point.x, point.y));
+      context.lineTo(segment.at(-1).x, segment.at(-1).anchorY);
+      context.closePath();
+      context.fill();
+      context.globalAlpha = dashed ? 0.65 : 0.9;
+      context.strokeStyle = color;
+      context.lineWidth = dashed ? 1.75 : 2.25;
+      context.setLineDash(dashed ? [7, 5] : []);
+      context.beginPath();
+      context.moveTo(segment[0].x, segment[0].y);
+      segment.slice(1).forEach((point) => context.lineTo(point.x, point.y));
+      context.stroke();
+      context.setLineDash([]);
+      if (segment.length === 1) context.fillRect(segment[0].x - 2, segment[0].y - 2, 4, 4);
+      context.restore();
+    });
+  }
+
+  function premiumSkylineCanvas(plotRect, width, height) {
+    const node = document.getElementById(LABELS_ID);
+    if (!node) return null;
+    let canvas = document.getElementById(PREMIUM_CHART_TRIALS_ID);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      if (typeof canvas.getContext !== "function") return null;
+      canvas.id = PREMIUM_CHART_TRIALS_ID;
+      canvas.setAttribute("aria-hidden", "true");
+      canvas.style.pointerEvents = "none";
+      node.append(canvas);
+    }
+    const ratio = Math.max(1, Number(root.devicePixelRatio) || 1);
+    canvas.style.left = `${Number(plotRect.left)}px`;
+    canvas.style.top = `${Number(plotRect.top)}px`;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    const pixelWidth = Math.ceil(width * ratio);
+    const pixelHeight = Math.ceil(height * ratio);
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+    return { canvas, ratio };
+  }
+
+  function drawPremiumSkylineChip(context, box, text, fill, ink, border = null) {
+    if (!box) return;
+    context.save();
+    context.globalAlpha = 0.96;
+    context.fillStyle = fill;
+    context.fillRect(box.x, box.y, box.width, box.height);
+    if (border) {
+      context.strokeStyle = border;
+      context.lineWidth = 1;
+      context.strokeRect(box.x + 0.5, box.y + 0.5, Math.max(0, box.width - 1), Math.max(0, box.height - 1));
+    }
+    context.globalAlpha = 1;
+    context.fillStyle = ink;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(text, box.x + box.width / 2, box.y + box.height / 2);
+    context.restore();
+  }
+
+  function premiumSkylineTimestamp(time) {
+    if (!Number.isFinite(Number(time))) return "GAP";
+    const parts = new Intl.DateTimeFormat("en-IN", {
+      day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false
+    }).formatToParts(new Date(Number(time)));
+    const part = (type) => parts.find((item) => item.type === type)?.value || "";
+    return `${part("day")} ${part("month").toUpperCase()} · ${part("hour")}:${part("minute")}`;
+  }
+
+  function drawPremiumSkylineCrosshair(context, state, colors, localToY) {
+    const hover = premiumSkylineCrosshair;
+    if (!hover || !Number.isFinite(Number(hover.localX))) return;
+    const x = Number(hover.localX);
+    const strike = Number(state?.selection?.strike);
+    const sample = premiumChartTrialsApi.skylineCrosshairSample(hover.candle, strike, localToY)
+      || { anchorY: Number(localToY(strike)), call: null, put: null };
+    context.save();
+    context.strokeStyle = colors.secondary;
+    context.globalAlpha = 0.7;
+    context.lineWidth = 1;
+    context.setLineDash([3, 4]);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, Number(state?.timeAxis?.plotRect?.bottom) - Number(state?.timeAxis?.plotRect?.top));
+    context.stroke();
+    context.setLineDash([]);
+    context.fillStyle = colors.accent;
+    if (sample?.call) context.fillRect(x - 3, sample.call.y - 3, 6, 6);
+    if (sample?.put) context.fillRect(x - 3, sample.put.y - 3, 6, 6);
+
+    const call = sample?.call ? Number(sample.call.premium) : null;
+    const put = sample?.put ? Number(sample.put.premium) : null;
+    const date = premiumSkylineTimestamp(hover.time);
+    const labels = {
+      date,
+      call: Number.isFinite(call) ? `CALL ${call.toFixed(2)} ↑` : "",
+      put: Number.isFinite(put) ? `PUT ${put.toFixed(2)} ↓` : "",
+      strike: strike.toLocaleString("en-IN"),
+      missing: "NO PREMIUM CANDLE"
+    };
+    const plotWidth = Number(state?.timeAxis?.plotRect?.right) - Number(state?.timeAxis?.plotRect?.left);
+    const plotHeight = Number(state?.timeAxis?.plotRect?.bottom) - Number(state?.timeAxis?.plotRect?.top);
+    context.font = '600 11px "Geist Mono", ui-monospace, monospace';
+    const chipWidth = (text) => Math.ceil(context.measureText(text).width) + 20;
+    const layout = premiumChartTrialsApi.spatialLabelLayout({
+      plotWidth,
+      plotHeight,
+      x,
+      anchorY: sample.anchorY,
+      callY: Number.isFinite(call) ? sample.call.y : null,
+      putY: Number.isFinite(put) ? sample.put.y : null,
+      widths: {
+        date: chipWidth(labels.date),
+        call: chipWidth(labels.call),
+        put: chipWidth(labels.put),
+        strike: chipWidth(labels.strike),
+        missing: chipWidth(labels.missing)
+      },
+      height: 24
+    });
+    if (layout) {
+      drawPremiumSkylineChip(context, layout.date, labels.date, colors.panel, colors.primary, colors.line);
+      drawPremiumSkylineChip(context, layout.call, labels.call, colors.callFill, colors.callInk, colors.line);
+      drawPremiumSkylineChip(context, layout.put, labels.put, colors.putFill, colors.putInk, colors.line);
+      drawPremiumSkylineChip(context, layout.strike, labels.strike, colors.accent, colors.strikeInk);
+      drawPremiumSkylineChip(context, layout.missing, labels.missing, colors.neutralFill, colors.neutralInk, colors.line);
+    }
+    context.restore();
+  }
+
+  function paintPremiumSkyline(state, placement = premiumChartPlacement) {
+    const selectedStrike = Number(state?.selection?.strike);
+    const plotRect = placement?.plotRect;
+    const priceToClientY = placement?.toY;
+    const width = Number(plotRect?.right) - Number(plotRect?.left);
+    const height = Number(plotRect?.bottom) - Number(plotRect?.top);
+    if (!premiumChartTrialsApi || !Number.isFinite(selectedStrike)
+      || state?.status === "closed" || !Array.isArray(state?.view?.points)
+      || typeof priceToClientY !== "function" || ![width, height].every(Number.isFinite)
+      || width <= 1 || height <= 1) return false;
+    const axis = premiumHistoryPaneApi.synchronizedTimeAxis(state.timeAxis, width);
+    if (!axis) return false;
+    const target = premiumSkylineCanvas(plotRect, width, height);
+    if (!target) return false;
+    const { canvas, ratio } = target;
+    const context = canvas.getContext("2d");
+    if (!context) return false;
+    context.setTransform?.(1, 0, 0, 1, 0, 0);
+    context.clearRect?.(0, 0, canvas.width, canvas.height);
+    context.scale?.(ratio, ratio);
+    context.beginPath();
+    context.rect(0, 0, width, height);
+    context.clip();
+
+    const node = document.getElementById(LABELS_ID);
+    const computed = root.getComputedStyle?.(node);
+    const isLight = node?.dataset?.theme === "light";
+    const colors = {
+      primary: computed?.getPropertyValue?.("--theme-ink")?.trim() || "#18181b",
+      secondary: computed?.getPropertyValue?.("--theme-ink-dim")?.trim() || "#52525b",
+      accent: computed?.getPropertyValue?.("--theme-warn")?.trim() || "#bd5505",
+      background: computed?.getPropertyValue?.("--theme-bg")?.trim() || "#ffffff",
+      panel: computed?.getPropertyValue?.("--theme-panel")?.trim()
+        || computed?.getPropertyValue?.("--theme-bg")?.trim() || "#ffffff",
+      line: computed?.getPropertyValue?.("--theme-line-2")?.trim()
+        || computed?.getPropertyValue?.("--theme-ink-dim")?.trim() || "#52525b",
+      contrastInk: computed?.getPropertyValue?.("--theme-contrast-ink")?.trim() || "#18181b",
+      strikeInk: computed?.getPropertyValue?.("--ladder-selected-ink")?.trim() || "#ffffff"
+    };
+    colors.neutralFill = isLight ? colors.primary : colors.panel;
+    colors.neutralInk = isLight ? colors.background : colors.primary;
+    colors.callFill = computed?.getPropertyValue?.("--theme-accent")?.trim() || colors.primary;
+    colors.putFill = colors.accent;
+    colors.callInk = isLight ? computed?.getPropertyValue?.("--theme-status-ink")?.trim() || colors.background
+      : colors.contrastInk;
+    colors.putInk = colors.callInk;
+    const localToY = (price) => Number(priceToClientY(price)) - Number(plotRect.top);
+    const geometry = premiumChartTrialsApi.skylineGeometry(state.view.points, selectedStrike, axis, localToY, 4);
+    drawPremiumSkyline(context, premiumChartTrialsApi.skylineSegments(geometry, "call"), colors.primary, false);
+    drawPremiumSkyline(context, premiumChartTrialsApi.skylineSegments(geometry, "put"), colors.secondary, true);
+    context.fillStyle = colors.secondary;
+    context.font = '10px "Geist Mono", ui-monospace, monospace';
+    context.textBaseline = "top";
+    context.fillText(`PREMIUM SKYLINE · ${selectedStrike.toLocaleString("en-IN")} · ${state.selection.expiry} · CALL ↑ / PUT ↓`, 8, 7);
+    drawPremiumSkylineCrosshair(context, state, colors, localToY);
+    return true;
+  }
+
+  function schedulePremiumSkylinePaint() {
+    if (premiumSkylinePaintFrame !== null) return;
+    const requestAnimationFrame = root.requestAnimationFrame || ((callback) => root.setTimeout(callback, 16));
+    premiumSkylinePaintFrame = requestAnimationFrame(() => {
+      premiumSkylinePaintFrame = null;
+      if (premiumSkylineState) paintPremiumSkyline(premiumSkylineState);
+    });
+  }
+
+  function bindPremiumSkylineCrosshair() {
+    if (premiumSkylinePointerListener) return;
+    premiumSkylinePointerListener = (event) => {
+      const state = premiumSkylineState;
+      const rect = state?.timeAxis?.plotRect;
+      const x = Number(event?.clientX);
+      const y = Number(event?.clientY);
+      const inside = rect && [x, y].every(Number.isFinite)
+        && x >= Number(rect.left) && x <= Number(rect.right)
+        && y >= Number(rect.top) && y <= Number(rect.bottom);
+      const next = inside
+        ? premiumHistoryPaneApi.synchronizedCrosshair(state?.view?.points, state?.timeAxis, x)
+        : null;
+      if (premiumChartTrialsApi.sameCrosshair(next, premiumSkylineCrosshair)) return;
+      premiumSkylineCrosshair = next;
+      schedulePremiumSkylinePaint();
+    };
+    document.addEventListener("pointermove", premiumSkylinePointerListener, true);
+  }
+
+  function renderPremiumChartTrials(state, placement = premiumChartPlacement) {
+    premiumSkylineState = state || null;
+    premiumChartPlacement = placement || premiumChartPlacement;
+    if (!samePlotRect(state?.timeAxis?.plotRect, premiumChartPlacement?.plotRect)) {
+      premiumChartPlacement = null;
+      premiumSkylineCrosshair = null;
+      document.getElementById(PREMIUM_CHART_TRIALS_ID)?.remove();
+      return false;
+    }
+    const painted = paintPremiumSkyline(state, premiumChartPlacement);
+    if (painted) bindPremiumSkylineCrosshair();
+    return painted;
+  }
+
+  function clearPremiumStrikeMap() {
+    document.getElementById(PREMIUM_STRIKE_MAP_ID)?.remove();
+    document.getElementById(LABELS_ID)?.querySelectorAll?.(".nifty-axis-ladder__row")
+      .forEach((row) => row.classList.remove("is-history-selected"));
+  }
+
+  function renderPremiumStrikeMap(state = premiumHistoryPane?.state?.()) {
+    const selectedStrike = Number(state?.selection?.strike);
+    const node = document.getElementById(LABELS_ID);
+    const rows = node?.querySelectorAll?.(".nifty-axis-ladder__row") || [];
+    rows.forEach((row) => row.classList.toggle("is-history-selected",
+      Number.isFinite(selectedStrike) && Number(row.dataset.strike) === selectedStrike));
+    document.getElementById(PREMIUM_STRIKE_MAP_ID)?.remove();
+    if (!Number.isFinite(selectedStrike) || state?.status === "closed") return false;
+
+    const selectedRow = node?.querySelector?.(`.nifty-axis-ladder__row[data-strike="${selectedStrike}"]`);
+    if (!selectedRow || selectedRow.hidden || typeof selectedRow.getBoundingClientRect !== "function") return false;
+    const rowRect = selectedRow.getBoundingClientRect();
+    const plotRect = state?.timeAxis?.plotRect || chartCanvas()?.getBoundingClientRect?.();
+    const left = Number(plotRect?.left);
+    const right = Math.min(Number(plotRect?.right), Number(rowRect?.left));
+    const top = Number(rowRect?.top);
+    const bottom = Number(rowRect?.bottom);
+    const y = (top + bottom) / 2;
+    if (![left, right, y].every(Number.isFinite) || right <= left
+      || y < Number(plotRect?.top) || y > Number(plotRect?.bottom)) return false;
+
+    const canvas = document.createElement("canvas");
+    if (typeof canvas.getContext !== "function") return false;
+    const width = Math.max(1, Math.round(right - left));
+    const height = 12;
+    const ratio = Math.max(1, Number(root.devicePixelRatio) || 1);
+    canvas.id = PREMIUM_STRIKE_MAP_ID;
+    canvas.setAttribute("aria-hidden", "true");
+    canvas.style.left = `${left}px`;
+    canvas.style.top = `${y - height / 2}px`;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    canvas.style.pointerEvents = "none";
+    canvas.width = Math.ceil(width * ratio);
+    canvas.height = Math.ceil(height * ratio);
+    const context = canvas.getContext("2d");
+    if (!context) return false;
+    context.scale?.(ratio, ratio);
+    const computed = root.getComputedStyle?.(node);
+    const lineColor = computed?.getPropertyValue?.("--strike-touch-line")?.trim() || "#71717a";
+    context.strokeStyle = lineColor;
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(0, height / 2);
+    context.lineTo(width, height / 2);
+    context.stroke();
+    node.append(canvas);
+    return true;
+  }
 
   function collapseExpandedManualRailDisclosure() {
     const active = expandedManualRailDisclosure;
@@ -1123,18 +1466,25 @@
 
   function ensurePremiumHistoryPane() {
     if (premiumHistoryPane || !premiumHistoryPaneApi?.createPremiumHistoryPane
-      || !premiumHistoryPaneApi?.createDomRenderer || !premiumHistoryModelApi?.buildViewModel) return premiumHistoryPane;
-    premiumHistoryDom = premiumHistoryPaneApi.createDomRenderer(document, rootNode());
+      || !premiumHistoryModelApi?.buildViewModel) return premiumHistoryPane;
     premiumHistoryPane = premiumHistoryPaneApi.createPremiumHistoryPane({
       loadHistory: loadPremiumHistory,
-      render: premiumHistoryDom.render
+      render: (state) => {
+        renderPremiumStrikeMap(state);
+        renderPremiumChartTrials(state);
+        const statusMessage = premiumHistoryStatusMessage(state);
+        if (statusMessage) showStatus(statusMessage);
+      }
     });
-    premiumHistoryDom.bind(premiumHistoryPane);
     return premiumHistoryPane;
   }
 
   function closePremiumHistory() {
     premiumHistoryPane?.close?.();
+    clearPremiumStrikeMap();
+    clearPremiumChartTrials();
+    premiumChartPlacement = null;
+    setPremiumTimeSync(document, false);
   }
 
   async function openPremiumHistory(strike, interval = null) {
@@ -1144,7 +1494,7 @@
       showStatus("CONTRACT HISTORY UNAVAILABLE");
       return false;
     }
-    pane.setTimeAxis(currentPremiumTimeAxis());
+    setPremiumTimeSync(document, true);
     return pane.open(selection);
   }
 
@@ -1333,6 +1683,7 @@
 
   function renderManualRow(element, row, membership, entriesByStrike) {
     const isSelected = breakEvenSelection.current()?.strike === row.strike;
+    const isHistorySelected = Number(premiumHistoryPane?.state?.()?.selection?.strike) === row.strike;
     const entries = entriesByStrike.get(row.strike) || [];
     if (manualUiApi?.renderRow) {
       manualUiApi.renderRow(document, element, {
@@ -1346,6 +1697,7 @@
       element.textContent = formatRow(row);
     }
     element.classList.toggle("is-selected", isSelected);
+    element.classList.toggle("is-history-selected", isHistorySelected);
     element.setAttribute("aria-pressed", String(isSelected));
     element.hidden = false;
   }
@@ -1571,6 +1923,7 @@
     bar.className = "nifty-strategy-preview";
     const summary = document.createElement("span");
     summary.className = "nifty-strategy-preview__summary";
+    summary.setAttribute("aria-live", "polite");
     summary.textContent = preview?.status === "OK"
       ? `${selectedCount} SELECTED · ${preview.disclosure || "CHARGES INCLUDED"}`
       : `${selectedCount} SELECTED · ${preview?.status || "INCOMPLETE"}`;
@@ -1583,6 +1936,90 @@
       event.stopPropagation?.();
       strategyChartController.compare(!strategyChartController.comparing());
     });
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "nifty-strategy-preview__save";
+    save.textContent = "Save";
+    save.disabled = preview?.status !== "OK" || !strategyPanelApi;
+    save.addEventListener("click", (event) => {
+      event.stopPropagation?.();
+      bar.querySelector(".nifty-strategy-preview__save-chooser")?.remove();
+      const selectedIds = ensureStrategyChartController()?.selected() || [];
+      const choices = strategyPanelApi?.saveChoices?.(settings.strategyBook, selectedIds) || [];
+      if (!choices.length) return;
+      const chooser = document.createElement("div");
+      chooser.className = "nifty-strategy-preview__save-chooser";
+      chooser.setAttribute("role", "dialog");
+      chooser.setAttribute("aria-label", "Save combined strategy");
+      const closeChooser = () => {
+        chooser.remove();
+        save.focus();
+      };
+      const title = document.createElement("span");
+      title.className = "nifty-strategy-preview__save-title";
+      title.textContent = "SAVE COMBINED AS";
+      chooser.append(title);
+      const options = [
+        { mode: "CREATE_NEW", label: "CREATE NEW STRATEGY" },
+        ...choices.flatMap((choice) => (choice.destinations || []).map((destination) => ({
+          mode: "EXISTING",
+          strategyId: destination.strategyId,
+          label: `MERGE INTO ${destination.label}`
+        })))
+      ];
+      options.forEach((option) => {
+        const choice = document.createElement("button");
+        choice.type = "button";
+        choice.className = "nifty-strategy-preview__save-choice";
+        choice.textContent = option.label;
+        choice.addEventListener("click", async (choiceEvent) => {
+          choiceEvent.stopPropagation?.();
+          chooser.querySelectorAll(".nifty-strategy-preview__save-choice")
+            .forEach((node) => { node.disabled = true; });
+          summary.textContent = "SAVING PERMANENT VERSION…";
+          try {
+            const strategyId = option.mode === "CREATE_NEW" ? crypto.randomUUID() : option.strategyId;
+            const command = strategyPanelApi.commandForSave({
+              commandId: crypto.randomUUID(),
+              versionId: crypto.randomUUID(),
+              selectedIds,
+              destination: option.mode === "CREATE_NEW"
+                ? {
+                  mode: "CREATE_NEW",
+                  strategyId,
+                  label: `T${Number(settings.strategyBook?.nextSequence) || 1}`
+                }
+                : { mode: "EXISTING", strategyId }
+            });
+            await persistStrategyCommand(command);
+            clearStrategyPreview();
+            await controller?.place();
+          } catch (error) {
+            summary.textContent = `SAVE FAILED · ${error?.message || "TRY AGAIN"}`;
+            chooser.querySelectorAll(".nifty-strategy-preview__save-choice")
+              .forEach((node) => { node.disabled = false; });
+          }
+        });
+        chooser.append(choice);
+      });
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "nifty-strategy-preview__save-cancel";
+      cancel.textContent = "CANCEL";
+      cancel.addEventListener("click", (cancelEvent) => {
+        cancelEvent.stopPropagation?.();
+        closeChooser();
+      });
+      chooser.append(cancel);
+      chooser.addEventListener("keydown", (keyEvent) => {
+        if (keyEvent.key !== "Escape") return;
+        keyEvent.preventDefault?.();
+        keyEvent.stopPropagation?.();
+        closeChooser();
+      });
+      bar.append(chooser);
+      chooser.querySelector(".nifty-strategy-preview__save-choice")?.focus();
+    });
     const clear = document.createElement("button");
     clear.type = "button";
     clear.className = "nifty-strategy-preview__clear";
@@ -1592,7 +2029,7 @@
       clearStrategyPreview();
       void controller?.place();
     });
-    bar.append(summary, compare, clear);
+    bar.append(summary, compare, save, clear);
     rootNodeValue.append(bar);
   }
 
@@ -1654,7 +2091,7 @@
     const cards = strategyChartApi.stackCards(projected.map((model) => ({
       id: model.id,
       railY: model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY,
-      height: 28
+      height: strategyChartApi.strategyCardHeight(model, openedStrategyId)
     })), { gap: 6, minY: Number(rect.top), maxY: Number(rect.bottom) });
     const cardById = new Map(cards.map((card) => [card.id, card]));
     const rootNodeValue = strategyRailsRoot();
@@ -2117,7 +2554,12 @@
     if (!liveRow || !rowElement) return;
     const entries = manualEntriesByStrike().get(strike) || [];
     const entry = entries.find((item) => item.id === context?.entryId) || null;
-    let draft = manualUiApi.createDraft({ expiry: settings.expiry, row: liveRow, entry });
+    let draft = manualUiApi.createDraft({
+      expiry: settings.expiry,
+      row: liveRow,
+      entry,
+      optionType: context?.optionType
+    });
     let editor = null;
     let pendingCommit = false;
     const origin = {
@@ -2492,6 +2934,9 @@
         element.style.right = `${baseRight + lane * laneOffset}px`;
         element.style.top = `${row.y}px`;
       });
+      premiumChartPlacement = { toY, plotRect: rect };
+      renderPremiumStrikeMap(premiumHistoryPane?.state?.());
+      renderPremiumChartTrials(premiumHistoryPane?.state?.());
       positionManualEditor();
       const laneZeroRows = elements
         .filter(({ element }, index) => !element.hidden && layout.lanes[index] === 0)
@@ -2556,6 +3001,8 @@
   function scheduleTimeframeCheck() {
     if (timeframeTimer !== null) return;
     clearManualTransientState();
+    premiumHistoryPane?.setTimeAxis?.(null);
+    if (premiumHistoryPane?.state?.()?.selection) setPremiumTimeSync(document, true);
     const nextTimeframe = timeframeApi.timeframeKey(chartCanvas()?.getAttribute("aria-label") || "");
     const membership = controller?.membership();
     if (membership && nextTimeframe !== membership.timeframe) concealRows("CALIBRATING");
@@ -2637,6 +3084,7 @@
     }
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
     if (!row) {
+      closePremiumHistory();
       clearBreakEvenSelection();
       clearManualTransientState({ restorePlanRails: true });
     }
@@ -2694,8 +3142,12 @@
     if (event.target?.closest?.(".nifty-axis-ladder__strike-face")) return;
     const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
     if (!context) return;
+    const optionType = event.target?.closest?.(".nifty-axis-ladder__cell")?.dataset?.optionType;
     closeManualEditorForOtherRow(context.strike);
-    ensureManualInteraction()?.doubleClick(context);
+    ensureManualInteraction()?.doubleClick({
+      ...context,
+      optionType: ["CALL", "PUT"].includes(optionType) ? optionType : "CALL"
+    });
   }
 
   function handleDocumentKeyDown(event) {
@@ -2764,9 +3216,12 @@
   }
 
   function stop() {
+    setPremiumTimeSync(document, false);
     premiumHistoryPane?.destroy?.();
     premiumHistoryPane = null;
-    premiumHistoryDom = null;
+    clearPremiumStrikeMap();
+    clearPremiumChartTrials();
+    premiumChartPlacement = null;
     clearBreakEvenSelection();
     clearStrategyPreview();
     clearManualTransientState();

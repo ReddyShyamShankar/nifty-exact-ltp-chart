@@ -43,6 +43,9 @@
   --ladder-sell-ink: var(--theme-contrast-ink);
   --ladder-selected: var(--theme-warn);
   --ladder-selected-ink: var(--theme-contrast-ink);
+  --ladder-history-selected: #f4f4f5;
+  --ladder-history-selected-ink: #18181b;
+  --strike-touch-line: #71717a;
   position: fixed;
   z-index: 2147483647;
   inset: 0;
@@ -70,6 +73,8 @@
   --ladder-buy-ink: #ffffff;
   --ladder-sell-ink: #ffffff;
   --ladder-selected-ink: #ffffff;
+  --ladder-history-selected: #18181b;
+  --ladder-history-selected-ink: #f4f4f5;
 }
 
 #options-premium-history {
@@ -151,6 +156,20 @@
   position: fixed;
   z-index: 1;
   inset: 0;
+  pointer-events: none;
+}
+
+#options-premium-strike-map {
+  position: fixed;
+  z-index: 2;
+  display: block;
+  pointer-events: none;
+}
+
+#options-premium-chart-trials {
+  position: fixed;
+  z-index: 1;
+  display: block;
   pointer-events: none;
 }
 
@@ -457,6 +476,29 @@
   border-left-color: var(--ladder-selected);
 }
 
+.nifty-axis-ladder__row.is-history-selected {
+  border-color: var(--ladder-history-selected);
+  background: var(--ladder-history-selected);
+  color: var(--ladder-history-selected-ink);
+  font-weight: 800;
+}
+
+.nifty-axis-ladder__row.is-history-selected::after {
+  border-left-color: var(--ladder-history-selected);
+}
+
+.nifty-axis-ladder__row.is-history-selected.is-atm {
+  border-color: var(--ladder-history-selected);
+  background: var(--ladder-atm);
+  color: var(--ladder-atm-ink);
+  outline: 2px solid var(--ladder-history-selected);
+  outline-offset: 0;
+}
+
+.nifty-axis-ladder__row.is-history-selected.is-atm::after {
+  border-left-color: var(--ladder-atm);
+}
+
 .nifty-axis-ladder__row.has-manual-editor {
   border-color: var(--ladder-selected);
   background: var(--ladder-selected);
@@ -542,33 +584,44 @@
   text-align: left;
 }
 
-.nifty-manual-editor__actions {
-  position: absolute;
-  top: calc(100% + 2px);
+.nifty-manual-editor__direct-actions {
   display: flex;
+  align-items: stretch;
   gap: 2px;
-  padding: 2px 0 0;
+}
+
+.nifty-manual-editor__direct-actions .nifty-manual-editor__action {
+  height: 20px;
+  padding: 2px 5px;
   border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.nifty-manual-editor__actions[data-option-type="CALL"] {
-  left: 3px;
-}
-
-.nifty-manual-editor__actions[data-option-type="PUT"] {
-  left: 57px;
+  color: #ffffff;
+  font-size: inherit;
+  font-weight: 850;
+  line-height: 1;
 }
 
 .nifty-manual-editor__action[data-direction="BUY"] {
   background: var(--ladder-buy);
-  color: var(--ladder-buy-ink);
+  color: #ffffff;
 }
 
 .nifty-manual-editor__action[data-direction="SELL"] {
   background: var(--ladder-sell);
-  color: var(--ladder-sell-ink);
+  color: #ffffff;
+}
+
+.nifty-manual-editor__direct-actions .nifty-manual-editor__action.is-selected {
+  outline: 1px solid #ffffff;
+  outline-offset: -1px;
+  color: #ffffff;
+}
+
+.nifty-manual-editor__direct-actions .nifty-manual-editor__action[data-direction="BUY"].is-selected {
+  background: var(--ladder-buy);
+}
+
+.nifty-manual-editor__direct-actions .nifty-manual-editor__action[data-direction="SELL"].is-selected {
+  background: var(--ladder-sell);
 }
 
 .nifty-axis-ladder__status {
@@ -732,9 +785,39 @@
   cursor: pointer;
 }
 
+.nifty-strategy-preview button:focus-visible {
+  outline: 2px solid var(--plan-ink);
+  outline-offset: 1px;
+}
+
 .nifty-strategy-preview__compare[aria-pressed="true"] {
   border-color: var(--pnl-profit);
   color: var(--pnl-profit);
+}
+
+.nifty-strategy-preview__save-chooser {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--plan-line);
+  border-radius: 4px;
+  background: var(--plan-surface);
+  color: var(--plan-ink);
+}
+
+.nifty-strategy-preview__save-title {
+  color: var(--theme-ink-dim);
+  font: 700 9px/1.3 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.nifty-strategy-preview__save-choice,
+.nifty-strategy-preview__save-cancel {
+  text-align: left;
 }
 
 .nifty-strategy-owner {

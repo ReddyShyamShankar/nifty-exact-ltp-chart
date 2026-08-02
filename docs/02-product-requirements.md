@@ -1,16 +1,18 @@
 # Product Requirements
 
+> **Universal product rule:** Build from instrument metadata, selected expiry, available option contracts, and TradingView axis evidence so same foundation can support any optionable pair, instrument, or index worldwide. NIFTY is current validation market, not core product rule.
+
 Priority: P0 required for first useful prototype; P1 next; P2 later.
 
 ## First-release scope lock
 
-- Underlying: NIFTY.
-- Expiry: monthly.
+- Current validation instrument: NIFTY.
+- Current validation expiry: monthly.
 - Premium source: last traded price.
 - Calls and puts: both visible.
-- Default strike count: five total.
-- Strike count: user-configurable after default.
-- ATM center: automatic by default, manual override available.
+- Display membership: real contracts aligned to price labels currently visible on TradingView right axis.
+- ATM: nearest available real contract; retain only when its price belongs inside visible axis range.
+- Timeframe: context only; never selects strike interval or strike count.
 - Product behavior: informational only; no recommendations or order placement.
 
 ## P0 — strike and premium view
@@ -19,12 +21,12 @@ Priority: P0 required for first useful prototype; P1 next; P2 later.
 
 - Underlying symbol.
 - Expiry.
-- Strike interval.
-- Center strike or current-price anchoring.
-- Number of strikes above and below center.
+- Available option-contract strikes for selected market and expiry.
+- Numerical price labels currently visible on TradingView right axis.
+- Current underlying spot for real-contract ATM identification.
 - Call and put visibility.
 
-Strike count should offer a compact preset selector such as 3, 5, 7, 9, or 11 total. Default: 5. Exact maximum depends on verified symbol/request limits.
+Display every real option strike that aligns with current TradingView axis evidence. Dense axis labels may expose smaller contract steps; wider axis labels naturally expose fewer strikes. Product never imposes fixed strike count and never maps chart timeframe to strike interval.
 
 ### Chart output
 
@@ -38,11 +40,13 @@ Strike count should offer a compact preset selector such as 3, 5, 7, 9, or 11 to
 
 ### Acceptance
 
-- User can see at least ATM, two strikes above, and two strikes below.
-- Labels remain readable on 1m, 5m, 15m, 1h, and daily charts.
+- Every visible axis-aligned real contract is represented once in one right-side ladder column.
+- Same axis-membership rule works across every chart timeframe.
+- Zoom changes membership only through changed TradingView axis evidence.
+- Real ATM contract keeps unique theme-specific styling when visible.
 - Missing or delayed option data is shown as unavailable, never silently treated as zero.
-- Increasing strike count must not force labels to overlap the candle area.
-- UI must preserve a clean chart at the default setting.
+- Ladder never changes TradingView auto-fit, zoom, or price scale.
+- Rows without safe finite coordinates remain hidden rather than appearing at default top-left position.
 
 ## P0 — premium movement
 

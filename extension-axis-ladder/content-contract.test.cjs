@@ -11,6 +11,7 @@ const strategyStore = require("./strategy-store.js");
 const manualPlan = require("./manual-plan.js");
 
 const RISK_EXPIRY = "2026-08-25";
+const contentSource = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
 
 test("operator guide documents click-only single-leg break-even rails", () => {
   const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
@@ -68,9 +69,45 @@ test("operator guide treats TradingView badge styling as cosmetic and fail-safe"
 });
 
 test("content delegates bridge chain requests to extension service worker", () => {
-  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
-  assert.match(source, /chrome\.runtime\.sendMessage\(\{\s*type:\s*"FETCH_NIFTY_CHAIN",\s*expiry\s*\}\)/);
-  assert.doesNotMatch(source, /fetch\([^)]*api\/nifty-chain/);
+  assert.match(contentSource, /chrome\.runtime\.sendMessage\(\{\s*type:\s*"FETCH_NIFTY_CHAIN",\s*expiry\s*\}\)/);
+  assert.doesNotMatch(contentSource, /fetch\([^)]*api\/nifty-chain/);
+});
+
+test("SKYLINE premium chart keeps separate passive canvas and preserves strike map", () => {
+  assert.match(contentSource, /const PREMIUM_CHART_TRIALS_ID = "options-premium-chart-trials"/);
+  assert.match(contentSource, /function renderPremiumChartTrials\(state, placement = premiumChartPlacement\)/);
+  assert.match(contentSource, /renderPremiumStrikeMap\(state\);\s*renderPremiumChartTrials\(state\)/);
+  assert.match(contentSource, /canvas\.style\.pointerEvents = "none"/);
+  assert.match(contentSource, /premiumChartTrialsApi\.skylineGeometry/);
+  assert.match(contentSource, /premiumChartTrialsApi\.skylineSegments/);
+  assert.match(contentSource, /synchronizedCrosshair/);
+  assert.match(contentSource, /requestAnimationFrame/);
+  assert.doesNotMatch(contentSource, /premiumChartTrialsApi\.rangeGeometry/);
+  assert.doesNotMatch(contentSource, /premiumChartTrialsApi\.premiumScaleGeometry/);
+  assert.doesNotMatch(contentSource, /premiumChartTrialsApi\.hybridGeometry/);
+});
+
+test("SKYLINE crosshair uses spatial chips instead of paragraph tooltip", () => {
+  assert.match(contentSource, /premiumChartTrialsApi\.spatialLabelLayout/);
+  assert.match(contentSource, /premiumChartTrialsApi\.skylineCrosshairSample\(hover\.candle/);
+  assert.match(contentSource, /drawPremiumSkylineChip/);
+  assert.match(contentSource, /layout\.call, labels\.call, colors\.callFill, colors\.callInk/);
+  assert.match(contentSource, /layout\.put, labels\.put, colors\.putFill, colors\.putInk/);
+  assert.match(contentSource, /NO PREMIUM CANDLE/);
+  assert.doesNotMatch(contentSource, /boxWidth = Math\.min\(390/);
+  assert.doesNotMatch(contentSource, /CALL \$\{Number\.isFinite\(call\)[\s\S]*PUT \$\{Number\.isFinite\(put\)[\s\S]*STRIKE/);
+});
+
+test("production premium history uses on-chart skyline without mounting lower pane", () => {
+  const ensurePane = contentSource.match(/function ensurePremiumHistoryPane\(\)\s*\{[\s\S]*?\n  \}/)?.[0] || "";
+  assert.doesNotMatch(ensurePane, /createDomRenderer|premiumHistoryDom/);
+  assert.match(ensurePane, /renderPremiumStrikeMap\(state\);\s*renderPremiumChartTrials\(state\)/);
+});
+
+test("premium chart trials clear across pane and extension lifecycle", () => {
+  assert.match(contentSource, /function clearPremiumChartTrials\(\)/);
+  assert.match(contentSource, /function closePremiumHistory\(\)[\s\S]*clearPremiumChartTrials\(\)/);
+  assert.match(contentSource, /function stop\(\)[\s\S]*clearPremiumChartTrials\(\)/);
 });
 
 test("premium history uses exact range and stable TradingView time-axis evidence", () => {
@@ -88,6 +125,18 @@ test("premium history uses exact range and stable TradingView time-axis evidence
     ]
   }));
   assert.deepEqual(axis.plotRect, { left: 20, top: 40, right: 900, bottom: 600 });
+
+  const attributes = new Map([["data-options-time-axis", "stable"]]);
+  const documentRef = { documentElement: {
+    setAttribute: (name, value) => attributes.set(name, value),
+    removeAttribute: (name) => attributes.delete(name)
+  } };
+  api.setPremiumTimeSync(documentRef, true);
+  assert.equal(attributes.get("data-options-time-sync"), "on");
+  assert.equal(attributes.get("data-options-time-axis"), "stable");
+  api.setPremiumTimeSync(documentRef, false);
+  assert.equal(attributes.has("data-options-time-sync"), false);
+  assert.equal(attributes.has("data-options-time-axis"), false);
 });
 
 test("strike-number history action does not replace row click or double-click behavior", () => {
@@ -98,6 +147,34 @@ test("strike-number history action does not replace row click or double-click be
   assert.match(source, /attributeFilter:\s*\["aria-label",\s*"data-nifty-axis-ticks",\s*"data-options-time-axis"\]/);
   assert.match(source, /if \(changes\.expiry\) \{\s*closePremiumHistory\(\);/);
   assert.doesNotMatch(source, /debugger;/);
+});
+
+test("premium history selection keeps strike baseline and removes strike-touch dots", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(source, /PREMIUM_STRIKE_MAP_ID\s*=\s*"options-premium-strike-map"/);
+  assert.match(source, /classList\.toggle\("is-history-selected"/);
+  assert.match(source, /context\.lineTo\(width, height \/ 2\)/);
+  assert.doesNotMatch(source, /strikeTouchMarkers\(state\.view\?\.points,\s*selectedStrike,\s*state\.timeAxis\)/);
+  assert.doesNotMatch(source, /context\.fillRect\(Math\.round\(x\) - 3/);
+  assert.match(source, /canvas\.style\.pointerEvents\s*=\s*"none"/);
+  assert.match(source, /renderPremiumStrikeMap\(premiumHistoryPane\?\.state\?\.\(\)\)/);
+  assert.match(css, /\.nifty-axis-ladder__row\.is-history-selected/);
+  assert.match(css, /#options-premium-strike-map/);
+  assert.doesNotMatch(css, /--strike-touch-marker/);
+});
+
+test("premium strike map redraws after placement and clears with pane lifecycle", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /render:\s*\(state\)\s*=>\s*\{[\s\S]*?renderPremiumStrikeMap\(state\);[\s\S]*?renderPremiumChartTrials\(state\);/);
+  assert.match(source, /function closePremiumHistory\(\)\s*\{[\s\S]*?premiumHistoryPane\?\.close\?\.\(\);[\s\S]*?clearPremiumStrikeMap\(\);/);
+  const placement = source.match(/function placeRows\(rows, membership, toY, visualPlacementRevision\)\s*\{[\s\S]*?\n  \}/)?.[0] || "";
+  assert.match(placement, /renderPremiumStrikeMap\(premiumHistoryPane\?\.state\?\.\(\)\)/);
+});
+
+test("timeframe changes invalidate stale premium calibration before reload", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
+  assert.match(source, /function scheduleTimeframeCheck\(\) \{[\s\S]*?premiumHistoryPane\?\.setTimeAxis\?\.\(null\);[\s\S]*?timeframeTimer = setTimeout/);
 });
 
 test("render transaction never exposes an axis row before placement coordinates commit", () => {
@@ -266,6 +343,7 @@ test("coordinated refresh chain snapshot builds thirteen chart rows without fetc
   const rendered = [];
   const controller = api.createLadderController({
     expiry: "2026-08-25",
+    now: () => Date.parse("2026-08-01T03:55:00.000Z"),
     fetchChain: async () => { fetches += 1; throw new Error("second chain request forbidden"); },
     captureAxisScale: async () => scale(),
     renderRows: (rows) => rendered.push(rows),
@@ -2216,13 +2294,28 @@ test("preview actions read as white outlined buttons and combined label keeps wh
   assert.match(combinedRule, /color:\s*var\(--plan-ink\)/);
 });
 
-test("manual action menu keeps prior staged design without warning-colored surround", () => {
+test("chart save confirmation uses existing ARB Desk tokens and explicit destination copy", () => {
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
-  const actions = css.match(/\.nifty-manual-editor__actions\s*\{([^}]+)\}/)?.[1] || "";
-  assert.match(actions, /border:\s*0/);
-  assert.match(actions, /background:\s*transparent/);
-  assert.match(css, /\.nifty-manual-editor__action\[data-direction="BUY"\]\s*\{[^}]*background:\s*var\(--ladder-buy\)/);
-  assert.match(css, /\.nifty-manual-editor__action\[data-direction="SELL"\]\s*\{[^}]*background:\s*var\(--ladder-sell\)/);
+  const chooserRule = css.match(/\.nifty-strategy-preview__save-chooser\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(source, /save\.textContent = "Save"/);
+  assert.match(source, /title\.textContent = "SAVE COMBINED AS"/);
+  assert.match(source, /"CREATE NEW STRATEGY"/);
+  assert.match(source, /`MERGE INTO \$\{destination\.label\}`/);
+  assert.match(chooserRule, /background:\s*var\(--plan-surface\)/);
+  assert.match(chooserRule, /color:\s*var\(--plan-ink\)/);
+  assert.match(chooserRule, /border:\s*1px solid var\(--plan-line\)/);
+  assert.doesNotMatch(chooserRule, /#[0-9a-f]{3,8}\b/i);
+  assert.match(css, /\.nifty-strategy-preview button:focus-visible[\s\S]*?outline:\s*2px solid var\(--plan-ink\)/);
+});
+
+test("manual direct actions stay side by side with white Buy and Sell labels", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const actions = css.match(/\.nifty-manual-editor__direct-actions\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(actions, /display:\s*flex/);
+  assert.match(actions, /gap:\s*2px/);
+  assert.match(css, /\.nifty-manual-editor__action\[data-direction="BUY"\]\s*\{[^}]*background:\s*var\(--ladder-buy\)[^}]*color:\s*#ffffff/);
+  assert.match(css, /\.nifty-manual-editor__action\[data-direction="SELL"\]\s*\{[^}]*background:\s*var\(--ladder-sell\)[^}]*color:\s*#ffffff/);
 });
 
 test("strategy ownership and preview controls keep readable plan contrast in light theme", () => {
@@ -2241,6 +2334,7 @@ function createBreakEvenLifecycleHarness({
   deferManualStorageEvents = false,
   deferAxisCaptures: initiallyDeferAxisCaptures = false,
   deferFetches: initiallyDeferFetches = false,
+  strategyMutationError = null,
   spot = 23767.45,
   strategyBook = null
 } = {}) {
@@ -2475,7 +2569,8 @@ function createBreakEvenLifecycleHarness({
     ...(strategyBook ? {
       OptionsStrategyStore: strategyStore,
       OptionsStrategyPreview: strategyPreviewApi,
-      OptionsStrategyChart: strategyChartApi
+      OptionsStrategyChart: strategyChartApi,
+      OptionsStrategyPanel: require("./strategy-panel.js")
     } : {}),
     NiftyRiskOverlay: require("./risk-overlay.js"),
     NiftySellerViewIdentity: viewIdentity,
@@ -2493,6 +2588,7 @@ function createBreakEvenLifecycleHarness({
           }
           if (message?.type === "MUTATE_STRATEGY_BOOK" && strategyBook) {
             strategyMutationMessages.push(message.command);
+            if (strategyMutationError) return { ok: false, error: strategyMutationError.message };
             storedStrategyBook = strategyStore.applyCommand(storedStrategyBook, message.command);
             dispatchStorage({ strategyBook: { newValue: storedStrategyBook } });
             return { ok: true, strategyBook: storedStrategyBook };
@@ -2716,12 +2812,14 @@ function createBreakEvenLifecycleHarness({
     clickTarget(target) {
       document.getElementById("nifty-axis-ladder")?.dispatch("click", { target });
     },
-    doubleClick(strike = 23750) {
+    doubleClick(strike = 23750, optionType = "CALL") {
       const root = document.getElementById("nifty-axis-ladder");
       const row = this.row(strike);
       assert.ok(row, "exact rendered row is available for double click");
-      root.dispatch("click", { target: row });
-      root.dispatch("dblclick", { target: row });
+      const target = row.querySelectorAll(".nifty-axis-ladder__cell")
+        .find((cell) => cell.dataset.optionType === optionType) || row;
+      root.dispatch("click", { target });
+      root.dispatch("dblclick", { target });
     },
     openEdit(entryId) {
       const entry = this.manualEntries().find((item) => item.id === entryId);
@@ -2734,7 +2832,11 @@ function createBreakEvenLifecycleHarness({
       assert.ok(editor, "manual editor is open");
       let current = Number(editor.querySelector(".nifty-manual-editor__lots")?.textContent);
       while (current !== lots) {
-        editor.children[current < lots ? 4 : 2].dispatch("click", {});
+        const label = current < lots ? "+" : "−";
+        const step = editor.querySelectorAll(".nifty-manual-editor__step")
+          .find((node) => node.textContent === label);
+        assert.ok(step, `manual editor has ${label} lot control`);
+        step.dispatch("click", {});
         editor = [...this.roots].find((node) => node.classList.contains("nifty-manual-editor") && node.parent);
         current = Number(editor.querySelector(".nifty-manual-editor__lots")?.textContent);
       }
@@ -2947,6 +3049,131 @@ test("outside pointer press collapses opened strategy P&L card", async () => {
   assert.equal(rails.querySelectorAll(".nifty-strategy__label").length, 2);
 });
 
+test("expanded strategy details reserve full height before neighboring card placement", async () => {
+  const h = chartStrategyHarness();
+  await h.settle();
+
+  const firstLabel = h.strategyRails().querySelectorAll(".nifty-strategy__label")
+    .find((node) => node.textContent.startsWith("T1 "));
+  firstLabel.dispatch("click", { stopPropagation() {} });
+  await h.settle();
+
+  const cards = h.strategyRails().querySelectorAll(".nifty-strategy__card");
+  const expanded = cards.find((node) => node.textContent.startsWith("T1 "));
+  const neighbor = cards.find((node) => node.textContent.startsWith("T2 "));
+  const expandedTop = Number.parseFloat(expanded.style.top);
+  const neighborTop = Number.parseFloat(neighbor.style.top);
+  assert.ok(
+    neighborTop >= expandedTop + 51 + 6 || expandedTop >= neighborTop + 24 + 6,
+    `expanded and neighboring card rectangles must not overlap; got ${expandedTop} and ${neighborTop}`
+  );
+});
+
+test("combined preview saves permanently from chart after explicit destination choice", async () => {
+  const h = chartStrategyHarness();
+  await h.settle();
+
+  for (const strategyLabel of ["T1", "T2"]) {
+    const selector = h.strategyRails().querySelectorAll(".nifty-strategy__selector")
+      .find((node) => node.getAttribute("aria-label")?.startsWith(`${strategyLabel} `));
+    selector.dispatch("click", { detail: 0, stopPropagation() {} });
+    await h.settle();
+  }
+
+  let rails = h.strategyRails();
+  const save = rails.querySelector(".nifty-strategy-preview__save");
+  assert.ok(save, "chart preview exposes permanent save action");
+  save.dispatch("click", { stopPropagation() {} });
+
+  const chooser = rails.querySelector(".nifty-strategy-preview__save-chooser");
+  assert.ok(chooser, "save asks for explicit destination");
+  assert.deepEqual(chooser.querySelectorAll(".nifty-strategy-preview__save-choice").map((node) => node.textContent), [
+    "CREATE NEW STRATEGY",
+    "MERGE INTO T1",
+    "MERGE INTO T2"
+  ]);
+
+  chooser.querySelectorAll(".nifty-strategy-preview__save-choice")[0]
+    .dispatch("click", { stopPropagation() {} });
+  await h.settle();
+
+  assert.equal(h.strategyMutationMessages().filter((command) => command.type === "MERGE_STRATEGIES").length, 1);
+  rails = h.strategyRails();
+  assert.equal(rails.querySelector(".nifty-strategy-preview"), null);
+  assert.deepEqual(rails.querySelectorAll(".nifty-strategy__label").map((node) => node.textContent), [
+    "T3 BE 23,600", "T3 BE 24,000"
+  ]);
+});
+
+test("combined preview save chooser cancels without mutation or selection loss", async () => {
+  const h = chartStrategyHarness();
+  await h.settle();
+
+  for (const selector of h.strategyRails().querySelectorAll(".nifty-strategy__selector")) {
+    selector.dispatch("click", { detail: 0, stopPropagation() {} });
+    await h.settle();
+  }
+  const rails = h.strategyRails();
+  rails.querySelector(".nifty-strategy-preview__save").dispatch("click", { stopPropagation() {} });
+  rails.querySelector(".nifty-strategy-preview__save-cancel").dispatch("click", { stopPropagation() {} });
+
+  assert.equal(rails.querySelector(".nifty-strategy-preview__save-chooser"), null);
+  assert.ok(rails.querySelector(".nifty-strategy-preview"));
+  assert.equal(rails.querySelectorAll(".nifty-strategy__selector")
+    .filter((node) => node.getAttribute("aria-pressed") === "true").length, 2);
+  assert.equal(h.strategyMutationMessages().filter((command) => command.type === "MERGE_STRATEGIES").length, 0);
+});
+
+test("combined preview save chooser is named, focuses first destination, and Escape returns focus", async () => {
+  const h = chartStrategyHarness();
+  await h.settle();
+
+  for (const selector of h.strategyRails().querySelectorAll(".nifty-strategy__selector")) {
+    selector.dispatch("click", { detail: 0, stopPropagation() {} });
+    await h.settle();
+  }
+  const rails = h.strategyRails();
+  const save = rails.querySelector(".nifty-strategy-preview__save");
+  save.dispatch("click", { stopPropagation() {} });
+
+  const chooser = rails.querySelector(".nifty-strategy-preview__save-chooser");
+  assert.equal(chooser.getAttribute("role"), "dialog");
+  assert.equal(chooser.getAttribute("aria-label"), "Save combined strategy");
+  assert.equal(h.document.activeElement?.textContent, "CREATE NEW STRATEGY");
+
+  chooser.dispatch("keydown", { key: "Escape", stopPropagation() {}, preventDefault() {} });
+  assert.equal(rails.querySelector(".nifty-strategy-preview__save-chooser"), null);
+  assert.equal(h.document.activeElement, save);
+  assert.ok(rails.querySelector(".nifty-strategy-preview"), "Escape must keep temporary preview");
+  assert.equal(h.strategyMutationMessages().filter((command) => command.type === "MERGE_STRATEGIES").length, 0);
+});
+
+test("failed permanent save keeps combined preview and restores destination actions", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: Object.values(chartStrategyBook().legs),
+    strategyBook: chartStrategyBook(),
+    strategyMutationError: new Error("Storage unavailable")
+  });
+  await h.settle();
+
+  for (const selector of h.strategyRails().querySelectorAll(".nifty-strategy__selector")) {
+    selector.dispatch("click", { detail: 0, stopPropagation() {} });
+    await h.settle();
+  }
+  const rails = h.strategyRails();
+  rails.querySelector(".nifty-strategy-preview__save").dispatch("click", { stopPropagation() {} });
+  rails.querySelectorAll(".nifty-strategy-preview__save-choice")[0]
+    .dispatch("click", { stopPropagation() {} });
+  await h.settle();
+
+  assert.match(rails.querySelector(".nifty-strategy-preview__summary").textContent, /SAVE FAILED · Storage unavailable/);
+  assert.ok(rails.querySelector(".nifty-strategy-preview"));
+  assert.equal(rails.querySelectorAll(".nifty-strategy-preview__save-choice")
+    .every((node) => node.disabled === false), true);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__selector")
+    .filter((node) => node.getAttribute("aria-pressed") === "true").length, 2);
+});
+
 test("previously archived strategy legs stay in ledger but leave badges and plan rails", async () => {
   const entry = savedManualEntry();
   const plans = manualPlan.upsertEntry(manualPlan.emptyStore(), entry);
@@ -3063,8 +3290,7 @@ test("new leg waits for explicit chart strategy ownership before any write", asy
   await h.settle();
   h.doubleClick(23750);
   let editor = h.editor(23750);
-  editor.children[0].dispatch("click", {});
-  editor.children.at(-1).children[1].dispatch("click", {});
+  editor.children[0].children[1].dispatch("click", {});
   editor = h.editor(23750);
   commitManualEditor(h, 23750);
 
@@ -3099,13 +3325,12 @@ test("production ladder shows visible strikes while clipped siblings stay hidden
 
 function chooseCallSellEditor(h, strike = 23750) {
   let editor = h.editor(strike);
-  editor.children[0].dispatch("click", {});
-  editor.children.at(-1).children[1].dispatch("click", {});
+  editor.children[0].children[1].dispatch("click", {});
   editor = h.editor(strike);
-  editor.children[4].dispatch("click", {});
+  editor.children[3].dispatch("click", {});
   editor = h.editor(strike);
-  editor.children[5].value = "358";
-  editor.children[5].dispatch("input", {});
+  editor.children[4].value = "358";
+  editor.children[4].dispatch("input", {});
 }
 
 function savedManualEntry(overrides = {}) {
@@ -3305,13 +3530,12 @@ test("new editor disables Add until selected leg and premium are valid", async (
   h.doubleClick(23750);
   let editor = h.editor(23750);
   assert.equal(editor.querySelector(".nifty-manual-editor__commit").disabled, true);
-  assert.equal(editor.querySelector(".nifty-manual-editor__validation").textContent, "CHOOSE LEG");
+  assert.equal(editor.querySelector(".nifty-manual-editor__validation").textContent, "CHOOSE BUY / SELL");
 
-  editor.children[0].dispatch("click", {});
-  editor.children.at(-1).children[0].dispatch("click", {});
+  editor.children[0].children[0].dispatch("click", {});
   editor = h.editor(23750);
-  assert.equal(editor.children[0].getAttribute("aria-pressed"), "true");
-  assert.equal(editor.children[0].textContent, "BUY CALL ▾");
+  assert.equal(editor.children[0].children[0].getAttribute("aria-pressed"), "true");
+  assert.equal(editor.children[0].children[0].textContent, "BUY CALL");
   assert.equal(editor.querySelector(".nifty-manual-editor__commit").disabled, true);
   assert.equal(editor.querySelector(".nifty-manual-editor__validation").textContent, "ENTER PREMIUM");
 
@@ -3815,6 +4039,24 @@ test("double click opens editor without quick rails or face flash", async () => 
   assert.equal(h.row(23750).classList.contains("is-manual-entry"), false);
 });
 
+test("double-clicked premium side controls the two direct editor actions", async () => {
+  const h = createBreakEvenLifecycleHarness();
+  await h.settle();
+
+  h.doubleClick(23750, "CALL");
+  assert.deepEqual(
+    h.editor(23750).querySelectorAll(".nifty-manual-editor__action").map((button) => button.textContent),
+    ["BUY CALL", "SELL CALL"]
+  );
+  h.editor(23750).querySelector(".nifty-manual-editor__close").dispatch("click", {});
+
+  h.doubleClick(23750, "PUT");
+  assert.deepEqual(
+    h.editor(23750).querySelectorAll(".nifty-manual-editor__action").map((button) => button.textContent),
+    ["BUY PUT", "SELL PUT"]
+  );
+});
+
 test("Shift+Enter opens exact-row editor and Escape cancels it with row focus restored", async () => {
   const h = createBreakEvenLifecycleHarness();
   await h.settle();
@@ -3928,7 +4170,7 @@ test("editor add persists only exact row and restores focus without fetching", a
 
   h.doubleClick(23750);
   chooseCallSellEditor(h);
-  h.editor(23750).children[6].dispatch("click", {});
+  h.editor(23750).querySelector(".nifty-manual-editor__commit").dispatch("click", {});
   await h.settle();
 
   assert.deepEqual(h.manualEntries().map((entry) => ({
@@ -3947,7 +4189,7 @@ test("storage failure keeps exact editor draft open and old plan intact", async 
 
   h.doubleClick(23750);
   chooseCallSellEditor(h);
-  h.editor(23750).children[6].dispatch("click", {});
+  commitManualEditor(h, 23750);
   await h.settle();
 
   assert.ok(h.editor(23750));
@@ -4118,7 +4360,7 @@ test("serialized overlapping save and remove preserve both explicit mutations", 
 
   h.click(23750);
   h.doubleClick(23750);
-  h.editor(23750).children[4].dispatch("click", {});
+  h.setEditorLots(2);
   commitManualEditor(h, 23750);
   await h.settle();
 
@@ -4289,7 +4531,7 @@ test("manual edit preserves identity and created timestamp while focusing its ex
 
   h.click(23750);
   h.doubleClick(23750);
-  h.editor(23750).children[4].dispatch("click", {});
+  h.setEditorLots(2);
   commitManualEditor(h, 23750);
   await h.settle();
 
@@ -4334,7 +4576,7 @@ test("storage failure preserves a non-empty store and the editor draft", async (
 
   h.click(23750);
   h.doubleClick(23750);
-  h.editor(23750).children[4].dispatch("click", {});
+  h.setEditorLots(2);
   commitManualEditor(h, 23750);
   await h.settle();
 

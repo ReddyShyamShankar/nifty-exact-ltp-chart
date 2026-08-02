@@ -1,7 +1,89 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
 const api = require("./time-axis-observer.js");
+
+function mainWorldHarness() {
+  const attributes = new Map();
+  const frames = [];
+  const timers = [];
+  let syncMutation = null;
+  function CanvasRenderingContext2D() {}
+  CanvasRenderingContext2D.prototype.fillText = function () {};
+  const chart = {
+    getAttribute: () => "Chart for NSE_DLY:NIFTY, 4 hours",
+    getBoundingClientRect: () => ({ left: 50, top: 40, right: 900, bottom: 600, width: 850, height: 560 })
+  };
+  const axisCanvas = {
+    width: 850,
+    height: 30,
+    getBoundingClientRect: () => ({ left: 50, top: 600, right: 900, bottom: 630, width: 850, height: 30 })
+  };
+  const documentElement = {
+    getAttribute: (name) => attributes.get(name) || null,
+    setAttribute: (name, value) => attributes.set(name, String(value))
+  };
+  const sandbox = {
+    CanvasRenderingContext2D,
+    document: { documentElement, querySelectorAll: () => [chart] },
+    MutationObserver: class {
+      constructor(callback) { syncMutation = callback; }
+      observe() {}
+    },
+    requestAnimationFrame(callback) { frames.push(callback); },
+    setTimeout(callback) { timers.push(callback); return timers.length; },
+    clearTimeout() {},
+    Date,
+    Map,
+    WeakMap,
+    JSON,
+    Math,
+    Number,
+    String
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "time-axis-observer.js"), "utf8"), sandbox);
+  const context = {
+    canvas: axisCanvas,
+    getTransform: () => ({ a: 1, c: 0, e: 0 })
+  };
+  return {
+    attributes,
+    context,
+    fillText: CanvasRenderingContext2D.prototype.fillText,
+    flushFrames() { while (frames.length) frames.shift()(); },
+    flushTimers() { while (timers.length) timers.shift()(); },
+    enable() {
+      documentElement.setAttribute("data-options-time-sync", "on");
+      syncMutation?.([]);
+    }
+  };
+}
+
+test("TradingView time observer runs only during explicit premium synchronization", () => {
+  assert.equal(api.timeSyncEnabled("on"), true);
+  assert.equal(api.timeSyncEnabled("off"), false);
+  assert.equal(api.timeSyncEnabled(null), false);
+});
+
+test("enabling sync publishes the last stable axis even when TradingView does not repaint", () => {
+  const harness = mainWorldHarness();
+  harness.fillText.call(harness.context, "Jul 30", 100, 10);
+  harness.fillText.call(harness.context, "Jul 31", 300, 10);
+  harness.flushFrames();
+  harness.flushTimers();
+
+  assert.equal(harness.attributes.has("data-options-time-axis"), false,
+    "inactive observation remains private");
+  harness.enable();
+
+  const published = JSON.parse(harness.attributes.get("data-options-time-axis") || "null");
+  assert.equal(published?.stableCount >= 2, true);
+  assert.deepEqual(Array.from(published.pairs, (pair) => Math.round(pair.x)), [150, 350]);
+});
 
 test("parses exact date month-day and intraday labels against anchor", () => {
   const anchor = Date.parse("2026-08-01T00:00:00.000Z");

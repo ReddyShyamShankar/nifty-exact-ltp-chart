@@ -18,7 +18,7 @@ Version 0.6.0 is a chart-first options planning candidate for TradingView. NIFTY
 - Selecting two or more compatible strategies shows combined break-even rails. Original rails hide by default; **Compare** restores originals beside combined rails.
 - Temporary preview never changes ownership or history. Refresh, reload, expiry/instrument change, or **Cancel** clears preview only.
 - Off-screen roots remain available as exact `↑` or `↓` edge markers. Close cards stack for readability while connector returns to exact financial rail.
-- Permanent **Save preview** in side panel always asks whether to create new strategy or merge into chosen existing strategy. Successful merge archives source strategies instead of deleting them.
+- Permanent **Save** on chart asks whether to create new strategy or merge into chosen existing strategy. Side panel exposes same versioned operation. Successful merge archives source strategies instead of deleting them.
 - Side panel supports explicit leg split, manual archive, immutable version history, and restore. Restore creates new current version; old history never changes.
 - Expired strategies move automatically into **Ledger History**. Last active strategy reopens for same instrument and exact expiry.
 - Known charges affect P&L and break-evens. Missing charges show `EXCLUDING UNKNOWN CHARGES`; stale or missing quotes suppress combined economics until manual refresh.
@@ -31,9 +31,13 @@ Add, edit, remove, merge, split, archive, and restore each send one atomic mutat
 
 ## Premium history trial
 
-Click only the rightmost strike number, such as `24,400`, to open exact-expiry Call and Put premium history. Clicking rest of row keeps quick break-even behavior; double-clicking rest of row keeps manual editor behavior. Pane starts in **LINES** and temporarily includes **SPLIT** and **FOCUS** so one can be selected after live use. Mode changes, hover, pan, and zoom reuse cached history and make no request. TradingView timeframe change requests matching interval only when absent from cache.
+Click only the rightmost strike number, such as `24,400`, to open exact-expiry Call and Put premium history directly on TradingView. Clicking rest of row keeps quick break-even behavior; double-clicking rest of row keeps manual editor behavior. History load remains one explicit user action. Crosshair movement, pan, and zoom reuse cached history and make no request. TradingView timeframe change requests matching interval only when absent from cache.
 
-Pane clips full available contract history to stable TradingView time-axis dates and shows underlying close, signed strike distance, DTE, Call, Put, Call + Put, separate repeated trade markers, and clearly labelled **ESTIMATED IV** assumptions. Missing candles remain gaps. Unsafe time-axis evidence hides chart instead of guessing. Expiry/instrument change, navigation, close, or disable clears transient pane selection. Current NIFTY connector reads Upstox history; provider-specific minute/hour limits are chunked inside one explicit load with no automatic retry.
+Stable TradingView time-axis evidence is master: Skyline uses same visible dates, same horizontal plot bounds, and same pointer x-coordinate. Crosshair snaps to exact joined candle slot and reads premium only from that identical timestamp. Underlying candle without option candle reports **NO PREMIUM CANDLE**. Empty chart space never receives invented clock time or borrowed distant premium. Observer stays disabled while history is closed. Expiry/instrument change, navigation, close, or disable clears transient selection. Current NIFTY connector reads Upstox history; provider-specific minute/hour limits are chunked inside one explicit load with no automatic retry.
+
+Selected history strike remains visually distinct in ladder. Passive horizontal guide extends left from exact strike coordinate without candle-touch dots. Timeframe, zoom, and pan redraw guide from cached evidence without fetching history or changing TradingView. Closing history or changing instrument/expiry removes row highlight, guide, and Skyline. Crosshair shows one green Call value chip and one orange Put value chip—never duplicate side labels.
+
+**PREMIUM SKYLINE** is sole production premium-history projection. Selected strike is baseline. Call close premium draws as solid history above baseline; Put close premium draws as dashed history below. At strike `24,200`, Call premium `200` maps to chart coordinate `24,400`; Put premium `100` maps to `24,100`. This mapping communicates premium magnitude in points; it does not predict underlying price. Missing premium candles split line into real gaps. Shared crosshair shows exact timestamp, Call, Put, and strike. One reusable passive canvas keeps TradingView interaction ownership and bounds zoomed-out work by screen pixels. No lower history box, mode selector, broker write, storage write, or order action is added.
 
 ## Ladder and quick break-evens
 

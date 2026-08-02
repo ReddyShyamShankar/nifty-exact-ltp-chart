@@ -1,5 +1,7 @@
 # Decision Log
 
+> **Universal product rule:** Build from instrument metadata, selected expiry, available option contracts, and TradingView axis evidence so same foundation can support any optionable pair, instrument, or index worldwide. NIFTY is current validation market, not core product rule.
+
 ## D001 — Chart-first interface
 
 Status: accepted.
@@ -40,11 +42,11 @@ Use a small manually configured set of option symbols if needed to validate visu
 
 Reason: lowest-risk way to test chart design before solving full chain discovery.
 
-## D006 — NIFTY monthly first release
+## D006 — NIFTY monthly validation adapter
 
 Status: accepted.
 
-First release supports NIFTY monthly options only. US-market and weekly-expiry support come later.
+Current connected validation uses NIFTY monthly options. Core strategy, chart, and membership logic remains instrument-independent so later adapters supply their own identity, expiry, contract-step, currency, and lot-size evidence.
 
 ## D007 — Last traded price first
 
@@ -52,11 +54,11 @@ Status: accepted.
 
 First release uses last traded price. Bid/ask and midpoint modes can come later.
 
-## D008 — Five-strike default with user-controlled expansion
+## D008 — TradingView-axis-driven strike membership
 
 Status: accepted.
 
-Default ladder shows five total strikes. User can select more through a compact control, while anti-clutter rules protect chart readability.
+Ladder intersects real option-contract strikes with numerical price labels visible on TradingView right axis. It has no fixed strike count and no timeframe-to-interval mapping. Zoom changes visible membership through changed axis evidence.
 
 ## D009 — Alerts required, information-only
 
@@ -72,22 +74,48 @@ The first Pine prototype accepts manually entered call/put symbols for each ladd
 
 Reason: validate chart readability and label behavior before depending on exchange-specific automatic symbol construction.
 
-## D011 — Minimal right-edge LTP ladder
+## D011 — Minimal exact-axis right-edge LTP ladder
 
 Status: implemented.
 
-Prototype shows five NIFTY strikes, 50 points apart, with `C LTP | P LTP` in one right-edge label. Center strike is orange. Historical strike lines and extra panels are removed.
+Ladder shows every axis-aligned real contract in one right-edge column using `C LTP | P LTP | STRIKE`. Nearest available real ATM contract uses theme-specific highlight styling. Historical strike lines and extra panels remain removed.
 
-Reason: match user’s option-chain mental model without covering candles.
+Reason: match TradingView price-axis behavior and user’s option-chain mental model without covering candles or controlling chart zoom.
 
 ## D012 — Manual contract selection rejected
 
 Status: accepted.
 
-Any workflow requiring user to select option contracts or update monthly-expiry symbols is rejected. Final product must discover current monthly NIFTY strikes and prices automatically.
+Any workflow requiring user to maintain option symbols manually is rejected. Connected market adapter must discover contracts and prices for selected instrument and exact expiry.
 
 ## D013 — Test visible TradingView Chain overlay
 
 Status: in progress.
 
-Build a browser-extension probe that reads only visible Options Chain text and confirms whether it can see LTP and strikes. This is a feasibility test before committing to extension architecture.
+Use NIFTY visible-chain evidence to validate browser-extension data access, LTP capture, contract discovery, and exact-axis placement. Validation market must not leak NIFTY-specific rules into core membership or strategy logic.
+
+## D014 — Premium history owns its date/time scale
+
+Status: accepted and implemented.
+
+Premium-history pane maps timestamps containing real Call or Put premiums onto its own labelled axis. Underlying-only dates cannot widen that axis. TradingView timeframe selects candle interval, but TradingView canvas paint never gates or positions premium history.
+
+Reason: live Chrome testing proved TradingView time-axis canvas interception can be absent after reload and stale after timeframe changes. Independent scale removes freeze risk, stale-coordinate risk, and `TIME AXIS UNAVAILABLE` dead state.
+
+## D015 — TradingView crosshair is master; independent premium axis is fallback
+
+Status: accepted and implemented.
+
+While premium history is open, stable TradingView time-axis evidence controls pane's visible dates, horizontal plot bounds, and mirrored crosshair position. Exact nearby premium candle is shown for that timestamp; missing candle reports `GAP` instead of borrowing another value. If TradingView evidence is absent or unstable, D014 independent contract-life axis remains available and never freezes pane.
+
+Reason: user's decision task requires candle and premium evidence at one shared point in time, while prior live testing proved synchronization cannot be allowed to become a loading dependency. On-demand observation provides synchronization without restoring debugger access, Auto-fit control, synthetic interaction, or page-wide idle overhead.
+
+Supersedes D014 only as preferred active view; preserves D014 as reliability fallback.
+
+## D016 — Premium history uses Lines only
+
+Status: accepted and implemented.
+
+Remove Split and Focus renderers. Keep Lines with both Call and Put histories visible. CALL and PUT controls select solid-line emphasis while other side stays dashed.
+
+Reason: live visual trial approved Lines and rejected other two modes. One renderer removes unnecessary controls, code, and testing surface without removing Call/Put comparison.

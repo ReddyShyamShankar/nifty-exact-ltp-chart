@@ -217,6 +217,7 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
   let extraChainRequests = 0;
   const controller = content.createLadderController({
     expiry: EXPIRY,
+    now: () => Date.parse(ACCEPTED_AT),
     chainSnapshot: runtime.storage.sellerSafetyChain,
     riskView: runtime.storage.sellerSafetyChartView,
     fetchChain: async () => { extraChainRequests += 1; throw new Error("unexpected chain request"); },

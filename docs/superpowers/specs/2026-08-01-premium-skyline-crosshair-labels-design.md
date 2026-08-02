@@ -22,6 +22,7 @@ Meaning comes from label position. Call belongs above selected-strike baseline. 
 - Place compact date/time chip at top of crosshair.
 - Place `CALL <premium> ↑` chip immediately above matching Call Skyline point.
 - Place `PUT <premium> ↓` chip immediately below matching Put Skyline point.
+- Keep exactly one chip per option side. Do not add a separate `CALL` or `PUT` badge/button.
 - Place selected strike chip at crosshair and strike-baseline intersection.
 - Keep exact-expiry identity in Skyline's persistent top-left label; do not repeat expiry inside every moving chip.
 - Keep Call solid, Put dashed, and selected-strike baseline unchanged.
@@ -49,10 +50,17 @@ Meaning comes from label position. Call belongs above selected-strike baseline. 
 ## Visual tokens
 
 - Use existing ARB Desk tokens only.
-- Light mode: neutral dark Call/Put chips, light timestamp chip, existing brown warning token for strike chip.
-- Dark mode: neutral light-on-dark Call/Put chips, dark timestamp chip, existing orange warning token for strike chip.
+- Call value chip uses existing ARB Desk green accent token.
+- Put value chip uses existing ARB Desk orange warning token.
+- Light mode uses white chip text; dark mode uses contrast ink for readable contrast.
+- Timestamp remains theme-neutral; strike chip keeps existing warning treatment.
 - Geist Mono remains sole typeface.
 - No new color literal, gradient, shadow, radius family, or profit/loss semantic color.
+
+## Selected-strike guide refinement
+
+- Keep selected ladder-row highlight and horizontal selected-strike guide.
+- Remove square candle-touch dots from guide. They add noise without helping premium comparison.
 
 ## Interaction and performance
 

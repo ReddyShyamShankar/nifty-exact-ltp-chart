@@ -52,11 +52,12 @@
     return Number.isFinite(Date.parse(value));
   }
 
-  function createDraft({ expiry, row, entry } = {}) {
+  function createDraft({ expiry, row, entry, optionType: requestedOptionType } = {}) {
     const liveCall = snapshot(row?.call);
     const livePut = snapshot(row?.put);
     const editing = Boolean(entry && typeof entry === "object");
     const optionType = OPTION_TYPES.includes(entry?.optionType) ? entry.optionType : null;
+    const actionOptionType = optionType || (OPTION_TYPES.includes(requestedOptionType) ? requestedOptionType : "CALL");
     const callSnapshot = editing ? snapshot(entry?.callSnapshot) : liveCall;
     const putSnapshot = editing ? snapshot(entry?.putSnapshot) : livePut;
     const premium = snapshot(entry?.premium) ?? (optionType === "CALL" ? callSnapshot : optionType === "PUT" ? putSnapshot : null);
@@ -68,6 +69,7 @@
       liveCall,
       livePut,
       optionType,
+      actionOptionType,
       direction: DIRECTIONS.includes(entry?.direction) ? entry.direction : null,
       lots: number(entry?.lots) ?? 1,
       premium,
@@ -89,6 +91,7 @@
         putSnapshot: draft.livePut
       } : {}),
       optionType,
+      actionOptionType: optionType,
       direction,
       premium: quote,
       ...(optionType === "CALL" ? { callSnapshot: quote } : optionType === "PUT" ? { putSnapshot: quote } : {})
@@ -195,15 +198,19 @@
   function editorModel(draft) {
     const validation = validateDraft(draft);
     const validationLabel = validation.errors.some((error) => ["optionType", "direction"].includes(error))
-      ? "CHOOSE LEG"
+      ? "CHOOSE BUY / SELL"
       : validation.errors.includes("lots")
         ? "LOTS ≥ 1"
         : validation.errors.some((error) => ["premium", "callSnapshot", "putSnapshot"].includes(error))
           ? "ENTER PREMIUM"
           : validation.ok ? "" : "ENTRY INVALID";
     return {
-      typeButtons: ["CALL", "PUT"],
-      actions: ["BUY", "SELL"],
+      actionOptions: DIRECTIONS.map((direction) => ({
+        optionType: OPTION_TYPES.includes(draft?.actionOptionType)
+          ? draft.actionOptionType
+          : OPTION_TYPES.includes(draft?.optionType) ? draft.optionType : "CALL",
+        direction
+      })),
       lots: draft?.lots ?? 1,
       premium: money(draft?.premium),
       commitLabel: draft?.id ? "SAVE" : "ADD",
@@ -230,6 +237,7 @@
         cell.classList.add("nifty-axis-ladder__strike-face");
         cell.setAttribute("aria-label", `Open ${value} premium history`);
       }
+      if (!strikeFace && index < 2) cell.dataset.optionType = OPTION_TYPES[index];
       if (index === model.tradedCellIndex) cell.classList.add("is-traded");
       cell.textContent = value;
       return cell;
@@ -264,16 +272,11 @@
   function updateEditorState(editor, draft, { preservePremiumInput = false } = {}) {
     if (!editor) return editor;
     const model = editorModel(draft);
-    const menuButtons = editor.querySelectorAll?.(".nifty-manual-editor__menu") || [];
-    Array.from(menuButtons).forEach((button) => {
-      const optionType = button.dataset.optionType;
-      const selected = optionType === model.selectedOptionType;
-      button.textContent = selected ? `${model.selectedDirection} ${optionType} ▾` : `${optionType} ▾`;
-      button.classList.toggle("is-selected", selected);
-      button.setAttribute("aria-pressed", String(selected));
-      button.setAttribute("aria-label", selected
-        ? `Selected ${word(model.selectedDirection)} ${word(optionType)}`
-        : `Choose ${word(optionType)} action`);
+    editor.querySelectorAll?.(".nifty-manual-editor__action").forEach((action) => {
+      const selected = action.dataset.optionType === model.selectedOptionType
+        && action.dataset.direction === model.selectedDirection;
+      action.classList.toggle("is-selected", selected);
+      action.setAttribute("aria-pressed", String(selected));
     });
     const lots = editor.querySelector?.(".nifty-manual-editor__lots");
     if (lots) lots.textContent = String(model.lots);
@@ -295,7 +298,6 @@
     editor.className = "nifty-manual-editor";
     editor.setAttribute("role", "group");
     editor.setAttribute("aria-label", `Manual entry editor for strike ${strikeLabel(draft?.strike)}`);
-    let menu = null;
 
     function button(label, className, onClick) {
       const element = document.createElement("button");
@@ -306,47 +308,21 @@
       return element;
     }
 
-    function clearMenu() {
-      if (!menu) return;
-      if (typeof menu.remove === "function") menu.remove();
-      else editor.replaceChildren(...editor.children.filter((child) => child !== menu));
-      menu = null;
-    }
-
-    function toggleMenu(optionType) {
-      if (menu?.dataset.optionType === optionType) return clearMenu();
-      clearMenu();
-      menu = document.createElement("div");
-      menu.className = "nifty-manual-editor__actions";
-      menu.dataset.optionType = optionType;
-      model.actions.forEach((direction) => {
-        const action = button(direction, "nifty-manual-editor__action", () => {
-          invoke(handlers, ["chooseAction", "onChooseAction", "action"], optionType, direction);
-          clearMenu();
-        });
-        const selected = optionType === model.selectedOptionType && direction === model.selectedDirection;
-        action.dataset.direction = direction;
-        action.classList.toggle("is-selected", selected);
-        action.setAttribute("aria-pressed", String(selected));
-        menu.append(action);
+    const actions = document.createElement("div");
+    actions.className = "nifty-manual-editor__direct-actions";
+    actions.setAttribute("role", "group");
+    actions.setAttribute("aria-label", `${word(model.actionOptions[0].optionType)} direction`);
+    model.actionOptions.forEach(({ optionType, direction }) => {
+      const action = button(`${direction} ${optionType}`, "nifty-manual-editor__action", () => {
+        invoke(handlers, ["chooseAction", "onChooseAction", "action"], optionType, direction);
       });
-      editor.append(menu);
-    }
-
-    const typeButton = (optionType) => {
-      const selected = optionType === model.selectedOptionType;
-      const label = selected ? `${model.selectedDirection} ${optionType} ▾` : `${optionType} ▾`;
-      const control = button(label, "nifty-manual-editor__menu", () => toggleMenu(optionType));
-      control.dataset.optionType = optionType;
-      control.classList.toggle("is-selected", selected);
-      control.setAttribute("aria-pressed", String(selected));
-      control.setAttribute("aria-label", selected
-        ? `Selected ${word(model.selectedDirection)} ${word(optionType)}`
-        : `Choose ${word(optionType)} action`);
-      return control;
-    };
-    const call = typeButton("CALL");
-    const put = typeButton("PUT");
+      const selected = optionType === model.selectedOptionType && direction === model.selectedDirection;
+      action.dataset.optionType = optionType;
+      action.dataset.direction = direction;
+      action.classList.toggle("is-selected", selected);
+      action.setAttribute("aria-pressed", String(selected));
+      actions.append(action);
+    });
     const decrement = button("−", "nifty-manual-editor__step", () => invoke(handlers, ["setLots", "onSetLots", "lots"], Math.max(1, (number(draft?.lots) || 1) - 1)));
     const lots = document.createElement("span");
     lots.className = "nifty-manual-editor__lots";
@@ -367,7 +343,7 @@
     ));
     const commit = button(model.commitLabel, "nifty-manual-editor__commit", () => invoke(handlers, ["save", "onSave", "commit"]));
     commit.disabled = !model.canCommit;
-    const controls = [call, put, decrement, lots, increment, premium, commit];
+    const controls = [actions, decrement, lots, increment, premium, commit];
     if (model.canRemove) controls.push(button("REMOVE", "nifty-manual-editor__remove", () => invoke(handlers, ["remove", "onRemove"])));
     const close = button("×", "nifty-manual-editor__close", () => invoke(handlers, ["close", "onClose"]));
     close.setAttribute("aria-label", "Close editor");

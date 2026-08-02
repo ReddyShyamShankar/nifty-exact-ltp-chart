@@ -33,7 +33,7 @@ test("extension card and toolbar preserve original Options Ladder logo", () => {
 
 test("manual strategy and premium-history modules load before content in dependency order", () => {
   const scripts = manifest.content_scripts.find((entry) => entry.js.includes("content.js")).js;
-  assert.deepEqual(scripts.slice(-12), [
+  assert.deepEqual(scripts.slice(-13), [
     "manual-plan.js",
     "manual-payoff.js",
     "manual-interaction.js",
@@ -44,9 +44,15 @@ test("manual strategy and premium-history modules load before content in depende
     "strategy-panel.js",
     "estimated-iv.js",
     "premium-history-model.js",
+    "premium-chart-trials.js",
     "premium-history-pane.js",
     "content.js"
   ]);
+});
+
+test("synchronized premium axis loads on-demand TradingView time observer", () => {
+  const mainWorld = manifest.content_scripts.find((entry) => entry.world === "MAIN");
+  assert.deepEqual(mainWorld.js, ["axis-observer.js", "time-axis-observer.js"]);
 });
 
 test("manual plan mutations are owned by the manifest service worker", () => {
