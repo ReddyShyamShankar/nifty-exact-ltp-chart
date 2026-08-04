@@ -155,28 +155,58 @@
   }
 
   function lotBadges(entries) {
-    return OPTION_TYPES.map((optionType) => {
-      const matching = entries
-        .filter((entry) => entry?.optionType === optionType && Number.isInteger(entry?.lots) && entry.lots > 0);
-      const lots = matching
-        .reduce((sum, entry) => sum + entry.lots, 0);
-      return lots ? {
-        optionType,
-        label: `${optionType[0]}${lots}`,
-        entryId: matching.length === 1 ? matching[0].id : null
-      } : null;
-    }).filter(Boolean);
+    return OPTION_TYPES.flatMap((optionType) => ["BUY", "SELL"].flatMap((direction) => {
+      const directional = entries.filter((entry) => entry?.optionType === optionType
+        && entry?.direction === direction
+        && Number.isInteger(entry?.lots)
+        && entry.lots > 0);
+      const sources = [...new Set(directional.map((entry) =>
+        entry?.source === "BROKER_POSITION" ? "BROKER_POSITION" : "MANUAL"))];
+      return sources.map((source) => {
+        const matching = directional.filter((entry) =>
+          (entry?.source === "BROKER_POSITION" ? "BROKER_POSITION" : "MANUAL") === source);
+        const lots = matching.reduce((sum, entry) => sum + entry.lots, 0);
+        return {
+          optionType,
+          direction,
+          source,
+          label: `${optionType[0]}${lots}`,
+          entryId: source === "MANUAL" && matching.length === 1 ? matching[0].id : null
+        };
+      });
+    }));
+  }
+
+  function compactOpenInterest(value) {
+    const numeric = number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return "—";
+    if (numeric >= 10000000) return `${(numeric / 10000000).toFixed(numeric >= 100000000 ? 0 : 1).replace(/\.0$/, "")}Cr`;
+    if (numeric >= 100000) return `${(numeric / 100000).toFixed(numeric >= 1000000 ? 1 : 2).replace(/\.0+$/, "")}L`;
+    if (numeric >= 1000) return `${(numeric / 1000).toFixed(numeric >= 10000 ? 1 : 2).replace(/\.0+$/, "")}K`;
+    return String(Math.round(numeric));
+  }
+
+  function openInterestBadges(row) {
+    return OPTION_TYPES.flatMap((optionType) => {
+      const prefix = optionType === "CALL" ? "call" : "put";
+      const rank = Number(row?.[`${prefix}OiRank`]);
+      const oi = number(row?.[`${prefix}Oi`]);
+      if (![1, 2].includes(rank) || !Number.isFinite(oi) || oi <= 0) return [];
+      return [{ optionType, label: `${optionType[0]} #${rank} · ${compactOpenInterest(oi)}` }];
+    });
   }
 
   function rowModel({ liveRow, isAtm, entries = [], activeEntryId = null } = {}) {
     const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.strike === liveRow?.strike);
-    const badges = lotBadges(list);
+    const badges = lotBadges(list.filter((entry) => entry?.source !== "BROKER_POSITION"));
+    const oiBadges = openInterestBadges(liveRow);
     const active = list.find((entry) => entry.id === activeEntryId) || null;
     if (!active) return {
       columns: [`C ${money(liveRow?.call)}`, `P ${money(liveRow?.put)}`, strikeLabel(liveRow?.strike)],
       className: isAtm ? "is-atm" : "",
       count: list.length,
       badges,
+      oiBadges,
       tradedCellIndex: null,
       accessibleName: `Call ${money(liveRow?.call)}, Put ${money(liveRow?.put)}, strike ${strikeLabel(liveRow?.strike)}, ${savedCountLabel(list.length)}`,
       visibleFaceCount: 1
@@ -189,6 +219,7 @@
       className: `is-manual-entry is-${String(active.direction || "").toLowerCase()}`,
       count: list.length,
       badges,
+      oiBadges,
       tradedCellIndex: active.optionType === "CALL" ? 0 : active.optionType === "PUT" ? 1 : null,
       accessibleName: `${word(active.direction)} ${word(active.optionType)}, ${active.lots} ${active.lots === 1 ? "lot" : "lots"}, Call snapshot ${money(active.callSnapshot)}, Put snapshot ${money(active.putSnapshot)}, strike ${strikeLabel(active.strike ?? liveRow?.strike)}, saved entry ${activeIndex + 1} of ${list.length}`,
       visibleFaceCount: 1
@@ -226,7 +257,7 @@
 
   function renderRow(document, element, view) {
     const model = rowModel(view);
-    element.classList.remove("is-atm", "is-manual-entry", "is-buy", "is-sell");
+    element.classList.remove("is-atm", "is-manual-entry", "is-buy", "is-sell", "has-lot-badges");
     model.className.split(/\s+/).filter(Boolean).forEach((name) => element.classList.add(name));
     const cells = model.columns.map((value, index) => {
       const strikeFace = index === model.columns.length - 1;
@@ -243,21 +274,40 @@
       return cell;
     });
     if (model.badges.length) {
+      element.classList.add("has-lot-badges");
       const badges = document.createElement("span");
       badges.className = "nifty-axis-ladder__badges";
       model.badges.forEach((modelBadge) => {
         const badge = document.createElement("button");
         badge.type = "button";
-        badge.className = "nifty-axis-ladder__badge";
+        badge.className = `nifty-axis-ladder__badge is-${modelBadge.direction.toLowerCase()}`;
         badge.dataset.optionType = modelBadge.optionType;
+        badge.dataset.direction = modelBadge.direction;
+        badge.dataset.source = modelBadge.source;
         if (modelBadge.entryId) badge.dataset.entryId = modelBadge.entryId;
         badge.textContent = modelBadge.label;
         badge.setAttribute("aria-label", modelBadge.entryId
-          ? `Edit saved ${word(modelBadge.optionType)} position`
-          : `Saved ${word(modelBadge.optionType)} positions`);
+          ? `Edit saved ${word(modelBadge.direction)} ${word(modelBadge.optionType)} position`
+          : `${modelBadge.source === "BROKER_POSITION" ? "Broker" : "Saved"} ${word(modelBadge.direction)} ${word(modelBadge.optionType)} positions`);
         badges.append(badge);
       });
       cells.unshift(badges);
+    }
+    if (model.oiBadges.length) {
+      const badges = document.createElement("span");
+      badges.className = "nifty-axis-ladder__oi-badges";
+      model.oiBadges.forEach((modelBadge) => {
+        const badge = document.createElement("span");
+        const tone = modelBadge.optionType === "CALL" ? "is-call" : "is-put";
+        badge.className = `nifty-axis-ladder__oi-badge ${tone}`;
+        badge.textContent = modelBadge.label;
+        const rank = modelBadge.label.match(/#(\d+)/)?.[1] || "";
+        const value = modelBadge.label.split("·")[1]?.trim() || "";
+        badge.setAttribute("aria-label", `${word(modelBadge.optionType)} open interest rank ${rank}, ${value} active contracts`);
+        badges.append(badge);
+      });
+      const lotBadgeOffset = model.badges.length ? 1 : 0;
+      cells.splice(lotBadgeOffset, 0, badges);
     }
     element.replaceChildren(...cells);
     element.setAttribute("aria-label", model.accessibleName);
@@ -367,6 +417,8 @@
     entryFromDraft,
     previewEntries,
     lotBadges,
+    compactOpenInterest,
+    openInterestBadges,
     rowModel,
     editorModel,
     renderRow,

@@ -28,6 +28,7 @@ async function runningServer(overrides = {}) {
     })),
     chainLoader: overrides.chainLoader || (async (expiry) => ({ source: "Upstox", expiry, rows: [] })),
     optionHistoryLoader: overrides.optionHistoryLoader,
+    expiryLoader: overrides.expiryLoader || (async () => ({ source: "Upstox", expiries: [] })),
     expiryMetadata: overrides.expiryMetadata || ((expiry) => ({ expiry, weekly: false })),
     normalizePositions: normalizeNiftyPositions,
     normalizeTrades: normalizeNiftyTrades,
@@ -46,6 +47,25 @@ test("chain formatter retains exact Call and Put provider keys", () => {
   }]);
   assert.equal(result.rows[0].callInstrumentKey, "NSE_FO|CALL");
   assert.equal(result.rows[0].putInstrumentKey, "NSE_FO|PUT");
+});
+
+test("chain formatter retains separate validated Call and Put open interest", () => {
+  const result = bridgeServer.formatChain([{
+    strike_price: 24400,
+    underlying_spot_price: 24392,
+    call_options: { market_data: { ltp: 290, oi: 1820000 } },
+    put_options: { market_data: { ltp: 260, oi: 2470000 } }
+  }, {
+    strike_price: 24350,
+    underlying_spot_price: 24392,
+    call_options: { market_data: { ltp: 315, oi: -1 } },
+    put_options: { market_data: { ltp: 240, oi: "not-a-number" } }
+  }]);
+
+  assert.deepEqual(result.rows.map(({ strike, callOi, putOi }) => ({ strike, callOi, putOi })), [
+    { strike: 24400, callOi: 1820000, putOi: 2470000 },
+    { strike: 24350, callOi: null, putOi: null }
+  ]);
 });
 
 test("Upstox history range splits inside documented minute and hourly limits", () => {
@@ -220,6 +240,34 @@ test("one seller refresh coordinates positions, trades, and chain exactly once",
   assert.equal(payload.trades[0].id, "trade-1");
   assert.equal(payload.chain.expiry, "2026-08-25");
   assert.doesNotMatch(JSON.stringify(payload), /daily-token|access.?token|api.?secret/i);
+});
+
+test("seller refresh loads expiry proof when bridge cache is empty", async (t) => {
+  let metadata = null;
+  let expiryLoads = 0;
+  const server = await runningServer({
+    zerodhaClientFactory: () => ({
+      getPositions: async () => ({ status: "success", data: { net: [{
+        exchange: "NFO", tradingsymbol: "NIFTY26AUG24100CE", quantity: -65,
+        average_price: 358.8, last_price: 320, pnl: 2522
+      }] } }),
+      getTrades: async () => ({ status: "success", data: [] })
+    }),
+    expiryMetadata: () => metadata,
+    expiryLoader: async () => {
+      expiryLoads += 1;
+      metadata = { expiry: "2026-08-25", weekly: false };
+      return { source: "Upstox", expiries: [metadata] };
+    }
+  });
+  t.after(() => close(server));
+
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(expiryLoads, 1);
+  assert.equal(payload.positions[0].contractId, "NFO:NIFTY:2026-08-25:24100:CE");
 });
 
 test("invalid exact ISO expiry fails before every upstream call", async (t) => {

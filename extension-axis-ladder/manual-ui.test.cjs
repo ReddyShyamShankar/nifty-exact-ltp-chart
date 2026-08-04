@@ -182,8 +182,8 @@ test("row model exposes separate Call and Put lot badges for same-strike positio
   const model = ui.rowModel({ liveRow: row, isAtm: false, entries, activeEntryId: null });
 
   assert.deepEqual(model.badges, [
-    { optionType: "CALL", label: "C2", entryId: "call" },
-    { optionType: "PUT", label: "P3", entryId: "put" }
+    { optionType: "CALL", direction: "BUY", source: "MANUAL", label: "C2", entryId: "call" },
+    { optionType: "PUT", direction: "SELL", source: "MANUAL", label: "P3", entryId: "put" }
   ]);
 });
 
@@ -272,12 +272,73 @@ test("renderRow places separate lot badges before price cells", () => {
   });
 
   assert.equal(element.children[0].className, "nifty-axis-ladder__badges");
+  assert.equal(element.classList.contains("has-lot-badges"), true,
+    "row owning C/P position badges must enter top stacking layer");
   assert.deepEqual(element.children[0].children.map((badge) => [
-    badge.tagName, badge.dataset.optionType, badge.dataset.entryId, badge.textContent, badge.getAttribute("aria-label")
+    badge.tagName, badge.className, badge.dataset.optionType, badge.dataset.direction,
+    badge.dataset.entryId, badge.textContent, badge.getAttribute("aria-label")
   ]), [
-    ["BUTTON", "CALL", "call", "C2", "Edit saved Call position"],
-    ["BUTTON", "PUT", "put", "P3", "Edit saved Put position"]
+    ["BUTTON", "nifty-axis-ladder__badge is-buy", "CALL", "BUY", "call", "C2", "Edit saved Buy Call position"],
+    ["BUTTON", "nifty-axis-ladder__badge is-sell", "PUT", "SELL", "put", "P3", "Edit saved Sell Put position"]
   ]);
+});
+
+test("lot badges preserve buy and sell direction instead of merging opposite positions", () => {
+  assert.deepEqual(ui.lotBadges([
+    { id: "buy-call", optionType: "CALL", direction: "BUY", lots: 1 },
+    { id: "sell-call-a", optionType: "CALL", direction: "SELL", lots: 1 },
+    { id: "sell-call-b", optionType: "CALL", direction: "SELL", lots: 2 },
+    { id: "buy-put", optionType: "PUT", direction: "BUY", lots: 2 }
+  ]), [
+    { optionType: "CALL", direction: "BUY", source: "MANUAL", label: "C1", entryId: "buy-call" },
+    { optionType: "CALL", direction: "SELL", source: "MANUAL", label: "C3", entryId: null },
+    { optionType: "PUT", direction: "BUY", source: "MANUAL", label: "P2", entryId: "buy-put" }
+  ]);
+});
+
+test("manual and broker positions at same strike remain separate badges", () => {
+  assert.deepEqual(ui.lotBadges([
+    { id: "manual-call", source: "MANUAL", optionType: "CALL", direction: "BUY", lots: 1 },
+    { id: "broker-call", source: "BROKER_POSITION", optionType: "CALL", direction: "BUY", lots: 1 }
+  ]), [
+    { optionType: "CALL", direction: "BUY", source: "MANUAL", label: "C1", entryId: "manual-call" },
+    { optionType: "CALL", direction: "BUY", source: "BROKER_POSITION", label: "C1", entryId: null }
+  ]);
+});
+
+test("row model exposes OI badges only for first and second Call or Put rank", () => {
+  const model = ui.rowModel({
+    liveRow: { ...row, callOi: 1820000, putOi: 2470000, callOiRank: 1, putOiRank: 2 },
+    isAtm: false
+  });
+  assert.deepEqual(model.oiBadges, [
+    { optionType: "CALL", label: "C #1 · 18.2L" },
+    { optionType: "PUT", label: "P #2 · 24.7L" }
+  ]);
+
+  const ordinary = ui.rowModel({
+    liveRow: { ...row, callOi: 900000, putOi: 800000, callOiRank: 3, putOiRank: null },
+    isAtm: false
+  });
+  assert.deepEqual(ordinary.oiBadges, []);
+});
+
+test("renderRow adds non-interactive OI badges without changing price cells", () => {
+  const document = fakeDocument();
+  const element = document.createElement("div");
+  ui.renderRow(document, element, {
+    liveRow: { ...row, callOi: 1820000, putOi: 2470000, callOiRank: 1, putOiRank: 2 },
+    isAtm: false
+  });
+
+  assert.equal(element.children[0].className, "nifty-axis-ladder__oi-badges");
+  assert.deepEqual(element.children[0].children.map((badge) => [
+    badge.tagName, badge.className, badge.textContent, badge.getAttribute("aria-label")
+  ]), [
+    ["SPAN", "nifty-axis-ladder__oi-badge is-call", "C #1 · 18.2L", "Call open interest rank 1, 18.2L active contracts"],
+    ["SPAN", "nifty-axis-ladder__oi-badge is-put", "P #2 · 24.7L", "Put open interest rank 2, 24.7L active contracts"]
+  ]);
+  assert.deepEqual(element.children.slice(1).map((child) => child.textContent), ["C 223.40", "P 409.80", "24,450"]);
 });
 
 test("renderRow emphasizes only traded snapshot cell without visible trade words", () => {

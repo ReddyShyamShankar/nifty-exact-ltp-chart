@@ -60,6 +60,23 @@ test("normalizes strict monthly NIFTY net positions and removes all out-of-scope
   }]);
 });
 
+test("ignores recognized NIFTY futures mixed with monthly option positions", () => {
+  const payload = {
+    status: "success",
+    data: {
+      net: [
+        position({ tradingsymbol: "NIFTY26AUGFUT", quantity: 65 }),
+        position({ tradingsymbol: "NIFTY26AUG24100CE", quantity: -65 })
+      ]
+    }
+  };
+
+  const normalized = normalizeNiftyPositions(payload, "2026-08-25", { expiryKind: "monthly" });
+
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].contractId, "NFO:NIFTY:2026-08-25:24100:CE");
+});
+
 test("matches weekly symbol through exact expiry hint and preserves exact identity", () => {
   const payload = { status: "success", data: { net: [position({ tradingsymbol: "NIFTY2681824000PE", quantity: 65 })] } };
 
@@ -136,6 +153,26 @@ test("normalizes NFO NIFTY BUY and SELL fills with exact signed directions", () 
       timestamp: "2026-08-18T09:15:00+05:30"
     }
   ]);
+});
+
+test("ignores recognized NIFTY futures mixed with monthly option trades", () => {
+  const payload = {
+    status: "success",
+    data: [
+      trade({ trade_id: "future-trade", tradingsymbol: "NIFTY26AUGFUT" }),
+      trade({
+        trade_id: "option-trade",
+        tradingsymbol: "NIFTY26AUG24100CE",
+        fill_timestamp: "2026-08-25 09:15:00"
+      })
+    ]
+  };
+
+  const normalized = normalizeNiftyTrades(payload, "2026-08-25", { expiryKind: "monthly" });
+
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].id, "option-trade");
+  assert.equal(normalized[0].contractId, "NFO:NIFTY:2026-08-25:24100:CE");
 });
 
 test("rejects indivisible or unsigned matching NIFTY trade evidence atomically", () => {

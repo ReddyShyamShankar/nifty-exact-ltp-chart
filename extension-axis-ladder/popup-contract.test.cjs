@@ -62,6 +62,23 @@ test("side panel exposes permanent strategy save, versions, split, restore, arch
   assert.match(read("content.js"), /type:\s*"EXPIRE_DUE"/);
 });
 
+test("side panel exposes ladder and strategies as separate task views", () => {
+  const html = read("popup.html");
+  const js = read("popup.js");
+  const css = read("popup.css");
+
+  for (const id of [
+    "panel-tab-ladder", "panel-tab-strategies", "ladder-view", "strategies-view",
+    "strategy-dashboard", "new-strategy"
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /role="tablist"/);
+  assert.match(html, /MY STRATEGIES/);
+  assert.match(js, /OptionsStrategyPanel\.dashboardModel/);
+  assert.match(css, /--type-dashboard-title/);
+  const section = css.slice(css.indexOf(".panel-tabs"));
+  assert.doesNotMatch(section, /font-size:\s*\d/);
+});
+
 test("strategy manager reuses ARB Desk tokens without extra colors", () => {
   const css = read("popup.css");
   const section = css.slice(css.indexOf(".strategy-manager"));
@@ -258,11 +275,13 @@ function dailyReviewStorage() {
 
 function popupHarness(initialStorage = {}, options = {}) {
   const listeners = new Map();
+  const globalListeners = new Map();
   const requests = [];
   const chartMessages = [];
   const refreshEvents = [];
   const writes = [];
   const openedTabs = [];
+  const strategyMutationMessages = [];
   const created = [];
 
   function makeNode(id = "", tagName = "div") {
@@ -308,7 +327,8 @@ function popupHarness(initialStorage = {}, options = {}) {
     "trade-review-list", "assign-trades",
     "tradebook-csv", "import-summary", "coverage-from", "coverage-to", "confirm-coverage", "accept-snapshot", "legs-toggle", "legs-panel", "legs-list",
     "timeline-toggle", "timeline-panel", "timeline-list", "advanced-toggle", "advanced-panel", "enabled",
-    "retry-placement"
+    "retry-placement", "panel-tab-ladder", "panel-tab-strategies", "ladder-view", "strategies-view",
+    "strategy-dashboard", "new-strategy"
   ];
   const nodes = new Map(ids.map((id) => [id, makeNode(id, id === "expiry" || id === "selected-strategy" ? "select" : "div")]));
   const response = (payload, ok = true, status = 200) => ({ ok, status, json: async () => payload });
@@ -319,8 +339,10 @@ function popupHarness(initialStorage = {}, options = {}) {
     selectedStrategyId: "",
     sellerSafetyView: null,
     sellerSafetyPending: null,
+    strategyBook: require("./strategy-store.js").emptyBook(),
     sellerSafetyViewsByStrategy: {},
     sellerSafetyChartViewsByStrategy: {},
+    brokerStrategyBootstrapVersion: 1,
     ...initialStorage
   };
   const defaultRefreshPayload = {
@@ -335,6 +357,10 @@ function popupHarness(initialStorage = {}, options = {}) {
   };
   const refreshPayloads = options.refreshPayloads || [options.refreshPayload || defaultRefreshPayload];
   let refreshIndex = 0;
+  const brokerStatuses = options.brokerStatuses || [options.brokerStatus || {
+    configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z"
+  }];
+  let brokerStatusIndex = 0;
   const sandbox = {
     AbortController,
     NiftySellerRisk: require("./seller-risk.js"),
@@ -343,6 +369,14 @@ function popupHarness(initialStorage = {}, options = {}) {
     NiftySellerPopupView: require("./popup-view.js"),
     NiftySellerViewIdentity: require("./seller-view-identity.js"),
     chrome: {
+      runtime: {
+        async sendMessage(message) {
+          if (message?.type !== "MUTATE_STRATEGY_BOOK") return { ok: false, error: "unexpected message" };
+          strategyMutationMessages.push(structuredClone(message.command));
+          storage.strategyBook = require("./strategy-store.js").applyCommand(storage.strategyBook, message.command);
+          return { ok: true, strategyBook: storage.strategyBook };
+        }
+      },
       storage: { local: {
         async get(defaults) { return { ...defaults, ...storage }; },
         async set(next) { Object.assign(storage, next); writes.push(structuredClone(next)); }
@@ -353,6 +387,15 @@ function popupHarness(initialStorage = {}, options = {}) {
           chartMessages.push({ tabId, message: structuredClone(message) });
           refreshEvents.push(`message:${message?.type || "unknown"}`);
           if (options.messageError) throw options.messageError;
+          if (message?.type === "GET_STRATEGY_PREVIEW_STATE") return {
+            ok: true,
+            selectedIds: [],
+            compare: false,
+            instrumentKey: "NSE_DLY:NIFTY",
+            underlying: "NIFTY",
+            expiry: "2026-08-25",
+            timeZone: "Asia/Kolkata"
+          };
           return { ok: true };
         },
         async create(input) { openedTabs.push(input); }
@@ -371,9 +414,11 @@ function popupHarness(initialStorage = {}, options = {}) {
       requests.push(String(url));
       if (String(url).includes("/api/health")) return response({ status: "ok" });
       if (String(url).includes("/api/nifty-expiries")) return response({ expiries: options.expiries || [{ expiry: "2026-08-25", daysToExpiry: 24 }] });
-      if (String(url).includes("/api/zerodha/status")) return response(options.brokerStatus || {
-        configured: true, connected: true, expiresAt: "2026-08-02T00:30:00.000Z"
-      });
+      if (String(url).includes("/api/zerodha/status")) {
+        const status = brokerStatuses[Math.min(brokerStatusIndex, brokerStatuses.length - 1)];
+        brokerStatusIndex += 1;
+        return response(status);
+      }
       if (String(url).includes("/api/seller-refresh")) {
         refreshEvents.push("network:seller-refresh");
         const payload = refreshPayloads[Math.min(refreshIndex, refreshPayloads.length - 1)];
@@ -390,11 +435,13 @@ function popupHarness(initialStorage = {}, options = {}) {
     URL,
     setTimeout,
     clearTimeout,
-    structuredClone
+    structuredClone,
+    addEventListener(type, listener) { globalListeners.set(type, listener); }
   };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(read("popup.js"), sandbox);
-  return { listeners, requests, chartMessages, refreshEvents, writes, openedTabs, nodes, storage, created };
+  return { listeners, globalListeners, requests, chartMessages, refreshEvents, writes, openedTabs, nodes, storage, created,
+    strategyMutationMessages };
 }
 
 async function settle() {
@@ -411,6 +458,30 @@ test("initialization reads health, expiries, and Zerodha status without seller r
   assert.equal(harness.requests.filter((url) => url.includes("/api/nifty-expiries")).length, 1);
   assert.equal(harness.requests.filter((url) => url.includes("/api/zerodha/status")).length, 1);
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 0);
+  assert.equal(harness.storage.brokerConnection.connected, true);
+  assert.equal(harness.storage.brokerConnection.expiresAt, "2026-08-02T00:30:00.000Z");
+});
+
+test("connected broker bootstraps missing strategy without manual refresh", async () => {
+  const harness = popupHarness({ brokerStrategyBootstrapVersion: 0 });
+  await settle();
+  await settle();
+
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  assert.equal(harness.strategyMutationMessages.length, 1);
+  assert.equal(harness.strategyMutationMessages[0].type, "SYNC_BROKER_POSITIONS");
+  assert.equal(harness.storage.brokerStrategyBootstrapVersion, 1);
+});
+
+test("strategies tab switches task view without mixing ladder controls into dashboard", async () => {
+  const harness = popupHarness();
+  await settle();
+
+  await harness.listeners.get("panel-tab-strategies:click")();
+  assert.equal(harness.nodes.get("strategies-view").hidden, false);
+  assert.equal(harness.nodes.get("ladder-view").hidden, true);
+  assert.equal(harness.nodes.get("panel-tab-strategies").getAttribute("aria-selected"), "true");
+  assert.equal(harness.nodes.get("panel-tab-ladder").getAttribute("aria-selected"), "false");
 });
 
 test("strategy selector stays hidden until at least one strategy exists", async () => {
@@ -450,6 +521,11 @@ test("one primary press requests one coordinated refresh and withholds changed m
   assert.equal(harness.storage.sellerSafetyPending.chain.expiry, "2026-08-25");
   assert.equal(harness.nodes.get("priority-label").textContent, "REVIEW POSITION CHANGES");
   assert.equal(harness.nodes.get("review-panel").hidden, false);
+  assert.equal(harness.strategyMutationMessages.length, 1);
+  assert.equal(harness.strategyMutationMessages[0].type, "SYNC_BROKER_POSITIONS");
+  assert.equal(harness.strategyMutationMessages[0].instrumentKey, "BROKER:NFO:NIFTY");
+  assert.deepEqual(harness.strategyMutationMessages[0].positions, harness.storage.sellerSafetyLedger.reviewChanges
+    .map((change) => change.position));
 });
 
 test("real REFRESH ALL clears chart selection before successful or failed network refresh", async () => {
@@ -463,14 +539,16 @@ test("real REFRESH ALL clears chart selection before successful or failed networ
     await settle();
     await harness.listeners.get("refresh-all:click")();
 
-    assert.deepEqual(harness.chartMessages, [{
+    const expectedMessages = [{
       tabId: 7,
       message: { type: "CLEAR_BREAK_EVEN_SELECTION" }
-    }]);
-    assert.deepEqual(harness.refreshEvents, [
+    }];
+    const expectedEvents = [
       "message:CLEAR_BREAK_EVEN_SELECTION",
       "network:seller-refresh"
-    ]);
+    ];
+    assert.deepEqual(harness.chartMessages, expectedMessages);
+    assert.deepEqual(harness.refreshEvents, expectedEvents);
   }
 });
 
@@ -995,6 +1073,27 @@ test("stored accepted numbers survive while disconnected broker action is rebuil
   assert.equal(harness.nodes.get("connect-zerodha").hidden, false);
 });
 
+test("panel focus rechecks broker status after connection completed outside panel", async () => {
+  const harness = popupHarness(acceptedStorage(), {
+    brokerStatuses: [
+      { configured: true, connected: false, expiresAt: null },
+      { configured: true, connected: true, expiresAt: "2027-08-04T00:30:00.000Z" }
+    ]
+  });
+  await settle();
+
+  assert.match(harness.nodes.get("broker-line").textContent, /DISCONNECTED/);
+
+  await harness.globalListeners.get("focus")();
+
+  assert.doesNotMatch(harness.nodes.get("broker-line").textContent, /DISCONNECTED/);
+  assert.equal(harness.nodes.get("connect-zerodha").hidden, true);
+  assert.equal(harness.storage.brokerConnection.connected, true);
+  assert.equal(harness.storage.brokerConnection.expiresAt, "2027-08-04T00:30:00.000Z");
+  assert.equal(harness.requests.filter((url) => url.includes("/api/zerodha/status")).length, 2);
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 0);
+});
+
 test("connect action opens only bridge-provided official login URL", async () => {
   const harness = popupHarness();
   await settle();
@@ -1003,4 +1102,16 @@ test("connect action opens only bridge-provided official login URL", async () =>
 
   assert.equal(harness.openedTabs.length, 1);
   assert.equal(harness.openedTabs[0].url, "https://kite.zerodha.com/connect/login?v=3&api_key=public-key");
+  assert.equal(harness.storage.brokerConnectPending, true);
+});
+
+test("successful explicit broker connection performs one coordinated strategy refresh", async () => {
+  const harness = popupHarness({ brokerConnectPending: true });
+  await settle();
+  await settle();
+
+  assert.equal(harness.storage.brokerConnectPending, false);
+  assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
+  assert.equal(harness.strategyMutationMessages.length, 1);
+  assert.equal(harness.strategyMutationMessages[0].type, "SYNC_BROKER_POSITIONS");
 });

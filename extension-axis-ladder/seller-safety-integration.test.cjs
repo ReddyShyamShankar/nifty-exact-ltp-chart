@@ -12,6 +12,7 @@ const popupView = require("./popup-view.js");
 const risk = require("./seller-risk.js");
 const riskOverlay = require("./risk-overlay.js");
 const tradebook = require("./tradebook-csv.js");
+const strategyStore = require("./strategy-store.js");
 const viewIdentity = require("./seller-view-identity.js");
 const manifest = require("./manifest.json");
 
@@ -400,6 +401,8 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl, dateImpl
     sellerSafetyView: null,
     sellerSafetyChartView: null,
     sellerSafetyPending: null,
+    strategyBook: strategyStore.emptyBook(),
+    brokerStrategyBootstrapVersion: 1,
     ...structuredClone(initialStorage)
   };
   const response = (status, payload) => ({
@@ -415,6 +418,13 @@ function popupRuntime({ initialStorage = {}, refreshResponse, loginUrl, dateImpl
     NiftySellerPopupView: popupView,
     NiftySellerViewIdentity: require("./seller-view-identity.js"),
     chrome: {
+      runtime: {
+        async sendMessage(message) {
+          if (message?.type !== "MUTATE_STRATEGY_BOOK") return { ok: false, error: "Unexpected message." };
+          storage.strategyBook = strategyStore.applyCommand(storage.strategyBook, message.command);
+          return { ok: true, strategyBook: storage.strategyBook };
+        }
+      },
       storage: { local: {
         async get(defaults) { return { ...defaults, ...storage }; },
         async set(next) { Object.assign(storage, structuredClone(next)); }

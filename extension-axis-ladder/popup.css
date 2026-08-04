@@ -249,3 +249,104 @@ input:focus, #selected-strategy:focus, .trade-review-row select:focus { border-c
   min-height: 14px;
   accent-color: var(--accent);
 }
+
+.panel-tabs {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--topbar);
+  backdrop-filter: blur(8px);
+}
+
+.panel-tab {
+  min-height: 44px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: var(--type-dashboard-body);
+  font-weight: 750;
+  letter-spacing: .08em;
+}
+
+.panel-tab:hover { color: var(--ink); }
+.panel-tab.is-active { border-bottom-color: var(--ink); color: var(--ink); }
+.panel-tab:focus-visible,
+.dashboard-primary:focus-visible,
+.strategy-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+body[data-panel-view="strategies"] .topbar .quick-toggle,
+body[data-panel-view="strategies"] .topbar .header-refresh { display: none; }
+
+.strategies-view { padding: 16px 14px 20px; }
+.strategies-view__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.strategies-view__head > div { min-width: 0; }
+.strategies-view__head strong { display: block; margin-top: 3px; font-size: var(--type-dashboard-heading); }
+.strategies-view__eyebrow { color: var(--ink-mute); font-size: var(--type-dashboard-label); letter-spacing: .1em; }
+
+.dashboard-primary {
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid var(--ink);
+  border-radius: var(--control-radius);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: var(--type-dashboard-label);
+  font-weight: 800;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+
+.strategy-dashboard { margin-top: 16px; }
+.strategy-group + .strategy-group,
+.strategy-history { margin-top: 20px; }
+.strategy-group__head { min-height: 44px; display: flex; align-items: center; gap: 9px; color: var(--ink); }
+.strategy-group__head strong { font-size: var(--type-dashboard-title); letter-spacing: .04em; }
+.strategy-count { min-width: 24px; height: 24px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: var(--panel-2); color: var(--ink-dim); font-size: var(--type-dashboard-label); }
+.strategy-group__cards { display: grid; gap: 10px; }
+
+.strategy-card {
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.strategy-card.is-expanded { border-color: var(--ink-mute); }
+.strategy-card__head { min-height: 52px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 0 8px 0 12px; }
+.strategy-card__toggle { min-width: 0; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--ink); display: flex; align-items: center; gap: 9px; text-align: left; }
+.strategy-card__chevron { color: var(--ink-mute); font-size: var(--type-dashboard-title); transition: transform .15s var(--ease); }
+.strategy-card.is-expanded .strategy-card__chevron { transform: rotate(90deg); }
+.strategy-card__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-dashboard-title); font-weight: 750; letter-spacing: .02em; }
+.strategy-status { min-height: 26px; padding: 0 8px; display: inline-flex; align-items: center; border: 1px solid var(--accent); border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--type-dashboard-label); font-weight: 800; letter-spacing: .06em; }
+.strategy-status.is-archived,
+.strategy-status.is-expired { border-color: var(--line-2); background: var(--panel-2); color: var(--ink-mute); }
+
+.strategy-card__body { border-top: 1px solid var(--line); }
+.strategy-card__metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.strategy-metric { min-width: 0; padding: 11px 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.strategy-metric:nth-child(2n) { border-right: 0; }
+.strategy-metric span,
+.strategy-metric strong { display: block; }
+.strategy-metric span { color: var(--ink-mute); font-size: var(--type-dashboard-label); font-weight: 700; letter-spacing: .07em; }
+.strategy-metric strong { margin-top: 5px; overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-size: var(--type-dashboard-metric); white-space: nowrap; }
+.strategy-metric.is-profit strong { color: var(--accent); }
+.strategy-metric.is-loss strong { color: var(--danger); }
+
+.strategy-card__legs { padding: 3px 12px; border-bottom: 1px solid var(--line); }
+.strategy-leg { min-height: 42px; display: grid; grid-template-columns: 22px 64px minmax(56px, 1fr) auto; align-items: center; gap: 8px; border-bottom: 1px dashed var(--line); font-size: var(--type-dashboard-body); }
+.strategy-leg:last-child { border-bottom: 0; }
+.strategy-leg__type { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid currentColor; border-radius: var(--control-radius); color: var(--accent); font-size: var(--type-dashboard-label); font-weight: 800; }
+.strategy-leg__type.is-put { color: var(--danger); }
+.strategy-leg__side { font-weight: 800; }
+.strategy-leg__side.is-sell { color: var(--danger); }
+.strategy-leg__side.is-buy { color: var(--accent); }
+.strategy-leg__price { color: var(--ink-dim); text-align: right; }
+.strategy-leg__price span { display: block; color: var(--ink-mute); font-size: var(--type-dashboard-label); }
+
+.strategy-card__actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px; gap: 8px; padding: 10px 12px; }
+.strategy-card__action { min-height: 44px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: var(--control-radius); background: var(--panel-2); color: var(--ink-dim); font-size: var(--type-dashboard-label); font-weight: 800; letter-spacing: .06em; }
+.strategy-card__action.is-primary { border-color: var(--ink); background: var(--ink); color: var(--bg); }
+.strategy-card__action:hover { border-color: var(--accent); color: var(--ink); }
+.strategy-empty { padding: 24px 16px; border: 1px dashed var(--line-2); border-radius: var(--radius); color: var(--ink-mute); text-align: center; font-size: var(--type-dashboard-body); }
+.strategy-empty strong { display: block; margin-bottom: 5px; color: var(--ink); font-size: var(--type-dashboard-title); }

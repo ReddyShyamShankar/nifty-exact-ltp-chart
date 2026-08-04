@@ -55,16 +55,13 @@
       : 0;
   }
 
-  function buildPreview(book, selectedIds, quoteRows, options = {}) {
-    const ids = [...new Set(Array.isArray(selectedIds) ? selectedIds.filter(Boolean) : [])];
+  function buildPreviewFromGroups(groups, quoteRows, options = {}) {
+    const selected = Array.isArray(groups) ? groups.filter(Boolean) : [];
+    const ids = [...new Set(selected.map((item) => item.id).filter(Boolean))];
     if (ids.length < 2) return emptyResult("SELECT_MORE", ids);
-
-    const strategies = ids.map((id) => strategyStore.strategyById(book, id));
-    if (strategies.some((item) => !item || item.status !== "ACTIVE")) {
-      return emptyResult("INCOMPATIBLE", ids);
-    }
-    const first = strategies[0];
-    if (strategies.some((item) => item.instrumentKey !== first.instrumentKey || item.expiry !== first.expiry)) {
+    const first = selected[0];
+    if (!first || selected.some((item) => item.instrumentKey !== first.instrumentKey
+      || item.expiry !== first.expiry || !Array.isArray(item.entries))) {
       return emptyResult("INCOMPATIBLE", ids);
     }
 
@@ -76,7 +73,8 @@
       return emptyResult("INCOMPLETE", ids, { disclosure: "LIVE QUOTES STALE · REFRESH REQUIRED" });
     }
 
-    const entries = ids.flatMap((id) => strategyStore.legsForStrategy(book, id));
+    const entries = [...new Map(selected.flatMap((item) => item.entries)
+      .map((entry) => [entry.id, entry])).values()];
     const rows = Array.isArray(quoteRows) ? quoteRows : [];
     const missingQuotes = [];
     const liveRows = new Map();
@@ -130,6 +128,21 @@
     };
   }
 
+  function buildPreview(book, selectedIds, quoteRows, options = {}) {
+    const ids = [...new Set(Array.isArray(selectedIds) ? selectedIds.filter(Boolean) : [])];
+    if (ids.length < 2) return emptyResult("SELECT_MORE", ids);
+    const strategies = ids.map((id) => strategyStore.strategyById(book, id));
+    if (strategies.some((item) => !item || item.status !== "ACTIVE")) {
+      return emptyResult("INCOMPATIBLE", ids);
+    }
+    return buildPreviewFromGroups(strategies.map((strategy) => ({
+      id: strategy.id,
+      instrumentKey: strategy.instrumentKey,
+      expiry: strategy.expiry,
+      entries: strategyStore.legsForStrategy(book, strategy.id)
+    })), quoteRows, options);
+  }
+
   function displayLevels(preview, prefix = "COMBINED BE") {
     return (Array.isArray(preview?.breakEvens) ? preview.breakEvens : []).map((exact) => ({
       kind: "combined",
@@ -139,7 +152,7 @@
     }));
   }
 
-  const api = { createSelection, toggle, setCompare, buildPreview, displayLevels };
+  const api = { createSelection, toggle, setCompare, buildPreview, buildPreviewFromGroups, displayLevels };
   root.OptionsStrategyPreview = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

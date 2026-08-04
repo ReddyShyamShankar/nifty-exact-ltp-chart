@@ -18,7 +18,11 @@ const DEFAULTS = {
   strategyBook: {
     version: 1, nextSequence: 1, legs: {}, strategies: {}, versions: {}, quarantine: [], appliedCommands: {}
   },
-  lastSelectedStrategyByContext: {}
+  lastSelectedStrategyByContext: {},
+  sidePanelView: "ladder",
+  brokerConnectPending: false,
+  brokerConnection: null,
+  brokerStrategyBootstrapVersion: 0
 };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
@@ -31,6 +35,8 @@ let strategyPreviewState = {
   selectedIds: [], compare: false, instrumentKey: "", underlying: "", expiry: "", timeZone: "UTC"
 };
 let activeVersionedStrategyId = "";
+let expandedDashboardStrategyId = null;
+let brokerConnectCompletionRunning = false;
 
 function strategyManagerAvailable() {
   return Boolean($("#strategy-manager") && globalThis.OptionsStrategyStore && globalThis.OptionsStrategyPanel);
@@ -153,6 +159,198 @@ function renderStrategyManager() {
   history.replaceChildren(...(model.history.length ? model.history.map((item) =>
     strategyRow(`${item.label} · ${item.status}`, `${item.expiry} · ${item.versionCount} VERSION${item.versionCount === 1 ? "" : "S"}`)
   ) : [strategyRow("NO ARCHIVED STRATEGIES", "Permanent history stays here.")]));
+  renderStrategyDashboard();
+}
+
+function dashboardNode(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (typeof text === "string") node.textContent = text;
+  return node;
+}
+
+function strategyMetric(label, value, tone = "") {
+  const metric = dashboardNode("div", `strategy-metric${tone ? ` is-${tone}` : ""}`);
+  metric.append(
+    dashboardNode("span", "mono", label),
+    dashboardNode("strong", "mono", value)
+  );
+  return metric;
+}
+
+function strategyDashboardCard(card, { historical = false } = {}) {
+  const article = dashboardNode("article", `strategy-card${card.expanded ? " is-expanded" : ""}`);
+  article.dataset.strategyCardId = card.id;
+  const head = dashboardNode("div", "strategy-card__head");
+  const toggle = dashboardNode("button", "strategy-card__toggle");
+  toggle.type = "button";
+  toggle.dataset.strategyCardToggle = historical ? "" : card.id;
+  toggle.setAttribute("aria-expanded", String(card.expanded));
+  toggle.setAttribute("aria-label", `${card.expanded ? "Collapse" : "Expand"} ${card.title}`);
+  toggle.append(
+    dashboardNode("span", "strategy-card__chevron mono", "›"),
+    dashboardNode("span", "strategy-card__title", card.title)
+  );
+  const status = dashboardNode("span", `strategy-status mono is-${card.status.toLowerCase()}`, card.status);
+  head.append(toggle, status);
+  article.append(head);
+
+  if (!historical) {
+    const body = dashboardNode("div", "strategy-card__body");
+    body.hidden = !card.expanded;
+    const metrics = dashboardNode("div", "strategy-card__metrics");
+    const pnlTone = card.metrics.pnl.startsWith("+") ? "profit" : card.metrics.pnl.startsWith("−") || card.metrics.pnl.startsWith("-") ? "loss" : "";
+    metrics.append(
+      strategyMetric("OPEN P&L", card.metrics.pnl, pnlTone),
+      strategyMetric("BREAK-EVEN", card.metrics.breakEven),
+      strategyMetric("MAX PROFIT", card.metrics.maxProfit, card.metrics.maxProfit === "—" ? "" : "profit"),
+      strategyMetric("MAX LOSS", card.metrics.maxLoss, card.metrics.maxLoss === "—" ? "" : "loss")
+    );
+    const legs = dashboardNode("div", "strategy-card__legs");
+    if (!card.legs.length) {
+      legs.append(dashboardNode("div", "strategy-empty", "NO SAVED LEGS"));
+    } else {
+      for (const leg of card.legs) {
+        const row = dashboardNode("div", "strategy-leg mono");
+        row.append(
+          dashboardNode("span", `strategy-leg__type${leg.optionType === "P" ? " is-put" : ""}`, leg.optionType),
+          dashboardNode("strong", "", leg.strike),
+          dashboardNode("span", `strategy-leg__side is-${leg.direction.toLowerCase()}`, `${leg.direction} ×${leg.lots}`)
+        );
+        const price = dashboardNode("span", "strategy-leg__price", leg.live);
+        price.prepend?.(dashboardNode("span", "", `ENTRY ${leg.entry}`));
+        if (!price.prepend) price.append(dashboardNode("span", "", `ENTRY ${leg.entry}`));
+        row.append(price);
+        legs.append(row);
+      }
+    }
+    const actions = dashboardNode("div", "strategy-card__actions");
+    const view = dashboardNode("button", "strategy-card__action is-primary mono", "VIEW ON CHART");
+    view.type = "button";
+    view.dataset.viewStrategy = card.id;
+    const edit = dashboardNode("button", "strategy-card__action mono", "EDIT LEGS");
+    edit.type = "button";
+    edit.dataset.editStrategy = card.id;
+    const manage = dashboardNode("button", "strategy-card__action mono", "•••");
+    manage.type = "button";
+    manage.dataset.manageStrategy = card.id;
+    manage.setAttribute("aria-label", `Manage ${card.title}`);
+    actions.append(view, edit, manage);
+    body.append(metrics, legs, actions);
+    article.append(body);
+  }
+  return article;
+}
+
+function renderStrategyDashboard() {
+  const container = $("#strategy-dashboard");
+  if (!container || !globalThis.OptionsStrategyPanel?.dashboardModel) return;
+  let model = OptionsStrategyPanel.dashboardModel(state.strategyBook, {
+    expandedStrategyId: expandedDashboardStrategyId,
+    acceptedViewsByStrategy: state.sellerSafetyViewsByStrategy || {}
+  });
+  if (expandedDashboardStrategyId === null && model.groups[0]?.cards[0]) {
+    expandedDashboardStrategyId = model.groups[0].cards[0].id;
+    model = OptionsStrategyPanel.dashboardModel(state.strategyBook, {
+      expandedStrategyId: expandedDashboardStrategyId,
+      acceptedViewsByStrategy: state.sellerSafetyViewsByStrategy || {}
+    });
+  }
+  const regions = [];
+  for (const group of model.groups) {
+    const section = dashboardNode("section", "strategy-group");
+    const head = dashboardNode("div", "strategy-group__head mono");
+    head.append(
+      dashboardNode("strong", "", group.underlying),
+      dashboardNode("span", "strategy-count", String(group.count))
+    );
+    const cards = dashboardNode("div", "strategy-group__cards");
+    cards.append(...group.cards.map((card) => strategyDashboardCard(card)));
+    section.append(head, cards);
+    regions.push(section);
+  }
+  if (model.history.length) {
+    const history = dashboardNode("section", "strategy-history");
+    const head = dashboardNode("div", "strategy-group__head mono");
+    head.append(dashboardNode("strong", "", "SAVED / CLOSED"), dashboardNode("span", "strategy-count", String(model.history.length)));
+    const cards = dashboardNode("div", "strategy-group__cards");
+    cards.append(...model.history.map((card) => strategyDashboardCard(card, { historical: true })));
+    history.append(head, cards);
+    regions.push(history);
+  }
+  if (!regions.length) {
+    const empty = dashboardNode("div", "strategy-empty");
+    empty.append(dashboardNode("strong", "", "NO SAVED STRATEGIES"), document.createTextNode?.("Build legs on chart, then save preview.") || dashboardNode("span", "", "Build legs on chart, then save preview."));
+    regions.push(empty);
+  }
+  container.replaceChildren(...regions);
+}
+
+async function setPanelView(view, { save = true } = {}) {
+  const next = view === "strategies" ? "strategies" : "ladder";
+  const ladder = $("#ladder-view");
+  const strategies = $("#strategies-view");
+  const ladderTab = $("#panel-tab-ladder");
+  const strategiesTab = $("#panel-tab-strategies");
+  if (!ladder || !strategies || !ladderTab || !strategiesTab) return;
+  ladder.hidden = next !== "ladder";
+  strategies.hidden = next !== "strategies";
+  ladderTab.className = `panel-tab mono${next === "ladder" ? " is-active" : ""}`;
+  strategiesTab.className = `panel-tab mono${next === "strategies" ? " is-active" : ""}`;
+  ladderTab.setAttribute("aria-selected", String(next === "ladder"));
+  strategiesTab.setAttribute("aria-selected", String(next === "strategies"));
+  document.body?.setAttribute?.("data-panel-view", next);
+  state.sidePanelView = next;
+  if (next === "strategies") renderStrategyDashboard();
+  if (save) await persist({ sidePanelView: next });
+}
+
+async function openStrategyOnChart(strategyId) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.startsWith("https://www.tradingview.com/")) throw new Error("Open active TradingView chart first.");
+    const result = await chrome.tabs.sendMessage(tab.id, { type: "OPEN_STRATEGY_ON_CHART", strategyId });
+    if (!result?.ok) throw new Error(result?.error || "Strategy chart card is unavailable.");
+    strategyManagerStatus("STRATEGY OPENED ON CHART");
+  } catch (error) {
+    strategyManagerStatus(friendlyError(error).toUpperCase());
+  }
+}
+
+async function editDashboardStrategy(strategyId) {
+  activeVersionedStrategyId = strategyId;
+  await rememberVersionedSelection(strategyId);
+  await setPanelView("ladder");
+  renderStrategyManager();
+  $("#strategy-manager")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+}
+
+function bindPanelViews() {
+  const ladderTab = $("#panel-tab-ladder");
+  const strategiesTab = $("#panel-tab-strategies");
+  const dashboard = $("#strategy-dashboard");
+  if (!ladderTab || !strategiesTab) return;
+  ladderTab.addEventListener("click", () => setPanelView("ladder"));
+  strategiesTab.addEventListener("click", () => setPanelView("strategies"));
+  $("#new-strategy")?.addEventListener("click", async () => {
+    await setPanelView("ladder");
+    strategyManagerStatus("BUILD LEGS ON CHART · THEN SAVE PREVIEW");
+    $("#strategy-manager")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  });
+  dashboard?.addEventListener("click", (event) => {
+    const toggleId = event.target.closest?.("[data-strategy-card-toggle]")?.dataset.strategyCardToggle;
+    if (toggleId) {
+      expandedDashboardStrategyId = expandedDashboardStrategyId === toggleId ? "" : toggleId;
+      renderStrategyDashboard();
+      return;
+    }
+    const viewId = event.target.closest?.("[data-view-strategy]")?.dataset.viewStrategy;
+    if (viewId) { void openStrategyOnChart(viewId); return; }
+    const editId = event.target.closest?.("[data-edit-strategy]")?.dataset.editStrategy;
+    if (editId) { void editDashboardStrategy(editId); return; }
+    const manageId = event.target.closest?.("[data-manage-strategy]")?.dataset.manageStrategy;
+    if (manageId) void editDashboardStrategy(manageId);
+  });
 }
 
 async function mutateVersionedStrategies(command) {
@@ -503,6 +701,7 @@ function renderView(view, { pending = false, preserveEvidence = false } = {}) {
   renderAllocations(shown);
   renderTradeReviews(shown);
   $("#review-panel").hidden = !(pending || shown.reviewChanges.length || shown.tradeReviews?.length);
+  renderStrategyDashboard();
 }
 
 function selectedStrategy() {
@@ -654,6 +853,12 @@ async function loadBrokerStatus() {
     brokerStatus = { configured: false, connected: false, expiresAt: null };
     $("#placement-status").textContent = friendlyError(error);
   }
+  await persist({
+    brokerConnection: {
+      connected: brokerStatus.connected === true,
+      expiresAt: brokerStatus.expiresAt || null
+    }
+  });
 }
 
 function validRefreshTrade(trade, expiry) {
@@ -672,6 +877,58 @@ function nextCandidateId() {
   candidateSequence += 1;
   const uuid = globalThis.crypto?.randomUUID?.();
   return uuid ? `seller-${uuid}` : `seller-${Date.now()}-${candidateSequence}`;
+}
+
+function brokerStrategyLabel(expiry) {
+  const date = new Date(`${expiry}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) return "BROKER";
+  const month = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"][date.getUTCMonth()];
+  return `BROKER · ${month} ${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function storedBrokerStrategy(expiry) {
+  const book = state.strategyBook || DEFAULTS.strategyBook;
+  for (const strategy of Object.values(book.strategies || {})) {
+    if (strategy.expiry !== expiry) continue;
+    const version = book.versions?.[strategy.currentVersionId];
+    const legs = (version?.legIds || []).map((id) => book.legs?.[id]).filter(Boolean);
+    if (legs.length && legs.every((leg) => leg.source === "BROKER_POSITION")) return strategy;
+  }
+  return null;
+}
+
+async function syncBrokerStrategy(positions, updatedAt) {
+  const brokerUnderlying = positions[0]?.underlying || "";
+  const brokerExchange = positions[0]?.exchange || "";
+  if (positions.some((position) => position.underlying !== brokerUnderlying
+    || position.exchange !== brokerExchange || position.expiry !== state.expiry)) {
+    throw new Error("Broker snapshot mixes strategy instruments or expiries.");
+  }
+  const existing = storedBrokerStrategy(state.expiry);
+  if (!positions.length && !existing) return state.strategyBook;
+  const identity = positions.length ? {
+    instrumentKey: `BROKER:${brokerExchange}:${brokerUnderlying}`,
+    underlying: brokerUnderlying,
+    strategyId: ""
+  } : {
+    instrumentKey: existing.instrumentKey,
+    underlying: existing.underlying,
+    strategyId: existing.id
+  };
+  const key = encodeURIComponent(identity.instrumentKey);
+  const snapshotId = encodeURIComponent(updatedAt);
+  return mutateVersionedStrategies({
+    id: `broker-sync:${key}:${state.expiry}:${snapshotId}`,
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: identity.strategyId || `broker:${key}:${state.expiry}`,
+    versionId: `broker-version:${key}:${state.expiry}:${snapshotId}`,
+    snapshotId,
+    label: brokerStrategyLabel(state.expiry),
+    instrumentKey: identity.instrumentKey,
+    underlying: identity.underlying,
+    expiry: state.expiry,
+    positions
+  });
 }
 
 function validateRefreshPayload(data) {
@@ -763,10 +1020,12 @@ async function refreshAll() {
   label.textContent = "REFRESHING…";
   $("#placement-status").textContent = "READING BROKER + MARKET SNAPSHOT…";
   try {
+    await loadBrokerStatus();
     await clearChartBreakEvenSelection();
     await clearPendingCandidate();
     const data = await responseData(await fetch(`${API}/api/seller-refresh?expiry=${encodeURIComponent(state.expiry)}`, { cache: "no-store" }));
     const candidate = validateRefreshPayload(data);
+    await syncBrokerStrategy(data.positions, data.updatedAt);
     const failuresByExpiry = { ...(state.sellerSafetyRefreshFailuresByExpiry || {}) };
     delete failuresByExpiry[state.expiry];
     const chainsByExpiry = { ...(state.sellerSafetyChainsByExpiry || {}) };
@@ -787,6 +1046,7 @@ async function refreshAll() {
       : ledger.reviewChanges.length
       ? `${ledger.reviewChanges.length} POSITION CHANGE${ledger.reviewChanges.length === 1 ? "" : "S"} NEED REVIEW`
       : "SNAPSHOT READY FOR EXPLICIT ACCEPTANCE";
+    return true;
   } catch (error) {
     try { await clearPendingCandidate(); } catch (_clearError) { /* in-memory candidate already cleared */ }
     const failure = failedRefreshChartView();
@@ -799,6 +1059,7 @@ async function refreshAll() {
       sellerSafetyPending: null
     });
     $("#placement-status").textContent = friendlyError(error);
+    return false;
   } finally {
     button.disabled = false;
     button.removeAttribute("aria-busy");
@@ -1030,10 +1291,49 @@ async function connectZerodha() {
     if (login.origin !== "https://kite.zerodha.com" || login.pathname !== "/connect/login") {
       throw new Error("Bridge returned an invalid Zerodha login URL.");
     }
+    await persist({ brokerConnectPending: true });
     await chrome.tabs.create({ url: login.toString() });
   } catch (error) {
     $("#placement-status").textContent = friendlyError(error);
   }
+}
+
+async function completePendingBrokerConnect({ statusLoaded = false } = {}) {
+  if (!state.brokerConnectPending || brokerConnectCompletionRunning) return false;
+  brokerConnectCompletionRunning = true;
+  try {
+    if (!statusLoaded) await loadBrokerStatus();
+    if (!brokerStatus.connected) return false;
+    await persist({ brokerConnectPending: false });
+    const refreshed = await refreshAll();
+    if (refreshed) await persist({ brokerStrategyBootstrapVersion: 1 });
+    return refreshed;
+  } finally {
+    brokerConnectCompletionRunning = false;
+  }
+}
+
+async function bootstrapConnectedBrokerStrategy() {
+  if (!brokerStatus.connected || Number(state.brokerStrategyBootstrapVersion) >= 1) return false;
+  if (storedBrokerStrategy(state.expiry)) {
+    await persist({ brokerStrategyBootstrapVersion: 1 });
+    return false;
+  }
+  const refreshed = await refreshAll();
+  if (refreshed) await persist({ brokerStrategyBootstrapVersion: 1 });
+  return refreshed;
+}
+
+async function refreshBrokerStatusOnFocus() {
+  if (state.brokerConnectPending) {
+    const completed = await completePendingBrokerConnect();
+    renderCurrent();
+    return completed;
+  }
+  await loadBrokerStatus();
+  renderCurrent();
+  if (brokerStatus.connected) return bootstrapConnectedBrokerStrategy();
+  return brokerStatus.connected;
 }
 
 async function retryChartPlacement() {
@@ -1107,6 +1407,7 @@ function bindEvents() {
   $("#legs-toggle").addEventListener("click", () => disclosure("#legs-toggle", "#legs-panel"));
   $("#timeline-toggle").addEventListener("click", () => disclosure("#timeline-toggle", "#timeline-panel"));
   $("#advanced-toggle").addEventListener("click", () => disclosure("#advanced-toggle", "#advanced-panel"));
+  globalThis.addEventListener?.("focus", refreshBrokerStatusOnFocus);
 }
 
 async function init() {
@@ -1157,7 +1458,9 @@ async function init() {
   };
   await persist(migration);
   bindEvents();
+  bindPanelViews();
   bindStrategyManager();
+  await setPanelView(state.sidePanelView, { save: false });
   renderSettings();
   renderCurrent();
   await loadHealth();
@@ -1165,6 +1468,8 @@ async function init() {
   await loadBrokerStatus();
   renderSettings();
   renderCurrent();
+  const completedBrokerConnect = await completePendingBrokerConnect({ statusLoaded: true });
+  if (!completedBrokerConnect) await bootstrapConnectedBrokerStrategy();
 }
 
 init();

@@ -145,6 +145,13 @@ function isExtensionAccountRequest(headers, allowedOrigin) {
     headers["sec-fetch-dest"] === "empty";
 }
 
+function openInterest(value) {
+  if (typeof value === "boolean" || value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
 export function formatChain(chain) {
   const spot = chain.find((item) => Number.isFinite(item.underlying_spot_price))?.underlying_spot_price;
   if (!Number.isFinite(spot)) throw new Error("Upstox response did not contain NIFTY spot price.");
@@ -159,6 +166,8 @@ export function formatChain(chain) {
         strike: item.strike_price,
         call: item.call_options?.market_data?.ltp ?? null,
         put: item.put_options?.market_data?.ltp ?? null,
+        callOi: openInterest(item.call_options?.market_data?.oi),
+        putOi: openInterest(item.put_options?.market_data?.oi),
         callInstrumentKey: item.call_options?.instrument_key ?? null,
         putInstrumentKey: item.put_options?.instrument_key ?? null
       }))
@@ -339,6 +348,7 @@ export function createRequestHandler({
   zerodhaClientFactory = createZerodhaClient,
   chainLoader = niftyChain,
   optionHistoryLoader = null,
+  expiryLoader = niftyExpiries,
   expiryMetadata = cachedExpiryMetadata,
   normalizePositions = normalizeNiftyPositions,
   normalizeTrades = normalizeNiftyTrades,
@@ -422,7 +432,11 @@ export function createRequestHandler({
         error.kind = "expiry_mismatch";
         throw error;
       }
-      const metadata = expiryMetadata(expiry);
+      let metadata = expiryMetadata(expiry);
+      if (!metadata) {
+        await expiryLoader();
+        metadata = expiryMetadata(expiry);
+      }
       const expiryKind = metadata?.weekly === false ? "monthly" : metadata?.weekly === true ? "weekly" : "unknown";
       respondJson(response, 200, {
         updatedAt: new Date(now()).toISOString(),

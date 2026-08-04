@@ -40,6 +40,104 @@
     return { active, history: historyRows(book), quarantineCount: book.quarantine.length };
   }
 
+  function number(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed)
+      ? parsed.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : "—";
+  }
+
+  function rupees(value) {
+    const formatted = number(value);
+    return formatted === "—" ? formatted : `₹${formatted}`;
+  }
+
+  function signedRupees(value) {
+    if (!Number.isFinite(value)) return "—";
+    const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+    return `${sign}₹${number(Math.abs(value))}`;
+  }
+
+  function expiryLabel(value) {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    if (!Number.isFinite(date.getTime())) return "NO EXPIRY";
+    const month = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"][date.getUTCMonth()];
+    return `${month} ${String(date.getUTCDate()).padStart(2, "0")}`;
+  }
+
+  function strategyKind(strategy, legs) {
+    if (legs.length === 1) {
+      return `${legs[0].direction === "SELL" ? "SHORT" : "LONG"} ${legs[0].optionType}`;
+    }
+    const types = legs.map((leg) => leg.optionType);
+    const directions = legs.map((leg) => leg.direction);
+    if (legs.length === 4 && types.filter((type) => type === "CALL").length === 2
+      && types.filter((type) => type === "PUT").length === 2
+      && directions.filter((direction) => direction === "BUY").length === 2
+      && directions.filter((direction) => direction === "SELL").length === 2) return "IRON CONDOR";
+    return strategy.label;
+  }
+
+  function breakEvenLabel(view) {
+    const values = [view?.currentRisk?.lower, view?.currentRisk?.upper]
+      .filter((value) => typeof value === "string" && value && value !== "—");
+    return values.length ? values.join(" / ") : "—";
+  }
+
+  function dashboardCard(book, strategy, options = {}) {
+    const legs = store.legsForStrategy(book, strategy.id);
+    const view = options.acceptedViewsByStrategy?.[strategy.id] || null;
+    const brokerPnl = legs.length && legs.every((leg) => leg.source === "BROKER_POSITION"
+      && Number.isFinite(leg.brokerPnl))
+      ? signedRupees(legs.reduce((sum, leg) => sum + leg.brokerPnl, 0))
+      : "—";
+    return {
+      id: strategy.id,
+      underlying: strategy.underlying,
+      title: `${strategyKind(strategy, legs)} · ${expiryLabel(strategy.expiry)}`,
+      label: strategy.label,
+      status: strategy.status === store.ACTIVE ? "OPEN" : strategy.status,
+      expanded: strategy.status === store.ACTIVE && strategy.id === options.expandedStrategyId,
+      metrics: {
+        pnl: view?.livePnl || brokerPnl,
+        breakEven: breakEvenLabel(view),
+        maxProfit: view?.maxProfit || "—",
+        maxLoss: view?.maxLoss || "—"
+      },
+      legs: legs.map((leg) => ({
+        id: leg.id,
+        optionType: leg.optionType === "CALL" ? "C" : "P",
+        strike: Number(leg.strike).toLocaleString("en-IN"),
+        direction: leg.direction,
+        lots: leg.lots,
+        entry: rupees(leg.premium),
+        live: rupees(leg.optionType === "CALL" ? leg.callSnapshot : leg.putSnapshot)
+      }))
+    };
+  }
+
+  function dashboardModel(input, options = {}) {
+    const book = store.normalizeBook(input);
+    const active = Object.values(book.strategies)
+      .filter((strategy) => strategy.status === store.ACTIVE)
+      .sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
+    const groups = [];
+    for (const strategy of active) {
+      let group = groups.find((item) => item.underlying === strategy.underlying);
+      if (!group) {
+        group = { underlying: strategy.underlying, count: 0, cards: [] };
+        groups.push(group);
+      }
+      group.cards.push(dashboardCard(book, strategy, options));
+      group.count += 1;
+    }
+    const history = Object.values(book.strategies)
+      .filter((strategy) => strategy.status !== store.ACTIVE)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.sequence - b.sequence)
+      .map((strategy) => ({ ...dashboardCard(book, strategy, options), expanded: false }));
+    return { groups, history, quarantineCount: book.quarantine.length };
+  }
+
   function saveChoices(input, selectedIds) {
     const book = store.normalizeBook(input);
     const ids = uniqueIds(selectedIds);
@@ -116,6 +214,7 @@
 
   const api = {
     viewModel,
+    dashboardModel,
     saveChoices,
     commandForSave,
     commandForSplit,

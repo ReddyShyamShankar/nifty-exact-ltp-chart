@@ -81,6 +81,11 @@ test("strategy selection control remains a square token", () => {
   assert.match(selector, /width:\s*16px/);
   assert.match(selector, /height:\s*16px/);
   assert.match(selector, /border-radius:\s*2px/);
+
+  const collapsedCard = rule(".nifty-strategy__card.is-collapsed");
+  const collapsedSelector = rule(".nifty-strategy__card.is-collapsed .nifty-strategy__selector");
+  assert.match(collapsedCard, /grid-template-columns:\s*16px 28px/);
+  assert.match(collapsedSelector, /display:\s*block/);
 });
 
 test("strategy labels use tabular numerals and locked mono type", () => {

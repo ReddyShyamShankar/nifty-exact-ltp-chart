@@ -25,6 +25,28 @@ function book() {
   return value;
 }
 
+function leg(id, overrides = {}) {
+  return {
+    id,
+    source: "MANUAL",
+    instrumentKey: "NSE_DLY:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    strike: 24000,
+    optionType: "PUT",
+    direction: "SELL",
+    lots: 2,
+    premium: 183,
+    callSnapshot: 711.1,
+    putSnapshot: 70.85,
+    charges: [],
+    chargesComplete: false,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides
+  };
+}
+
 test("save always requires create-new or explicit destination", () => {
   assert.deepEqual(panel.saveChoices(book(), ["s1", "s2"]).map((item) => item.kind), ["CREATE_NEW", "MERGE_INTO"]);
   assert.throws(() => panel.commandForSave({ selectedIds: ["s1", "s2"] }), /destination/i);
@@ -87,4 +109,74 @@ test("view model exposes active versions and history without mutating book", () 
   assert.equal(result.active[0].versions.length, 1);
   assert.deepEqual(result.history, []);
   assert.deepEqual(value, before);
+});
+
+test("dashboard model groups strategies and derives compact cards from real legs", () => {
+  let value = book();
+  value = store.applyCommand(value, {
+    id: "add-s1", type: "ADD_LEG", strategyId: "s1", versionId: "s1-v2", leg: leg("leg-1")
+  }, NOW);
+  value = store.applyCommand(value, {
+    id: "add-s2", type: "ADD_LEG", strategyId: "s2", versionId: "s2-v2",
+    leg: leg("leg-2", { optionType: "CALL", direction: "BUY", strike: 25000, premium: 79, callSnapshot: 38.25 })
+  }, NOW);
+
+  const result = panel.dashboardModel(value, {
+    expandedStrategyId: "s1",
+    acceptedViewsByStrategy: {
+      s1: {
+        livePnl: "+₹14,580.00",
+        currentRisk: { lower: "23,817.00", upper: "—" },
+        maxProfit: "+₹23,790.00",
+        maxLoss: "UNBOUNDED"
+      }
+    }
+  });
+
+  assert.equal(result.groups.length, 1);
+  assert.equal(result.groups[0].underlying, "NIFTY");
+  assert.equal(result.groups[0].count, 2);
+  assert.deepEqual(result.groups[0].cards.map((card) => card.title), ["SHORT PUT · AUG 25", "LONG CALL · AUG 25"]);
+  assert.deepEqual(result.groups[0].cards[0].metrics, {
+    pnl: "+₹14,580.00", breakEven: "23,817.00", maxProfit: "+₹23,790.00", maxLoss: "UNBOUNDED"
+  });
+  assert.equal(result.groups[0].cards[0].expanded, true);
+  assert.deepEqual(result.groups[0].cards[0].legs[0], {
+    id: "leg-1", optionType: "P", strike: "24,000", direction: "SELL", lots: 2,
+    entry: "₹183.00", live: "₹70.85"
+  });
+});
+
+test("dashboard model keeps unavailable risk values honest and history collapsed", () => {
+  let value = book();
+  value = store.applyCommand(value, { id: "archive-s2", type: "ARCHIVE_STRATEGY", strategyId: "s2" }, NOW);
+  const result = panel.dashboardModel(value);
+
+  assert.deepEqual(result.groups[0].cards[0].metrics, {
+    pnl: "—", breakEven: "—", maxProfit: "—", maxLoss: "—"
+  });
+  assert.equal(result.history[0].status, "ARCHIVED");
+  assert.equal(result.history[0].expanded, false);
+});
+
+test("broker strategy card derives open P&L from broker position evidence", () => {
+  const value = store.applyCommand(store.emptyBook(), {
+    id: "broker-sync-panel",
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: "broker:BROKER:NFO:NIFTY:2026-08-25",
+    versionId: "broker-panel-v1",
+    snapshotId: "broker-panel-snapshot",
+    label: "BROKER · AUG 25",
+    instrumentKey: "BROKER:NFO:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    positions: [{
+      contractId: "NFO:NIFTY:2026-08-25:24000:PE", tradingsymbol: "NIFTY26AUG24000PE",
+      exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 24000,
+      optionType: "PE", signedQuantity: -130, lotSize: 65, averagePrice: 183, lastPrice: 70.85, pnl: 14580
+    }]
+  }, NOW);
+
+  const [card] = panel.dashboardModel(value).groups[0].cards;
+  assert.equal(card.metrics.pnl, "+₹14,580.00");
 });

@@ -8,7 +8,8 @@
   const EXPIRED = "EXPIRED";
   const STATUSES = new Set([ACTIVE, ARCHIVED, EXPIRED]);
   const OPERATIONS = new Set([
-    "CREATE", "ADD", "EDIT", "REMOVE", "MERGE", "SPLIT", "RESTORE", "MIGRATE_LEGACY_PLAN"
+    "CREATE", "ADD", "EDIT", "REMOVE", "MERGE", "SPLIT", "RESTORE", "MIGRATE_LEGACY_PLAN",
+    "SYNC_BROKER"
   ]);
 
   const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -55,7 +56,9 @@
       || !isIsoTimestamp(input.createdAt) || !isIsoTimestamp(input.updatedAt)) return null;
     const callSnapshot = input.callSnapshot === null ? null : finite(input.callSnapshot);
     const putSnapshot = input.putSnapshot === null ? null : finite(input.putSnapshot);
-    if ((callSnapshot !== null && callSnapshot < 0) || (putSnapshot !== null && putSnapshot < 0)) return null;
+    const brokerPnl = input.brokerPnl === undefined || input.brokerPnl === null ? null : finite(input.brokerPnl);
+    if ((callSnapshot !== null && callSnapshot < 0) || (putSnapshot !== null && putSnapshot < 0)
+      || (input.brokerPnl !== undefined && input.brokerPnl !== null && brokerPnl === null)) return null;
     const charges = Array.isArray(input.charges) ? input.charges.map(normalizeCharge) : [];
     if (charges.some((item) => item === null)) return null;
     return {
@@ -71,6 +74,7 @@
       premium: input.premium,
       callSnapshot,
       putSnapshot,
+      brokerPnl,
       charges,
       chargesComplete: input.chargesComplete === true,
       createdAt: input.createdAt,
@@ -379,6 +383,78 @@
     }
   }
 
+  function brokerPositionLeg(position, command, now) {
+    if (!isRecord(position) || !nonEmpty(position.contractId) || !nonEmpty(position.tradingsymbol)
+      || !nonEmpty(position.exchange) || position.underlying !== command.underlying
+      || position.expiry !== command.expiry || finite(position.strike) === null || position.strike <= 0
+      || !["CE", "PE"].includes(position.optionType)
+      || !Number.isInteger(position.signedQuantity) || position.signedQuantity === 0
+      || !Number.isInteger(position.lotSize) || position.lotSize <= 0
+      || position.signedQuantity % position.lotSize !== 0
+      || finite(position.averagePrice) === null || position.averagePrice < 0
+      || finite(position.lastPrice) === null || position.lastPrice < 0
+      || finite(position.pnl) === null) {
+      throw new Error("Broker position must have exact identity and whole lots.");
+    }
+    const contractId = `${position.exchange}:${command.underlying}:${command.expiry}:${position.strike}:${position.optionType}`;
+    if (position.contractId !== contractId) throw new Error("Broker position contract identity does not match strategy context.");
+    const optionType = position.optionType === "CE" ? "CALL" : "PUT";
+    return normalizeLeg({
+      id: `broker:${position.contractId}:${command.snapshotId}`,
+      source: "BROKER_POSITION",
+      instrumentKey: command.instrumentKey,
+      underlying: command.underlying,
+      expiry: command.expiry,
+      strike: position.strike,
+      optionType,
+      direction: position.signedQuantity > 0 ? "BUY" : "SELL",
+      lots: Math.abs(position.signedQuantity / position.lotSize),
+      premium: position.averagePrice,
+      callSnapshot: optionType === "CALL" ? position.lastPrice : null,
+      putSnapshot: optionType === "PUT" ? position.lastPrice : null,
+      brokerPnl: position.pnl,
+      charges: [],
+      chargesComplete: false,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  function commandSyncBroker(book, command, now) {
+    if (!nonEmpty(command.strategyId) || !nonEmpty(command.versionId) || !nonEmpty(command.snapshotId)
+      || !nonEmpty(command.instrumentKey) || !nonEmpty(command.underlying) || !isIsoDate(command.expiry)
+      || !Array.isArray(command.positions)) throw new Error("Broker strategy snapshot is invalid.");
+    const existing = book.strategies[command.strategyId] || null;
+    if (existing) requireCompatible(existing, command);
+    if (!command.positions.length) {
+      if (existing?.status === ACTIVE) {
+        existing.status = ARCHIVED;
+        existing.archivedReason = "BROKER_FLAT";
+        existing.updatedAt = now;
+      }
+      return;
+    }
+    const seen = new Set();
+    const legs = command.positions.map((position) => {
+      const item = brokerPositionLeg(position, command, now);
+      if (!item || seen.has(item.id) || book.legs[item.id]) throw new Error("Broker snapshot contains duplicate position identity.");
+      seen.add(item.id);
+      return item;
+    });
+    for (const item of legs) book.legs[item.id] = item;
+    if (!existing) {
+      createStrategy(book, command, now, {
+        operation: "SYNC_BROKER",
+        legIds: legs.map((item) => item.id)
+      });
+      return;
+    }
+    if (existing.status === EXPIRED) throw new Error("Expired broker strategy cannot be reopened.");
+    existing.status = ACTIVE;
+    existing.archivedReason = null;
+    createVersion(book, existing, command.versionId, "SYNC_BROKER", legs.map((item) => item.id), now);
+  }
+
   const COMMANDS = {
     CREATE_STRATEGY: commandCreate,
     ADD_LEG: commandAdd,
@@ -388,7 +464,8 @@
     SPLIT_STRATEGY: commandSplit,
     RESTORE_VERSION: commandRestore,
     ARCHIVE_STRATEGY: commandArchive,
-    EXPIRE_DUE: commandExpire
+    EXPIRE_DUE: commandExpire,
+    SYNC_BROKER_POSITIONS: commandSyncBroker
   };
 
   function applyCommand(input, command, now = new Date().toISOString()) {

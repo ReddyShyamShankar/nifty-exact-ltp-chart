@@ -40,6 +40,16 @@ test("any square synchronizes whole strategy selection", () => {
   assert.deepEqual(events, [["selection", ["s1"]], ["selection", []]]);
 });
 
+test("group selection replaces strategy membership in one update", () => {
+  const events = [];
+  const c = controller(events);
+  c.setSelected(["s1", "s2", "s1", "", null]);
+  assert.deepEqual(c.selected(), ["s1", "s2"]);
+  assert.deepEqual(events, [["selection", ["s1", "s2"]]]);
+  c.setSelected([]);
+  assert.deepEqual(c.selected(), []);
+});
+
 test("Compare and clear remain explicit independent actions", () => {
   const events = [];
   const c = controller(events);

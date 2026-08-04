@@ -205,3 +205,115 @@ test("non-NIFTY decimal instrument identity remains valid", () => {
 
   assert.equal(store.legsForStrategy(book, "eur-s1")[0].strike, 4250.5);
 });
+
+test("broker snapshot creates one live strategy with exact position legs", () => {
+  const book = store.applyCommand(store.emptyBook(), {
+    id: "broker-sync-1",
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: "broker:NSE_DLY:NIFTY:2026-08-25",
+    versionId: "broker-version-1",
+    snapshotId: "snapshot-1",
+    label: "BROKER · AUG 25",
+    instrumentKey: "NSE_DLY:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    positions: [{
+      contractId: "NFO:NIFTY:2026-08-25:24000:PE",
+      tradingsymbol: "NIFTY26AUG24000PE",
+      exchange: "NFO",
+      underlying: "NIFTY",
+      expiry: "2026-08-25",
+      strike: 24000,
+      optionType: "PE",
+      signedQuantity: -130,
+      lotSize: 65,
+      averagePrice: 183,
+      lastPrice: 70.85,
+      pnl: 14580
+    }, {
+      contractId: "NFO:NIFTY:2026-08-25:25000:CE",
+      tradingsymbol: "NIFTY26AUG25000CE",
+      exchange: "NFO",
+      underlying: "NIFTY",
+      expiry: "2026-08-25",
+      strike: 25000,
+      optionType: "CE",
+      signedQuantity: 65,
+      lotSize: 65,
+      averagePrice: 67,
+      lastPrice: 72,
+      pnl: 325
+    }]
+  }, NOW);
+
+  const [strategy] = store.activeStrategies(book, "NSE_DLY:NIFTY", "2026-08-25");
+  assert.equal(strategy.id, "broker:NSE_DLY:NIFTY:2026-08-25");
+  assert.equal(strategy.label, "BROKER · AUG 25");
+  assert.deepEqual(store.legsForStrategy(book, strategy.id).map((item) => ({
+    source: item.source,
+    optionType: item.optionType,
+    direction: item.direction,
+    lots: item.lots,
+    premium: item.premium,
+    live: item.optionType === "CALL" ? item.callSnapshot : item.putSnapshot,
+    brokerPnl: item.brokerPnl
+  })), [{
+    source: "BROKER_POSITION", optionType: "PUT", direction: "SELL", lots: 2, premium: 183, live: 70.85,
+    brokerPnl: 14580
+  }, {
+    source: "BROKER_POSITION", optionType: "CALL", direction: "BUY", lots: 1, premium: 67, live: 72,
+    brokerPnl: 325
+  }]);
+});
+
+test("flat broker snapshot archives live strategy while preserving its version", () => {
+  const command = {
+    id: "broker-sync-open",
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: "broker:NSE_DLY:NIFTY:2026-08-25",
+    versionId: "broker-version-open",
+    snapshotId: "snapshot-open",
+    label: "BROKER · AUG 25",
+    instrumentKey: "NSE_DLY:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    positions: [{
+      contractId: "NFO:NIFTY:2026-08-25:24000:PE", tradingsymbol: "NIFTY26AUG24000PE",
+      exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 24000,
+      optionType: "PE", signedQuantity: -65, lotSize: 65, averagePrice: 183, lastPrice: 70.85, pnl: 7290
+    }]
+  };
+  const open = store.applyCommand(store.emptyBook(), command, NOW);
+  const flat = store.applyCommand(open, {
+    ...command,
+    id: "broker-sync-flat",
+    versionId: "broker-version-flat",
+    snapshotId: "snapshot-flat",
+    positions: []
+  }, LATER);
+
+  const strategy = store.strategyById(flat, command.strategyId);
+  assert.equal(strategy.status, store.ARCHIVED);
+  assert.equal(strategy.archivedReason, "BROKER_FLAT");
+  assert.deepEqual(store.legsForStrategy(flat, strategy.id).map((item) => item.id),
+    store.legsForStrategy(open, strategy.id).map((item) => item.id));
+});
+
+test("broker snapshot rejects fractional lots atomically", () => {
+  assert.throws(() => store.applyCommand(store.emptyBook(), {
+    id: "broker-sync-invalid",
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: "broker:NSE_DLY:NIFTY:2026-08-25",
+    versionId: "broker-version-invalid",
+    snapshotId: "snapshot-invalid",
+    label: "BROKER · AUG 25",
+    instrumentKey: "NSE_DLY:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    positions: [{
+      contractId: "NFO:NIFTY:2026-08-25:24000:PE", tradingsymbol: "NIFTY26AUG24000PE",
+      exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 24000,
+      optionType: "PE", signedQuantity: -1, lotSize: 65, averagePrice: 183, lastPrice: 70.85, pnl: 0
+    }]
+  }, NOW), /whole lots/i);
+});

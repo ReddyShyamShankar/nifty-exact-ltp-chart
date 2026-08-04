@@ -20,6 +20,10 @@
             <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
           </button>
         </div>
+        <nav class="panel-tabs" role="tablist" aria-label="Options ladder views">
+          <button class="panel-tab mono is-active" id="panel-tab-ladder" type="button" role="tab" aria-selected="true" aria-controls="ladder-view">LADDER</button>
+          <button class="panel-tab mono" id="panel-tab-strategies" type="button" role="tab" aria-selected="false" aria-controls="strategies-view">STRATEGIES</button>
+        </nav>
         <div class="quick-toggle">
           <div><strong>Show ladder on chart</strong><span class="mono">TV axis contracts</span></div>
           <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show ladder on chart"><i></i></button>
@@ -28,6 +32,19 @@
           <span class="refresh-glyph" aria-hidden="true"></span><span id="refresh-label">REFRESH ALL</span>
         </button>
       </header>
+
+      <section class="strategies-view" id="strategies-view" role="tabpanel" aria-labelledby="panel-tab-strategies" hidden>
+        <div class="strategies-view__head">
+          <div>
+            <span class="strategies-view__eyebrow mono">MY STRATEGIES</span>
+            <strong>Strategy cards</strong>
+          </div>
+          <button class="dashboard-primary mono" id="new-strategy" type="button">＋ NEW STRATEGY</button>
+        </div>
+        <div class="strategy-dashboard" id="strategy-dashboard" aria-live="polite"></div>
+      </section>
+
+      <div id="ladder-view" role="tabpanel" aria-labelledby="panel-tab-ladder">
 
       <section class="contract-bar" aria-label="Broker and contract">
         <div class="broker-state">
@@ -131,6 +148,7 @@
       <section class="advanced-panel" id="advanced-panel" hidden>
         <button class="secondary-button wide mono" id="retry-placement" type="button">RETRY PLACEMENT</button>
       </section>
+      </div>
 
       <footer class="foot mono">READ-ONLY BROKER DATA · INFORMATION ONLY</footer>
     </main>

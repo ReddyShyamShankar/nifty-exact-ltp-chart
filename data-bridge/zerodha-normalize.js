@@ -14,6 +14,7 @@ function exactIsoDate(expiry) {
 function canonicalIdentity(symbol, expiry, expiryKind) {
   const value = typeof symbol === "string" ? symbol.trim().toUpperCase() : "";
   if (!value.startsWith("NIFTY")) return null;
+  if (/^NIFTY\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)FUT$/.test(value)) return null;
   const monthly = value.match(/^NIFTY(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)([1-9]\d{3,5})(CE|PE)$/);
   const weekly = value.match(/^NIFTY(\d{2})([1-9OND])(\d{2})([1-9]\d{3,5})(CE|PE)$/);
   let strike;

@@ -6,6 +6,10 @@
   const PREMIUM_STRIKE_MAP_ID = "options-premium-strike-map";
   const PREMIUM_CHART_TRIALS_ID = "options-premium-chart-trials";
   const RISK_LABEL_GAP_PX = 12;
+  const EDGE_STACK_GAP_PX = 4;
+  const POSITION_CONTROL_WIDTH_PX = 47;
+  const POSITION_LANE_GAP_PX = 6;
+  const POSITION_PUT_GUTTER_PX = 60;
   const BREAK_EVEN_LABEL_HEIGHT = 15;
   const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
   const timeframeApi = root.NiftyTimeframeLadder
@@ -45,6 +49,7 @@
     uiTheme: "dark",
     expiry: "current_month",
     panelOpen: false,
+    brokerConnection: null,
     selectedStrategyId: "",
     sellerSafetyView: null,
     sellerSafetyChartView: null,
@@ -61,6 +66,41 @@
     if (typeof value === "string" && value.trim() === "") return null;
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  function openInterest(value) {
+    const numeric = quote(value);
+    return numeric !== null && numeric >= 0 ? numeric : null;
+  }
+
+  function rankOpenInterestRows(rows) {
+    if (!Array.isArray(rows)) return [];
+    const ranksFor = (key) => {
+      const values = [...new Set(rows
+        .map((row) => openInterest(row?.[key]))
+        .filter((value) => value !== null && value > 0))]
+        .sort((left, right) => right - left);
+      return new Map(values.map((value, index) => [value, index + 1]));
+    };
+    const callRanks = ranksFor("callOi");
+    const putRanks = ranksFor("putOi");
+    return rows.map((row) => {
+      const hasCallOi = Object.prototype.hasOwnProperty.call(row || {}, "callOi");
+      const hasPutOi = Object.prototype.hasOwnProperty.call(row || {}, "putOi");
+      const callOi = openInterest(row?.callOi);
+      const putOi = openInterest(row?.putOi);
+      return {
+        ...row,
+        ...(hasCallOi ? {
+          callOi,
+          callOiRank: callOi !== null && callOi > 0 ? callRanks.get(callOi) ?? null : null
+        } : {}),
+        ...(hasPutOi ? {
+          putOi,
+          putOiRank: putOi !== null && putOi > 0 ? putRanks.get(putOi) ?? null : null
+        } : {})
+      };
+    });
   }
 
   function riskBandClassName(band) {
@@ -92,6 +132,75 @@
     if (new Set(entries.map((entry) => entry.strike)).size !== entries.length) return null;
 
     return { mode: "single", laneCount: 1, lanes: Array(entries.length).fill(0) };
+  }
+
+  function displayAtmStrike(visibleStrikes = [], atm) {
+    const target = Number(atm);
+    const strikes = [...new Set((Array.isArray(visibleStrikes) ? visibleStrikes : [])
+      .map(Number)
+      .filter(Number.isFinite))];
+    if (!strikes.length || !Number.isFinite(target)) return null;
+    return strikes.reduce((nearest, strike) => {
+      const distance = Math.abs(strike - target);
+      const nearestDistance = Math.abs(nearest - target);
+      return distance < nearestDistance || (distance === nearestDistance && strike > nearest)
+        ? strike
+        : nearest;
+    }, strikes[0]);
+  }
+
+  function positionSpineBounds(points = [], rect = {}) {
+    const ys = (Array.isArray(points) ? points : [])
+      .map((point) => Number(point?.y ?? point))
+      .filter((y) => Number.isFinite(y)
+        && y >= Number(rect.top)
+        && y <= Number(rect.bottom));
+    if (!ys.length) return null;
+    return { top: Math.min(...ys), bottom: Math.max(...ys) };
+  }
+
+  function positionSpineLayout(ladderLeft, rect = {}, viewportWidth = 0) {
+    const plotLeft = Number(rect.left);
+    const plotRight = Number(rect.right);
+    const width = Number(viewportWidth);
+    const requestedLadderLeft = Number(ladderLeft);
+    if (![plotLeft, plotRight, width, requestedLadderLeft].every(Number.isFinite)
+      || plotRight <= plotLeft || width <= 0) return null;
+    const resolvedLadderLeft = Math.max(plotLeft, Math.min(plotRight, requestedLadderLeft));
+    const minimumSpine = plotLeft + POSITION_CONTROL_WIDTH_PX * 2 + POSITION_LANE_GAP_PX * 3;
+    const spineX = Math.max(minimumSpine, resolvedLadderLeft - POSITION_PUT_GUTTER_PX);
+    const call = {
+      left: spineX - POSITION_LANE_GAP_PX - POSITION_CONTROL_WIDTH_PX,
+      right: spineX - POSITION_LANE_GAP_PX
+    };
+    const put = {
+      left: spineX + POSITION_LANE_GAP_PX,
+      right: spineX + POSITION_LANE_GAP_PX + POSITION_CONTROL_WIDTH_PX
+    };
+    const strategy = {
+      left: call.left - POSITION_LANE_GAP_PX - POSITION_CONTROL_WIDTH_PX,
+      right: call.left - POSITION_LANE_GAP_PX
+    };
+    return {
+      ladderLeft: resolvedLadderLeft,
+      spineX,
+      call,
+      put,
+      strategy,
+      hasSafePutGap: put.right <= resolvedLadderLeft - 3
+    };
+  }
+
+  function breakEvenLabelRight(ladderLeft, rect = {}, viewportWidth = 0, hasPositionControls = false) {
+    const plotLeft = Number(rect.left);
+    const plotRight = Number(rect.right);
+    const requested = Number(ladderLeft);
+    if (![plotLeft, plotRight, requested].every(Number.isFinite) || plotRight <= plotLeft) return null;
+    const resolved = Math.max(plotLeft, Math.min(plotRight, requested));
+    if (!hasPositionControls) return resolved;
+    const layout = positionSpineLayout(resolved, rect, viewportWidth);
+    if (!layout?.hasSafePutGap) return resolved;
+    return Math.max(plotLeft, layout.strategy.left - POSITION_LANE_GAP_PX);
   }
 
   function visibleRowIndexes(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
@@ -217,6 +326,39 @@
     return { labelRight: Math.min(...rects.map((rect) => rect.left)) - RISK_LABEL_GAP_PX };
   }
 
+  function edgeStackClusters(items, minimumGap = 20) {
+    const gap = Number.isFinite(Number(minimumGap)) && Number(minimumGap) > 0
+      ? Number(minimumGap)
+      : 20;
+    const ordered = (Array.isArray(items) ? items : [])
+      .map((item, index) => ({ ...item, y: Number(item?.y), _index: index }))
+      .filter((item) => Number.isFinite(item.y))
+      .sort((left, right) => left.y - right.y
+        || String(left.id).localeCompare(String(right.id))
+        || left._index - right._index);
+    const clusters = [];
+    ordered.forEach((item) => {
+      const current = clusters.at(-1);
+      if (!current || item.y - current.lastY >= gap) {
+        clusters.push({ items: [item], lastY: item.y });
+        return;
+      }
+      current.items.push(item);
+      current.lastY = item.y;
+    });
+    return clusters.map((cluster) => ({
+      key: cluster.items.map((item) => String(item.id)).sort().join("|"),
+      y: cluster.items.reduce((sum, item) => sum + item.y, 0) / cluster.items.length,
+      items: cluster.items.map(({ _index, ...item }) => item)
+    }));
+  }
+
+  function positionSideClusters(items, minimumGap = 20) {
+    return ["call", "put"].flatMap((side) => edgeStackClusters((Array.isArray(items) ? items : [])
+      .filter((item) => String(item?.side || "").toLowerCase() === side), minimumGap)
+      .map((cluster) => ({ ...cluster, side })));
+  }
+
   function axisPriceToY(axisPairs) {
     if (!Array.isArray(axisPairs) || axisPairs.length < 2) return null;
     const pairs = axisPairs.map((pair) => ({ price: Number(pair?.price), y: Number(pair?.y) }));
@@ -246,13 +388,33 @@
     return priceDelta / pixelDelta * gap;
   }
 
-  function freezeMembership({ timeframe, expiry, interval, nativeInterval = interval, axisPrices, spot, chainRows, tieDirection = "up" }) {
-    const selection = timeframeApi.selectAxisAlignedRows(chainRows, spot, axisPrices, undefined, tieDirection);
+  function freezeMembership({ timeframe, expiry, interval, nativeInterval = interval, axisPrices, spot, chainRows, tieDirection = "up", pinnedStrikes = [] }) {
+    const rankedRows = rankOpenInterestRows(chainRows);
+    const selection = timeframeApi.selectAxisAlignedRows(rankedRows, spot, axisPrices, undefined, tieDirection);
     if (!selection?.rows?.length) return null;
-    const rows = selection.rows.map((row) => Object.freeze({
+    const selectedStrikes = new Set(selection.rows.map((row) => Number(row.strike)));
+    const chainByStrike = new Map(rankedRows.map((row) => [Number(row?.strike), row]));
+    const pins = [...new Set((Array.isArray(pinnedStrikes) ? pinnedStrikes : [])
+      .map(Number)
+      .filter((strike) => Number.isFinite(strike) && chainByStrike.has(strike)))]
+      .sort((left, right) => left - right);
+    const offGridStrikes = pins.filter((strike) => !selectedStrikes.has(strike));
+    const rows = [...selectedStrikes]
+      .sort((left, right) => left - right)
+      .map((strike) => chainByStrike.get(strike))
+      .filter(Boolean)
+      .map((row) => Object.freeze({
       strike: Number(row.strike),
       call: quote(row.call),
-      put: quote(row.put)
+      put: quote(row.put),
+      ...(Object.prototype.hasOwnProperty.call(row, "callOi") ? {
+        callOi: openInterest(row.callOi),
+        callOiRank: Number.isInteger(row.callOiRank) ? row.callOiRank : null
+      } : {}),
+      ...(Object.prototype.hasOwnProperty.call(row, "putOi") ? {
+        putOi: openInterest(row.putOi),
+        putOiRank: Number.isInteger(row.putOiRank) ? row.putOiRank : null
+      } : {})
     }));
     const strikes = rows.map((row) => row.strike);
     const visibleStrikes = strikes.slice();
@@ -267,20 +429,30 @@
       atm: selection.center,
       strikes: Object.freeze(strikes.slice()),
       visibleStrikes: Object.freeze(visibleStrikes),
+      pinnedStrikes: Object.freeze(pins),
+      offGridStrikes: Object.freeze(offGridStrikes),
       rows: Object.freeze(rows)
     });
   }
 
   function refreshMembership(membership, chainRows) {
     if (!membership || !Array.isArray(chainRows)) return membership;
-    const byStrike = new Map(chainRows.map((row) => [Number(row?.strike), row]));
+    const byStrike = new Map(rankOpenInterestRows(chainRows).map((row) => [Number(row?.strike), row]));
     const rows = membership.rows.map((row) => {
       const live = byStrike.get(row.strike);
       if (!live) return row;
       return Object.freeze({
         strike: row.strike,
         call: quote(live.call),
-        put: quote(live.put)
+        put: quote(live.put),
+        ...(Object.prototype.hasOwnProperty.call(live, "callOi") ? {
+          callOi: openInterest(live.callOi),
+          callOiRank: Number.isInteger(live.callOiRank) ? live.callOiRank : null
+        } : {}),
+        ...(Object.prototype.hasOwnProperty.call(live, "putOi") ? {
+          putOi: openInterest(live.putOi),
+          putOiRank: Number.isInteger(live.putOiRank) ? live.putOiRank : null
+        } : {})
       });
     });
     return Object.freeze({
@@ -297,7 +469,7 @@
       && left.strikes.every((strike, index) => strike === right.strikes[index]);
   }
 
-  function refreshMembershipAtSpot(membership, chainRows, spot, tieDirection = "up") {
+  function refreshMembershipAtSpot(membership, chainRows, spot, tieDirection = "up", pinnedStrikes = membership?.pinnedStrikes || []) {
     const refreshed = refreshMembership(membership, chainRows);
     const atm = timeframeApi.nearestAvailableStrike(chainRows, spot, tieDirection);
     if (!refreshed || !Number.isFinite(atm)) return refreshed;
@@ -310,7 +482,8 @@
         axisPrices: refreshed.axisPrices,
         spot,
         chainRows,
-        tieDirection
+        tieDirection,
+        pinnedStrikes
       });
       if (reselection) return reselection;
     }
@@ -352,6 +525,7 @@
     const beginVisualPlacement = dependencies.beginVisualPlacement || (() => undefined);
     const currentVisualPlacementRevision = dependencies.currentVisualPlacementRevision || (() => undefined);
     const isVisualPlacementCurrent = dependencies.isVisualPlacementCurrent || (() => true);
+    const activeStrikes = dependencies.activeStrikes || (() => []);
     let expiry = dependencies.expiry || DEFAULTS.expiry;
     const scheduleRetry = dependencies.scheduleRetry || ((run, delay) => setTimeout(run, delay));
     const cancelRetry = dependencies.cancelRetry || clearTimeout;
@@ -647,7 +821,8 @@
           nativeInterval: secondNativeInterval,
           axisPrices: secondScale.axisPairs.map((pair) => Number(pair.price)),
           spot: Number(chain.spot),
-          chainRows: chain.rows
+          chainRows: chain.rows,
+          pinnedStrikes: activeStrikes()
         });
         if (!membership) {
           return failRebuild(localGeneration, timeframe, requestedExpiry, signal, "VISIBLE AXIS CONTRACTS UNAVAILABLE", minimumObservedAt, true, visualPlacementRevision);
@@ -733,7 +908,7 @@
           ? "up"
           : membership.atm <= spot ? "down" : "up";
         current = Number.isFinite(spot)
-          ? refreshMembershipAtSpot(membership, chain?.rows, spot, direction)
+          ? refreshMembershipAtSpot(membership, chain?.rows, spot, direction, activeStrikes())
           : refreshMembership(membership, chain?.rows);
         refreshOwnedMembership = current;
         acceptedFreshData = true;
@@ -811,7 +986,8 @@
           nativeInterval,
           axisPrices: scale.axisPairs.map((pair) => Number(pair.price)),
           spot: Number(cachedChain?.spot ?? latestMembership.atm),
-          chainRows: cachedChain?.rows || latestMembership.rows
+          chainRows: cachedChain?.rows || latestMembership.rows,
+          pinnedStrikes: activeStrikes()
         });
         if (!axisMembership) throw new Error("Visible axis contracts are unavailable.");
         const membershipChanged = !sameStrikes(latestMembership, axisMembership);
@@ -938,6 +1114,8 @@
   const api = {
     applyRiskStorageChanges,
     axisPriceToY,
+    edgeStackClusters,
+    positionSideClusters,
     createLadderController,
     formatRow,
     freezeMembership,
@@ -948,12 +1126,17 @@
     riskBandClassName,
     riskLabelLayout,
     rowLaneLayout,
+    displayAtmStrike,
+    positionSpineBounds,
+    positionSpineLayout,
+    breakEvenLabelRight,
     rowsFitPlot,
     strategyOwnershipChoices,
     chartInstrumentIdentity,
     normalizePremiumTimeAxis,
     premiumHistoryRange,
     premiumHistoryStatusMessage,
+    rankOpenInterestRows,
     setPremiumTimeSync,
     visibleRowIndexes,
     priceScaleFailure
@@ -1008,6 +1191,8 @@
   let expandedManualRailDisclosure = null;
   let strategyChartController = null;
   let openedStrategyId = null;
+  let visibleStrategyRailId = null;
+  let openedEdgeGroupKey = null;
   let strategyOwnershipChooser = null;
   let premiumHistoryPane = null;
   let premiumChartPlacement = null;
@@ -1201,6 +1386,7 @@
       primary: computed?.getPropertyValue?.("--theme-ink")?.trim() || "#18181b",
       secondary: computed?.getPropertyValue?.("--theme-ink-dim")?.trim() || "#52525b",
       accent: computed?.getPropertyValue?.("--theme-warn")?.trim() || "#bd5505",
+      danger: computed?.getPropertyValue?.("--theme-danger")?.trim() || "#dc2626",
       background: computed?.getPropertyValue?.("--theme-bg")?.trim() || "#ffffff",
       panel: computed?.getPropertyValue?.("--theme-panel")?.trim()
         || computed?.getPropertyValue?.("--theme-bg")?.trim() || "#ffffff",
@@ -1212,7 +1398,7 @@
     colors.neutralFill = isLight ? colors.primary : colors.panel;
     colors.neutralInk = isLight ? colors.background : colors.primary;
     colors.callFill = computed?.getPropertyValue?.("--theme-accent")?.trim() || colors.primary;
-    colors.putFill = colors.accent;
+    colors.putFill = colors.danger;
     colors.callInk = isLight ? computed?.getPropertyValue?.("--theme-status-ink")?.trim() || colors.background
       : colors.contrastInk;
     colors.putInk = colors.callInk;
@@ -1334,8 +1520,10 @@
   }
 
   function collapseOpenedStrategyDetails() {
-    if (!openedStrategyId) return false;
+    if (!openedStrategyId && !openedEdgeGroupKey) return false;
     openedStrategyId = null;
+    visibleStrategyRailId = null;
+    openedEdgeGroupKey = null;
     void controller?.place();
     return true;
   }
@@ -1514,7 +1702,45 @@
   }
 
   function manualEntriesByStrike() {
-    return manualPlanApi.groupByStrike(manualEntriesForExpiry());
+    return manualPlanApi.groupByStrike(activeLadderEntries());
+  }
+
+  function activeLadderEntries() {
+    const entries = manualEntriesForExpiry();
+    if (!strategyStoreApi) return entries;
+    const brokerEntries = activeChartStrategies().flatMap((strategy) =>
+      strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+        .filter((entry) => entry.source === "BROKER_POSITION"));
+    return [...new Map([...entries, ...brokerEntries].map((entry) => [entry.id, entry])).values()];
+  }
+
+  function activeTradeStrikes() {
+    return [...new Set(activeLadderEntries().map((entry) => Number(entry.strike))
+      .filter(Number.isFinite))];
+  }
+
+  function offGridTradeGroups(membership, entriesByStrike = manualEntriesByStrike()) {
+    const offGrid = new Set(membership?.offGridStrikes || []);
+    return [...offGrid].sort((left, right) => left - right).flatMap((strike) => {
+      const entries = (entriesByStrike.get(strike) || [])
+        .filter((entry) => entry?.source !== "BROKER_POSITION");
+      return ["BUY", "SELL"].flatMap((direction) => {
+        const matching = entries.filter((entry) => entry.direction === direction);
+        if (!matching.length) return [];
+        const callLots = matching.filter((entry) => entry.optionType === "CALL")
+          .reduce((sum, entry) => sum + Number(entry.lots || 0), 0);
+        const putLots = matching.filter((entry) => entry.optionType === "PUT")
+          .reduce((sum, entry) => sum + Number(entry.lots || 0), 0);
+        const exposure = [callLots ? `C${callLots}` : "", putLots ? `P${putLots}` : ""]
+          .filter(Boolean).join(" ");
+        return [{
+          strike,
+          direction,
+          token: exposure,
+          label: `${exposure} · ${strike.toLocaleString("en-IN")}`
+        }];
+      });
+    });
   }
 
   function closeManualEditor() {
@@ -1580,9 +1806,12 @@
         closeManualEditorForOtherRow(strike);
         handleQuickSelection(liveRow);
       },
-      onFace: ({ strike }) => {
+      onFace: ({ strike, liveRow }) => {
         closeManualEditorForOtherRow(strike);
-        clearBreakEvenSelection();
+        if (breakEvenSelection.current()?.strike !== strike && liveRow) {
+          clearBreakEvenRails();
+          breakEvenSelection.select(liveRow);
+        }
         renderManualRows([strike]);
         void controller?.place();
       },
@@ -1708,6 +1937,7 @@
     const existing = new Map([...node.querySelectorAll(".nifty-axis-ladder__row")]
       .map((row) => [Number(row.dataset.strike), row]));
     const entriesByStrike = manualEntriesByStrike();
+    node.querySelectorAll(".nifty-axis-ladder__off-grid").forEach((element) => element.remove());
     rows.forEach((row) => {
       let element = existing.get(row.strike);
       if (!element) {
@@ -1723,6 +1953,20 @@
       element.hidden = true;
       existing.delete(row.strike);
     });
+    const offGridGroups = offGridTradeGroups(membership, entriesByStrike);
+    if (offGridGroups.length) {
+      offGridGroups.forEach((group) => {
+        const chip = document.createElement("div");
+        chip.className = `nifty-axis-ladder__off-grid is-${group.direction.toLowerCase()}`;
+        chip.dataset.strike = String(group.strike);
+        chip.dataset.direction = group.direction;
+        chip.textContent = group.token;
+        chip.setAttribute("aria-label", `${group.label} ${group.direction}`);
+        chip.setAttribute("title", `${group.label} ${group.direction}`);
+        chip.hidden = true;
+        node.append(chip);
+      });
+    }
     existing.forEach((row) => row.remove());
     manualRowsConcealed = false;
     node.hidden = false;
@@ -1801,7 +2045,8 @@
     if (!strategyChartApi?.createController) return null;
     strategyChartController = strategyChartApi.createController({
       onOpen(strategyId) {
-        openedStrategyId = strategyId;
+        openedStrategyId = openedStrategyId === strategyId ? null : strategyId;
+        visibleStrategyRailId = null;
         void controller?.place();
       },
       onSelection() {
@@ -1824,6 +2069,8 @@
 
   function clearStrategyPreview() {
     openedStrategyId = null;
+    visibleStrategyRailId = null;
+    openedEdgeGroupKey = null;
     strategyOwnershipChooser?.remove?.();
     strategyOwnershipChooser = null;
     installStrategyChartController();
@@ -1834,18 +2081,35 @@
     return chartInstrumentIdentity(chartCanvas()?.getAttribute("aria-label") || "");
   }
 
+  function brokerConnectionAllowsChart() {
+    const connection = settings.brokerConnection;
+    if (!connection || typeof connection !== "object") return true;
+    return connection.connected === true;
+  }
+
   function activeChartStrategies() {
     const identity = currentStrategyIdentity();
     if (!identity || !strategyStoreApi) return [];
     const liveEntryIds = liveManualEntryIds();
-    return strategyStoreApi.activeStrategies(settings.strategyBook, identity.instrumentKey, settings.expiry)
-      .filter((strategy) => strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
-        .some((leg) => liveEntryIds.has(leg.id)));
+    const exact = strategyStoreApi.activeStrategies(settings.strategyBook, identity.instrumentKey, settings.expiry);
+    const broker = brokerConnectionAllowsChart()
+      ? strategyStoreApi.activeStrategies(settings.strategyBook, undefined, settings.expiry)
+        .filter((strategy) => strategy.underlying === identity.underlying
+          && strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+            .some((leg) => leg.source === "BROKER_POSITION"))
+      : [];
+    const strategies = [...new Map([...exact, ...broker].map((strategy) => [strategy.id, strategy])).values()];
+    return strategies.filter((strategy) => strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+      .some((leg) => isLiveChartEntry(leg, liveEntryIds)));
   }
 
   function liveManualEntryIds() {
     return new Set(manualPlanApi.entriesFor(settings.manualPlans, settings.expiry)
       .map((entry) => entry.id));
+  }
+
+  function isLiveChartEntry(entry, liveEntryIds) {
+    return liveEntryIds.has(entry.id) || entry.source === "BROKER_POSITION";
   }
 
   function knownStrategyCharges(entries) {
@@ -1861,6 +2125,9 @@
       const pnl = manualPayoffApi?.positionPnl?.(entry, row, 65);
       const side = entry.optionType === "CALL" ? "C" : "P";
       return {
+        entry,
+        side,
+        direction: entry.direction,
         text: `${side} ${Number(entry.strike).toLocaleString("en-IN")} ${entry.direction} ×${entry.lots}`,
         pnl: signedApproxRupees(pnl),
         tone: pnl > 0 ? "profit" : pnl < 0 ? "loss" : "flat"
@@ -1868,42 +2135,95 @@
     });
   }
 
+  function brokerLegViewId(strategyId, entryId) {
+    return `${strategyId}::leg::${entryId}`;
+  }
+
+  function brokerEntriesInDisplayOrder(entries) {
+    return [...entries].sort((a, b) => Number(a.strike) - Number(b.strike)
+      || String(a.optionType).localeCompare(String(b.optionType))
+      || String(a.id).localeCompare(String(b.id)));
+  }
+
+  function strategyLevelModels({ strategyId, strategyLabel, entries, viewKind = "STANDARD" }) {
+    const chargeOffset = knownStrategyCharges(entries) / 65;
+    const result = manualPayoffApi?.levels?.(entries, `${strategyLabel} BE`, chargeOffset);
+    if (result?.status !== "ok") return [];
+    const chargesComplete = entries.every((entry) => entry.chargesComplete === true);
+    const callCount = entries.filter((entry) => entry.optionType === "CALL").length;
+    const putCount = entries.length - callCount;
+    return result.levels.map((level) => ({
+      kind: "STRATEGY",
+      viewKind,
+      strategyId,
+      strategyLabel,
+      exact: level.exact,
+      label: level.label,
+      selected: ensureStrategyChartController()?.isSelected(strategyId) || false,
+      entries,
+      detailHeight: viewKind === "BROKER_COMBINED"
+        ? 72 + Math.max(callCount, putCount, 1) * 27 + (chargesComplete ? 0 : 27)
+        : null,
+      disclosure: chargesComplete ? null : "EXCLUDING UNKNOWN CHARGES"
+    }));
+  }
+
   function originalStrategyModels() {
     const liveEntryIds = liveManualEntryIds();
     return activeChartStrategies().flatMap((strategy) => {
       const entries = strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
-        .filter((entry) => liveEntryIds.has(entry.id));
-      const chargeOffset = knownStrategyCharges(entries) / 65;
-      const result = manualPayoffApi?.levels?.(entries, `${strategy.label} BE`, chargeOffset);
-      if (result?.status !== "ok") return [];
-      const chargesComplete = entries.every((entry) => entry.chargesComplete === true);
-      return result.levels.map((level) => ({
-        kind: "STRATEGY",
+        .filter((entry) => isLiveChartEntry(entry, liveEntryIds));
+      const brokerEntries = entries.filter((entry) => entry.source === "BROKER_POSITION");
+      if (!brokerEntries.length) {
+        return strategyLevelModels({ strategyId: strategy.id, strategyLabel: strategy.label, entries });
+      }
+      const ordered = brokerEntriesInDisplayOrder(brokerEntries);
+      const combined = strategyLevelModels({
         strategyId: strategy.id,
         strategyLabel: strategy.label,
-        exact: level.exact,
-        label: level.label,
-        selected: ensureStrategyChartController()?.isSelected(strategy.id) || false,
-        entries,
-        disclosure: chargesComplete ? null : "EXCLUDING UNKNOWN CHARGES"
+        entries: ordered,
+        viewKind: "BROKER_COMBINED"
+      });
+      const individuals = ordered.flatMap((entry, index) => strategyLevelModels({
+        strategyId: brokerLegViewId(strategy.id, entry.id),
+        strategyLabel: `B${index + 1}`,
+        entries: [entry],
+        viewKind: "BROKER_LEG"
       }));
+      return [...combined, ...individuals];
     });
   }
 
-  function combinedStrategyModels() {
+  function combinedStrategyModels(originals = []) {
     const selectedIds = ensureStrategyChartController()?.selected() || [];
     if (selectedIds.length < 2 || !strategyPreviewApi) return { models: [], preview: null };
-    const preview = strategyPreviewApi.buildPreview(
-      settings.strategyBook,
-      selectedIds,
-      controller?.membership()?.rows || [],
-      {
-        lotSize: 65,
-        quoteUpdatedAt: controller?.chain()?.updatedAt,
-        now: new Date().toISOString(),
-        maxQuoteAgeMs: SELLER_SAFETY_STALE_MS
+    const previewOptions = {
+      lotSize: 65,
+      quoteUpdatedAt: controller?.chain()?.updatedAt,
+      now: new Date().toISOString(),
+      maxQuoteAgeMs: SELLER_SAFETY_STALE_MS
+    };
+    const hasVirtualSelection = selectedIds.some((id) => id.includes("::leg::"));
+    const modelById = new Map(originals.map((model) => [model.strategyId, model]));
+    const preview = hasVirtualSelection && strategyPreviewApi.buildPreviewFromGroups
+      ? {
+        ...strategyPreviewApi.buildPreviewFromGroups(selectedIds.map((id) => {
+          const model = modelById.get(id);
+          return model ? {
+            id,
+            instrumentKey: model.entries[0]?.instrumentKey,
+            expiry: model.entries[0]?.expiry,
+            entries: model.entries
+          } : null;
+        }), controller?.membership()?.rows || [], previewOptions),
+        virtualSelection: true
       }
-    );
+      : strategyPreviewApi.buildPreview(
+        settings.strategyBook,
+        selectedIds,
+        controller?.membership()?.rows || [],
+        previewOptions
+      );
     if (preview.status !== "OK") return { models: [], preview };
     return {
       preview,
@@ -1940,7 +2260,7 @@
     save.type = "button";
     save.className = "nifty-strategy-preview__save";
     save.textContent = "Save";
-    save.disabled = preview?.status !== "OK" || !strategyPanelApi;
+    save.disabled = preview?.status !== "OK" || preview?.virtualSelection === true || !strategyPanelApi;
     save.addEventListener("click", (event) => {
       event.stopPropagation?.();
       bar.querySelector(".nifty-strategy-preview__save-chooser")?.remove();
@@ -2035,6 +2355,10 @@
 
   function appendStrategyDetails(card, model) {
     if (model.kind !== "STRATEGY" || openedStrategyId !== model.strategyId) return;
+    if (model.viewKind === "BROKER_COMBINED") {
+      appendBrokerMatrix(card, model);
+      return;
+    }
     const details = document.createElement("span");
     details.className = "nifty-strategy__trades";
     strategyPnlItems(model.entries).forEach((item) => {
@@ -2056,18 +2380,425 @@
     card.append(details);
   }
 
-  function placeStrategyRails(toY, rect, labelRight, visualPlacementRevision) {
+  function appendBrokerMatrix(card, model) {
+    const matrix = document.createElement("span");
+    matrix.className = "nifty-strategy__matrix";
+    const filters = document.createElement("span");
+    filters.className = "nifty-strategy__matrix-filters";
+    const columns = document.createElement("span");
+    columns.className = "nifty-strategy__matrix-columns";
+    const rows = strategyPnlItems(model.entries);
+    const rowNodes = [];
+    const setFilter = (filter) => {
+      rowNodes.forEach(({ node, item }) => {
+        node.hidden = filter !== "ALL" && item.direction !== filter;
+      });
+      filters.children.forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.filter === filter));
+      });
+    };
+    ["ALL", "BUY", "SELL"].forEach((filter) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "nifty-strategy__matrix-filter";
+      button.dataset.filter = filter;
+      button.textContent = filter === "BUY" ? "BUYS" : filter === "SELL" ? "SELLS" : filter;
+      button.setAttribute("aria-pressed", String(filter === "ALL"));
+      button.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        setFilter(filter);
+      });
+      filters.append(button);
+    });
+    [["CALLS", "CALL"], ["PUTS", "PUT"]].forEach(([titleText, optionType]) => {
+      const column = document.createElement("span");
+      column.className = "nifty-strategy__matrix-column";
+      const title = document.createElement("span");
+      title.className = "nifty-strategy__matrix-title";
+      title.textContent = titleText;
+      column.append(title);
+      rows.filter((item) => item.entry.optionType === optionType).forEach((item) => {
+        const row = document.createElement("span");
+        row.className = `nifty-strategy__matrix-row is-${item.direction.toLowerCase()}`;
+        const position = document.createElement("span");
+        position.textContent = `${item.side} ${Number(item.entry.strike).toLocaleString("en-IN")} ${item.direction} ×${item.entry.lots}`;
+        const pnl = document.createElement("span");
+        pnl.className = `nifty-strategy__matrix-pnl is-${item.tone}`;
+        pnl.textContent = item.pnl;
+        row.append(position, pnl);
+        column.append(row);
+        rowNodes.push({ node: row, item });
+      });
+      columns.append(column);
+    });
+    matrix.append(filters, columns);
+    if (model.disclosure) {
+      const disclosure = document.createElement("span");
+      disclosure.className = "nifty-strategy__disclosure";
+      disclosure.textContent = model.disclosure;
+      matrix.append(disclosure);
+    }
+    card.append(matrix);
+  }
+
+  function brokerPositionSpineModels(models = []) {
+    return models.filter((model) => model?.viewKind === "BROKER_LEG"
+      && model?.kind === "STRATEGY"
+      && model.entries?.length === 1
+      && Number.isFinite(Number(model.entries[0]?.strike)));
+  }
+
+  function renderBrokerPositionSpine(rootNodeValue, models, toY, rect, spineX, guide = {}) {
+    const visible = brokerPositionSpineModels(models).map((model) => {
+      const entry = model.entries[0];
+      const y = Number(toY(Number(entry.strike)));
+      return { model, entry, y };
+    }).filter(({ y }) => Number.isFinite(y) && y >= Number(rect.top) && y <= Number(rect.bottom));
+    if (!visible.length) return;
+
+    const visibleStrikePoints = (guide.visibleStrikes || [])
+      .map((strike) => ({ strike: Number(strike), y: Number(toY(Number(strike))) }));
+    const bounds = positionSpineBounds(visibleStrikePoints, rect)
+      || { top: Number(rect.top), bottom: Number(rect.bottom) };
+    const line = document.createElement("span");
+    line.className = "nifty-position-spine__line";
+    line.style.left = `${spineX}px`;
+    line.style.top = `${bounds.top}px`;
+    line.style.height = `${Math.max(0, bounds.bottom - bounds.top)}px`;
+    if (Number.isFinite(Number(guide.atm))) line.dataset.atm = String(guide.atm);
+    line.setAttribute("aria-hidden", "true");
+    rootNodeValue.append(line);
+
+    [
+      ["C", "is-call"],
+      ["P", "is-put"]
+    ].forEach(([text, className]) => {
+      const label = document.createElement("span");
+      label.className = `nifty-position-spine__lane-label ${className}`;
+      label.textContent = text;
+      label.style.left = `${spineX}px`;
+      label.style.top = `${Math.max(0, bounds.top - 15)}px`;
+      rootNodeValue.append(label);
+    });
+
+    const positionClusters = positionSideClusters(visible
+      .map((item) => ({
+        ...item,
+        id: item.model.strategyId,
+        side: item.entry.optionType === "PUT" ? "put" : "call"
+      })))
+      .filter((cluster) => cluster.items.length > 1)
+      .map((cluster) => ({ ...cluster, key: `broker:${cluster.side}:${cluster.key}` }));
+    const clusteredStrategyIds = new Set(positionClusters.flatMap((cluster) => cluster.items
+      .map((item) => item.model.strategyId)));
+
+    positionClusters.forEach((cluster) => {
+      const clusterNode = document.createElement("span");
+      clusterNode.className = `nifty-position-spine__cluster is-${cluster.side}`;
+      clusterNode.style.top = `${cluster.y - 9}px`;
+      if (cluster.side === "call") clusterNode.style.right = `${Math.max(0, window.innerWidth - spineX + 3)}px`;
+      else clusterNode.style.left = `${spineX + 3}px`;
+
+      const opener = document.createElement("button");
+      opener.type = "button";
+      opener.className = "nifty-position-spine__cluster-select";
+      opener.setAttribute("aria-expanded", String(openedEdgeGroupKey === cluster.key));
+      opener.setAttribute("aria-label", `${openedEdgeGroupKey === cluster.key ? "Close" : "Open"} ${cluster.items.length} grouped ${cluster.side} positions`);
+      opener.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        openedEdgeGroupKey = openedEdgeGroupKey === cluster.key ? null : cluster.key;
+        void controller?.place();
+      });
+
+      const count = document.createElement("span");
+      count.className = "nifty-position-spine__cluster-count";
+      count.textContent = `+${cluster.items.length}`;
+      ["buy", "sell"].forEach((tone) => {
+        const mark = document.createElement("span");
+        mark.className = `nifty-position-spine__cluster-tone is-${tone}`;
+        mark.setAttribute("aria-hidden", "true");
+        count.append(mark);
+      });
+      if (cluster.side === "call") clusterNode.append(opener, count);
+      else clusterNode.append(count, opener);
+      rootNodeValue.append(clusterNode);
+
+      if (openedEdgeGroupKey !== cluster.key) return;
+      const flyout = document.createElement("span");
+      flyout.className = `nifty-position-spine__cluster-flyout is-${cluster.side}`;
+      flyout.style.top = `${Math.max(Number(rect.top) + 4, cluster.y - cluster.items.length * 12)}px`;
+      flyout.style.right = `${Math.max(0, window.innerWidth - spineX + POSITION_CONTROL_WIDTH_PX + 12)}px`;
+      cluster.items.forEach(({ model, entry }) => {
+        const direction = String(entry.direction || "").toLowerCase();
+        const lots = Math.max(1, Number(entry.lots) || 1);
+        const row = document.createElement("span");
+        row.className = `nifty-position-spine__cluster-row is-${direction}`;
+        const rowSelect = document.createElement("button");
+        rowSelect.type = "button";
+        rowSelect.className = "nifty-position-spine__cluster-row-select";
+        rowSelect.setAttribute("aria-pressed", String(model.selected));
+        rowSelect.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
+        rowSelect.addEventListener("click", (event) => {
+          event.stopPropagation?.();
+          ensureStrategyChartController()?.square(model.strategyId);
+        });
+        const rowOpen = document.createElement("button");
+        rowOpen.type = "button";
+        rowOpen.className = "nifty-position-spine__cluster-row-open";
+        rowOpen.textContent = `${cluster.side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`;
+        rowOpen.addEventListener("click", (event) => {
+          event.stopPropagation?.();
+          ensureStrategyChartController()?.label(model.strategyId);
+        });
+        row.append(rowSelect, rowOpen);
+        flyout.append(row);
+      });
+      rootNodeValue.append(flyout);
+    });
+
+    visible.forEach(({ model, entry, y }) => {
+      const side = entry.optionType === "PUT" ? "put" : "call";
+      const direction = String(entry.direction || "").toLowerCase();
+      const lots = Math.max(1, Number(entry.lots) || 1);
+      if (!clusteredStrategyIds.has(model.strategyId)) {
+        const compact = document.createElement("span");
+        compact.className = `nifty-position-spine__compact is-${side}`;
+        compact.style.top = `${y - 9}px`;
+        if (side === "call") compact.style.right = `${Math.max(0, window.innerWidth - spineX + 3)}px`;
+        else compact.style.left = `${spineX + 3}px`;
+
+        const compactSelect = document.createElement("button");
+        compactSelect.type = "button";
+        compactSelect.className = "nifty-position-spine__compact-select";
+        compactSelect.setAttribute("aria-pressed", String(model.selected));
+        compactSelect.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
+        compactSelect.setAttribute("title", "Select exact position for combined preview");
+        compactSelect.addEventListener("click", (event) => {
+          event.stopPropagation?.();
+          ensureStrategyChartController()?.square(model.strategyId);
+        });
+
+        const marker = document.createElement("button");
+        marker.type = "button";
+        marker.className = `nifty-position-spine__marker is-${side} is-${direction}`;
+        marker.classList.toggle("is-open", openedStrategyId === model.strategyId);
+        marker.dataset.strategyId = model.strategyId;
+        marker.textContent = `${side === "call" ? "C" : "P"}${lots}`;
+        marker.setAttribute("aria-expanded", String(openedStrategyId === model.strategyId));
+        marker.setAttribute("aria-label", `${side === "call" ? "Call" : "Put"} ${entry.direction}, ${lots} ${lots === 1 ? "lot" : "lots"}, strike ${Number(entry.strike).toLocaleString("en-IN")}. Open P and L.`);
+        marker.setAttribute("title", `${side === "call" ? "C" : "P"}${lots} · ${entry.direction} · ${Number(entry.strike).toLocaleString("en-IN")}`);
+        marker.addEventListener("click", (event) => {
+          event.stopPropagation?.();
+          ensureStrategyChartController()?.label(model.strategyId);
+        });
+        if (side === "call") compact.append(compactSelect, marker);
+        else compact.append(marker, compactSelect);
+        rootNodeValue.append(compact);
+      }
+
+      if (visibleStrategyRailId === model.strategyId) {
+        const projection = strategyChartApi.projectBreakEven(model.exact, {
+          minPrice: Math.min(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
+          maxPrice: Math.max(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
+          minY: Number(rect.top),
+          maxY: Number(rect.bottom),
+          priceToY: toY
+        });
+        if (projection.mode === "RAIL") {
+          const rail = document.createElement("span");
+          rail.className = "nifty-position-spine__be-rail";
+          rail.dataset.strategyId = model.strategyId;
+          rail.style.left = `${rect.left}px`;
+          rail.style.top = `${projection.railY}px`;
+          rail.style.width = `${Math.max(0, spineX - Number(rect.left))}px`;
+          rootNodeValue.append(rail);
+        }
+      }
+
+      if (openedStrategyId !== model.strategyId) return;
+      const item = strategyPnlItems(model.entries)[0];
+      const card = document.createElement("span");
+      card.className = `nifty-position-spine__card is-${direction}`;
+      card.style.right = `${Math.max(0, window.innerWidth - spineX + 12)}px`;
+      card.style.top = `${Math.max(Number(rect.top) + 6, Math.min(Number(rect.bottom) - 104, y - 52))}px`;
+
+      const header = document.createElement("span");
+      header.className = "nifty-position-spine__header";
+      const token = document.createElement("span");
+      token.className = "nifty-position-spine__token";
+      token.textContent = `${side === "call" ? "C" : "P"}${lots}`;
+      const title = document.createElement("span");
+      title.textContent = `${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`;
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "nifty-position-spine__select";
+      select.setAttribute("aria-pressed", String(model.selected));
+      select.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
+      select.setAttribute("title", "Select for combined preview");
+      select.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        ensureStrategyChartController()?.square(model.strategyId);
+      });
+      header.append(token, title, select);
+
+      const pnl = document.createElement("span");
+      pnl.className = "nifty-position-spine__pnl";
+      const pnlLabel = document.createElement("span");
+      pnlLabel.textContent = "LIVE P&L";
+      const pnlValue = document.createElement("strong");
+      pnlValue.className = `is-${item?.tone || "flat"}`;
+      pnlValue.textContent = item?.pnl || "—";
+      pnl.append(pnlLabel, pnlValue);
+
+      const actions = document.createElement("span");
+      actions.className = "nifty-position-spine__actions";
+      const railProjection = strategyChartApi.projectBreakEven(model.exact, {
+        minPrice: Math.min(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
+        maxPrice: Math.max(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
+        minY: Number(rect.top),
+        maxY: Number(rect.bottom),
+        priceToY: toY
+      });
+      const showRail = document.createElement("button");
+      showRail.type = "button";
+      showRail.className = "nifty-position-spine__rail-toggle";
+      showRail.disabled = railProjection.mode !== "RAIL";
+      showRail.textContent = railProjection.mode !== "RAIL"
+        ? "BE OUTSIDE VIEW"
+        : visibleStrategyRailId === model.strategyId ? "HIDE BE RAIL" : "SHOW BE RAIL";
+      showRail.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        visibleStrategyRailId = visibleStrategyRailId === model.strategyId ? null : model.strategyId;
+        void controller?.place();
+      });
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "nifty-position-spine__close";
+      close.textContent = "CLOSE";
+      close.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        ensureStrategyChartController()?.label(model.strategyId);
+      });
+      actions.append(showRail, close);
+      card.append(header, pnl, actions);
+      rootNodeValue.append(card);
+    });
+  }
+
+  function renderEdgeStackGroups(rootNodeValue, items, cardRight) {
+    edgeStackClusters(items).filter((cluster) => cluster.items.length > 1).forEach((cluster) => {
+      cluster.items.forEach((item) => { item.element.hidden = true; });
+      const groupSelector = document.createElement("button");
+      groupSelector.type = "button";
+      groupSelector.className = "nifty-edge-stack__selector";
+      groupSelector.dataset.groupKey = cluster.key;
+      groupSelector.setAttribute("aria-expanded", String(openedEdgeGroupKey === cluster.key));
+      groupSelector.setAttribute("aria-label", `${openedEdgeGroupKey === cluster.key ? "Close" : "Open"} ${cluster.items.length} grouped chart items`);
+      groupSelector.style.right = `${window.innerWidth - cardRight + 32}px`;
+      groupSelector.style.top = `${cluster.y - 8}px`;
+      groupSelector.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        openedEdgeGroupKey = openedEdgeGroupKey === cluster.key ? null : cluster.key;
+        void controller?.place();
+      });
+      rootNodeValue.append(groupSelector);
+
+      const group = document.createElement("span");
+      group.className = "nifty-edge-stack__group";
+      group.dataset.groupKey = cluster.key;
+      group.textContent = `+${cluster.items.length}`;
+      ["strategy", "sell", "buy"].forEach((tone) => {
+        const mark = document.createElement("span");
+        mark.className = `nifty-edge-stack__tone is-${tone}`;
+        mark.setAttribute("aria-hidden", "true");
+        group.append(mark);
+      });
+      group.setAttribute("aria-hidden", "true");
+      group.style.right = `${window.innerWidth - cardRight}px`;
+      group.style.top = `${cluster.y - 9}px`;
+      rootNodeValue.append(group);
+      if (openedEdgeGroupKey !== cluster.key) return;
+      const flyout = document.createElement("span");
+      flyout.className = "nifty-edge-stack__flyout";
+      flyout.style.right = `${window.innerWidth - cardRight + 52}px`;
+      flyout.style.top = `${Math.max(8, cluster.y - cluster.items.length * 12)}px`;
+      cluster.items.forEach((item) => {
+        const row = document.createElement("span");
+        row.className = `nifty-edge-stack__flyout-row is-${item.tone}`;
+        if (item.kind === "STRATEGY") {
+          const itemSelector = document.createElement("button");
+          itemSelector.type = "button";
+          itemSelector.className = "nifty-edge-stack__flyout-selector";
+          itemSelector.setAttribute("aria-pressed", String(ensureStrategyChartController()?.isSelected(item.strategyId) || false));
+          itemSelector.setAttribute("aria-label", `${ensureStrategyChartController()?.isSelected(item.strategyId) ? "Clear" : "Select"} ${item.label} for combined preview`);
+          itemSelector.addEventListener("click", (event) => {
+            event.stopPropagation?.();
+            ensureStrategyChartController()?.square(item.strategyId);
+          });
+          const openItem = document.createElement("button");
+          openItem.type = "button";
+          openItem.className = "nifty-edge-stack__flyout-open";
+          openItem.textContent = item.label;
+          openItem.addEventListener("click", (event) => {
+            event.stopPropagation?.();
+            openedEdgeGroupKey = null;
+            strategyChartController.label(item.strategyId);
+          });
+          row.append(itemSelector, openItem);
+        } else {
+          row.textContent = item.label;
+        }
+        flyout.append(row);
+      });
+      rootNodeValue.append(flyout);
+    });
+  }
+
+  function attachQuickBreakEvenStrategyCards(rootNodeValue) {
+    const labels = [...(document.getElementById("nifty-break-even-rails")
+      ?.querySelectorAll(".nifty-break-even__label") || [])];
+    const cards = [...(rootNodeValue?.querySelectorAll(".nifty-strategy__card") || [])]
+      .filter((card) => card.classList.contains("is-collapsed")
+        && !card.hidden && Number.isFinite(Number(card.dataset.exact)));
+    const used = new Set();
+    labels.forEach((label) => {
+      const exact = Number(label.dataset.exact);
+      if (!Number.isFinite(exact)) return;
+      const card = cards.find((candidate) => !used.has(candidate)
+        && Math.abs(Number(candidate.dataset.exact) - exact) < 0.01);
+      if (!card) return;
+      used.add(card);
+      const text = document.createElement("span");
+      text.className = "nifty-break-even__text";
+      text.textContent = label.textContent;
+      const divider = document.createElement("span");
+      divider.className = "nifty-break-even__divider";
+      divider.setAttribute("aria-hidden", "true");
+      label.replaceChildren(card, divider, text);
+      label.classList.add("has-strategy-card");
+      card.classList.add("is-inline-be");
+    });
+  }
+
+  function placeStrategyRails(toY, rect, labelRight, visualPlacementRevision, spineGuide = {}) {
     if (!visualPlacementIsCurrent(visualPlacementRevision) || !strategyChartApi || !strategyStoreApi) return false;
     const originals = originalStrategyModels();
+    const spineModels = brokerPositionSpineModels(originals);
+    const chartOriginals = originals.filter((model) => !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind));
     const selectedIds = ensureStrategyChartController()?.selected() || [];
-    const { models: combined, preview } = combinedStrategyModels();
+    const { models: combined, preview } = combinedStrategyModels(originals);
     const previewingCombined = selectedIds.length >= 2 && combined.length > 0;
-    const showOriginalRails = !previewingCombined || strategyChartController.comparing();
+    const showComparedOriginalRails = previewingCombined && strategyChartController.comparing();
     const models = [
-      ...originals.map((model) => ({ ...model, hideRail: !showOriginalRails })),
+      ...chartOriginals.map((model) => ({
+        ...model,
+        hideRail: previewingCombined
+          ? !showComparedOriginalRails
+          : openedStrategyId !== model.strategyId
+      })),
       ...combined
     ];
-    if (!models.length) {
+    if (!models.length && !spineModels.length) {
       clearStrategyRails();
       return false;
     }
@@ -2084,7 +2815,7 @@
       id: `${model.kind}:${model.strategyId || "combined"}:${index}`,
       projection: strategyChartApi.projectBreakEven(model.exact, axisMap)
     })).filter((model) => model.projection.mode !== "HIDDEN");
-    if (!projected.length) {
+    if (!projected.length && !spineModels.length) {
       clearStrategyRails();
       return false;
     }
@@ -2097,7 +2828,12 @@
     const rootNodeValue = strategyRailsRoot();
     rootNodeValue.replaceChildren();
     renderStrategyPreviewBar(rootNodeValue, preview, selectedIds.length);
-    const cardRight = Math.max(Number(rect.left), Math.min(Number(rect.right), Number(labelRight) || Number(rect.right)));
+    const ladderLeft = Math.max(Number(rect.left), Math.min(Number(rect.right), Number(labelRight) || Number(rect.right)));
+    const spineLayout = positionSpineLayout(ladderLeft, rect, window.innerWidth);
+    const cardRight = spineModels.length && spineLayout?.hasSafePutGap
+      ? spineLayout.strategy.right
+      : ladderLeft;
+    const edgeStrategyItems = [];
     projected.forEach((model) => {
       const placement = cardById.get(model.id);
       if (!placement) return;
@@ -2107,7 +2843,8 @@
         : `nifty-strategy__edge is-${String(model.projection.edge).toLowerCase()}`;
       rail.style.top = `${placement.railY}px`;
       rail.style.left = `${rect.left}px`;
-      rail.style.width = `${rect.right - rect.left}px`;
+      rail.style.width = `${Math.max(0, cardRight - rect.left)}px`;
+      if (model.strategyId) rail.dataset.strategyId = model.strategyId;
       if (!model.hideRail) {
         if (model.kind === "STRATEGY") rail.classList.add("is-original");
         rootNodeValue.append(rail);
@@ -2121,9 +2858,13 @@
         rootNodeValue.append(connector);
       }
       const card = document.createElement("div");
-      card.className = `nifty-strategy__card is-${model.kind.toLowerCase()}`;
+      const isOpen = model.kind === "STRATEGY" && openedStrategyId === model.strategyId;
+      card.className = `nifty-strategy__card is-${model.kind.toLowerCase()} is-${String(model.viewKind || "standard").toLowerCase()} ${isOpen ? "is-open" : "is-collapsed"}`;
+      card.dataset.exact = String(model.exact);
+      if (model.viewKind === "BROKER_COMBINED") card.classList.add("is-summary-source");
       card.style.right = `${window.innerWidth - cardRight}px`;
-      card.style.top = `${placement.cardY}px`;
+      const anchorY = model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY;
+      card.style.top = `${isOpen || openedStrategyId ? placement.cardY : anchorY - 9}px`;
       if (model.kind === "STRATEGY") {
         const selector = document.createElement("button");
         selector.type = "button";
@@ -2143,6 +2884,7 @@
         const label = document.createElement("button");
         label.type = "button";
         label.className = "nifty-strategy__label";
+        label.dataset.token = model.viewKind === "BROKER_COMBINED" ? "ALL" : model.strategyLabel;
         label.textContent = `${model.label}${model.projection.mode === "EDGE" ? ` ${model.projection.arrow}` : ""}`;
         label.setAttribute("aria-label", strategyChartApi.accessibleLabel({
           ...model,
@@ -2162,7 +2904,33 @@
       }
       appendStrategyDetails(card, model);
       rootNodeValue.append(card);
+      if (model.kind === "STRATEGY" && !isOpen) {
+        edgeStrategyItems.push({
+          id: model.id,
+          y: openedStrategyId ? placement.cardY + 9 : anchorY,
+          kind: "STRATEGY",
+          tone: "strategy",
+          label: model.label,
+          strategyId: model.strategyId,
+          element: card
+        });
+      }
     });
+    renderBrokerPositionSpine(rootNodeValue, spineModels, toY, rect,
+      spineLayout?.hasSafePutGap ? spineLayout.spineX : ladderLeft, { ...spineGuide, ladderLeft });
+    const edgeTradeItems = [...(document.getElementById(LABELS_ID)
+      ?.querySelectorAll(".nifty-axis-ladder__off-grid") || [])]
+      .filter((element) => !element.hidden)
+      .map((element) => ({
+        id: `trade:${element.dataset.direction}:${element.dataset.strike}`,
+        y: toY(Number(element.dataset.strike)),
+        kind: "TRADE",
+        tone: String(element.dataset.direction || "").toLowerCase(),
+        label: element.getAttribute("aria-label") || element.textContent,
+        element
+      }));
+    renderEdgeStackGroups(rootNodeValue, [...edgeStrategyItems, ...edgeTradeItems], cardRight);
+    attachQuickBreakEvenStrategyCards(rootNodeValue);
     return true;
   }
 
@@ -2432,6 +3200,7 @@
         element.style.width = `${plotRight - plotLeft}px`;
         const label = document.createElement("span");
         label.className = `nifty-break-even__label is-${level.kind}`;
+        label.dataset.exact = String(level.exact);
         label.style.right = `${window.innerWidth - railRight}px`;
         label.style.top = `${labelDecorations[index].top}px`;
         label.textContent = level.label;
@@ -2489,6 +3258,17 @@
     if (!canRenderStorageManualPlans(lifecycleGeneration)) return;
     try {
       await controller?.place();
+    } catch (_) {}
+  }
+
+  async function renderStorageStrategyBook() {
+    if (manualRowsConcealed || !settings.enabled || !controller) return;
+    try {
+      await controller.place();
+    } catch (_) {}
+    if (manualRowsConcealed || !settings.enabled || !controller) return;
+    try {
+      renderManualRows();
     } catch (_) {}
   }
 
@@ -2895,6 +3675,8 @@
       row,
       element: node.querySelector(`.nifty-axis-ladder__row[data-strike="${row.strike}"]`)
     }));
+    const offGridElements = [...node.querySelectorAll(".nifty-axis-ladder__off-grid")];
+    const offGridTitle = node.querySelector(".nifty-axis-ladder__off-grid-title");
     if (elements.some(({ element }) => !element)) {
       concealRows("EXACT STRIKE ROWS UNAVAILABLE");
       return false;
@@ -2910,7 +3692,12 @@
       });
       const laneOffset = Math.ceil(Math.max(...dimensions.map(({ width }) => width))) + 10;
       const baseRight = Math.max(0, window.innerWidth - rect.right + 7);
-      const axisVisibleStrikes = new Set(membership?.visibleStrikes || [membership?.atm]);
+      const nativeAxisPrices = (membership?.axisPrices || []).map(Number).filter(Number.isFinite);
+      const nativeAxisTolerance = Math.max(1e-9, Math.abs(Number(membership?.atmStep) || 1) * 1e-7);
+      const axisVisibleStrikes = new Set((membership?.rows || [])
+        .map((row) => Number(row?.strike))
+        .filter((strike) => Number.isFinite(strike)
+          && nativeAxisPrices.some((price) => Math.abs(price - strike) <= nativeAxisTolerance)));
       const visibleIndexes = visibleRowIndexes(
         rows,
         dimensions,
@@ -2924,9 +3711,12 @@
         throw new Error(priceScaleFailure("outside"));
       }
       const visibleIndexSet = new Set(visibleIndexes);
+      const renderedStrikes = visibleIndexes.map((index) => Number(rows[index].strike));
+      const displayAtm = displayAtmStrike(renderedStrikes, membership?.atm);
       elements.forEach(({ row, element }, index) => {
         element.hidden = !visibleIndexSet.has(index);
         if (element.hidden) return;
+        element.classList.toggle("is-atm", Number(row.strike) === Number(displayAtm));
         const lane = layout.lanes[index];
         element.dataset.lane = String(lane);
         element.style.setProperty("--nifty-lane-offset", `${laneOffset}px`);
@@ -2942,14 +3732,38 @@
         .filter(({ element }, index) => !element.hidden && layout.lanes[index] === 0)
         .map(({ element }) => element);
       const labelRight = riskLabelLayout(laneZeroRows)?.labelRight ?? rect.right;
+      const rowLeft = Math.min(...laneZeroRows.map((element) => element.getBoundingClientRect().left));
+      let visibleOffGridCount = 0;
+      offGridElements.forEach((element, index) => {
+        const y = toY(Number(element.dataset.strike));
+        const visible = Number.isFinite(y) && y >= rect.top && y <= rect.bottom;
+        element.hidden = !visible;
+        if (!visible) return;
+        visibleOffGridCount += 1;
+        const sameStrikeIndex = offGridElements.slice(0, index)
+          .filter((candidate) => candidate.dataset.strike === element.dataset.strike && !candidate.hidden).length;
+        element.style.right = `${Math.max(0, window.innerWidth - rowLeft + 4)}px`;
+        element.style.top = `${y + sameStrikeIndex * 18}px`;
+      });
+      if (offGridTitle) {
+        offGridTitle.hidden = visibleOffGridCount === 0;
+        offGridTitle.style.right = `${Math.max(0, window.innerWidth - rowLeft + 4)}px`;
+        offGridTitle.style.top = `${rect.top + 6}px`;
+      }
+      const strategyLabelRight = Math.min(labelRight, rowLeft - EDGE_STACK_GAP_PX);
+      const quickLabelRight = breakEvenLabelRight(strategyLabelRight, rect, window.innerWidth,
+        brokerPositionSpineModels(originalStrategyModels()).length > 0);
       const railDecorations = sharedRailDecorations(toY, rect);
-      placeBreakEvenRails(toY, rect, labelRight, railDecorations.quick, visualPlacementRevision);
+      placeBreakEvenRails(toY, rect, quickLabelRight, railDecorations.quick, visualPlacementRevision);
       if (activeChartStrategies().length) {
         clearManualPlanRails(visualPlacementRevision);
-        placeStrategyRails(toY, rect, labelRight, visualPlacementRevision);
+        placeStrategyRails(toY, rect, strategyLabelRight, visualPlacementRevision, {
+          visibleStrikes: renderedStrikes,
+          atm: displayAtm
+        });
       } else {
         clearStrategyRails();
-        placeManualPlanRails(toY, rect, labelRight, railDecorations.manual, visualPlacementRevision);
+        placeManualPlanRails(toY, rect, strategyLabelRight, railDecorations.manual, visualPlacementRevision);
       }
       return { riskLayout: { labelRight } };
     } catch (error) {
@@ -2957,6 +3771,8 @@
       clearManualPlanRails(visualPlacementRevision);
       clearStrategyRails();
       elements.forEach(({ element }) => { element.hidden = true; });
+      offGridElements.forEach((element) => { element.hidden = true; });
+      if (offGridTitle) offGridTitle.hidden = true;
       throw error;
     } finally {
       node.style.visibility = priorVisibility;
@@ -3072,7 +3888,13 @@
   }
 
   function handleDocumentPointerDown(event) {
-    const outsideStrategyCard = !event.target?.closest?.(".nifty-strategy__card");
+    const insideEdgeStack = event.target?.closest?.(".nifty-edge-stack__group")
+      || event.target?.closest?.(".nifty-edge-stack__selector")
+      || event.target?.closest?.(".nifty-edge-stack__flyout");
+    const insideBrokerCard = event.target?.closest?.(".nifty-position-spine__card");
+    const outsideStrategyCard = !event.target?.closest?.(".nifty-strategy__card")
+      && !insideBrokerCard
+      && !insideEdgeStack;
     if (event.target?.closest?.(".nifty-manual-plan__label.is-flippable")) {
       if (outsideStrategyCard) collapseOpenedStrategyDetails();
       return;
@@ -3190,6 +4012,7 @@
       placeRows,
       placeRisk,
       renderRows,
+      activeStrikes: activeTradeStrikes,
       riskView: settings.sellerSafetyChartView || settings.sellerSafetyView,
       chainSnapshot: settings.sellerSafetyChain,
       chainSnapshotsByExpiry: settings.sellerSafetyChainsByExpiry,
@@ -3280,9 +4103,14 @@
       settings.manualPlans = normalizeManualPlans(changes.manualPlans.newValue);
       void renderStorageManualPlans();
     }
+    if (changes.brokerConnection) {
+      settings.brokerConnection = changes.brokerConnection.newValue || null;
+      clearStrategyPreview();
+      if (settings.enabled) void renderStorageStrategyBook();
+    }
     if (changes.strategyBook) {
       settings.strategyBook = normalizeStrategyBook(changes.strategyBook.newValue);
-      if (settings.enabled) void controller?.place();
+      if (settings.enabled) void renderStorageStrategyBook();
     }
     if (changes.expiry) {
       closePremiumHistory();
@@ -3310,7 +4138,7 @@
   });
 
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
-    if (!["CLEAR_BREAK_EVEN_SELECTION", "CLEAR_STRATEGY_PREVIEW", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS", "GET_STRATEGY_PREVIEW_STATE"].includes(message?.type)) return false;
+    if (!["CLEAR_BREAK_EVEN_SELECTION", "CLEAR_STRATEGY_PREVIEW", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS", "GET_STRATEGY_PREVIEW_STATE", "OPEN_STRATEGY_ON_CHART"].includes(message?.type)) return false;
     if (message.type === "CLEAR_BREAK_EVEN_SELECTION") {
       clearBreakEvenSelection();
       sendResponse({ ok: true });
@@ -3342,6 +4170,17 @@
     const label = chartCanvas()?.getAttribute("aria-label") || "";
     if (!isNiftyChartLabel(label)) {
       sendResponse({ ok: false, error: "Open NIFTY underlying chart first." });
+      return false;
+    }
+    if (message.type === "OPEN_STRATEGY_ON_CHART") {
+      const strategy = activeChartStrategies().find((candidate) => candidate.id === message.strategyId);
+      if (!strategy) {
+        sendResponse({ ok: false, error: "Saved strategy is not available for active chart expiry." });
+        return false;
+      }
+      ensureStrategyChartController()?.label(strategy.id);
+      void controller?.place();
+      sendResponse({ ok: true });
       return false;
     }
     if (message.type === "REFRESH_OPTION_NUMBERS") {

@@ -24,6 +24,11 @@
           : [...selectedIds, strategyId];
         callbacks.onSelection([...selectedIds]);
       },
+      setSelected(strategyIds) {
+        selectedIds = [...new Set((Array.isArray(strategyIds) ? strategyIds : [])
+          .filter((id) => typeof id === "string" && id))];
+        callbacks.onSelection([...selectedIds]);
+      },
       selected() {
         return [...selectedIds];
       },
@@ -104,6 +109,9 @@
   function strategyCardHeight(model, openedStrategyId) {
     const baseHeight = 24;
     if (model?.kind !== "STRATEGY" || model.strategyId !== openedStrategyId) return baseHeight;
+    if (Number.isFinite(Number(model.detailHeight)) && Number(model.detailHeight) > 0) {
+      return baseHeight + Number(model.detailHeight);
+    }
     const tradeCount = Array.isArray(model.entries) ? model.entries.length : 0;
     const detailCount = tradeCount + (model.disclosure ? 1 : 0);
     return detailCount > 0 ? baseHeight + detailCount * 27 : baseHeight;
