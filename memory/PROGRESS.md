@@ -178,3 +178,8 @@ At 24,200, first click showed broker Put with two quick BEs and no T; second sho
 Recorded current candidate and remaining proof boundary
 
 Added `docs/testing/2026-08-05-post-repair-verification.md` beside 202-workflow inventory and historical live audit. Active worktree is dirty on `codex/arbdesk-theme-system` at `fc32ef1e328c`; complete 202-workflow live execution, authenticated broker fan-out, and snapshot-backed destructive workflows remain pending.
+
+## #031 — 2026-08-05T23:31:42+05:30 — note
+Committed and pushed every local change
+
+Feature repairs, tests, workflow catalog, and evidence were committed as product commit `239ad4e`, followed by verification metadata `58e8d11`, then pushed to `origin/codex/arbdesk-theme-system`. Checkpoint memory, ChatGPT context, and reference visuals were committed on `codex/timeframe-axis-ladder-base`; every registered worktree was checked and contains no uncommitted files.
