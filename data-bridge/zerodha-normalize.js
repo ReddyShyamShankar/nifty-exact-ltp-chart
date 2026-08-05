@@ -1,4 +1,3 @@
-const LOT_SIZE = 65;
 const MONTHS = {
   JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
   JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12"
@@ -43,6 +42,13 @@ function finiteNumber(value, label) {
   return value;
 }
 
+function exactLotSize(value) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error("NIFTY lot size metadata must be an exact positive integer.");
+  }
+  return value;
+}
+
 function assertPayload(payload, rows, label) {
   if (!payload || payload.status !== "success" || !Array.isArray(rows)) {
     throw new Error(`Invalid Zerodha ${label} response.`);
@@ -71,8 +77,9 @@ function normalizedTimestamp(value) {
   return normalized;
 }
 
-export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown" } = {}) {
+export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown", lotSize } = {}) {
   if (!exactIsoDate(expiry)) throw new Error("Expiry must be an exact ISO date.");
+  const contractLotSize = exactLotSize(lotSize);
   const rows = payload?.data?.net;
   assertPayload(payload, rows, "positions");
   const normalized = [];
@@ -83,7 +90,7 @@ export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown
     const signedQuantity = finiteNumber(row.quantity, "position quantity");
     if (!Number.isInteger(signedQuantity)) throw new Error("Zerodha position quantity must be an integer.");
     if (signedQuantity === 0) continue;
-    if (signedQuantity % LOT_SIZE !== 0) throw new Error("Zerodha position must use whole NIFTY lots.");
+    if (signedQuantity % contractLotSize !== 0) throw new Error("Zerodha position must use whole NIFTY lots.");
     normalized.push({
       contractId: identity.contractId,
       tradingsymbol: identity.tradingsymbol,
@@ -93,7 +100,7 @@ export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown
       strike: identity.strike,
       optionType: identity.optionType,
       signedQuantity,
-      lotSize: LOT_SIZE,
+      lotSize: contractLotSize,
       averagePrice: finiteNumber(row.average_price, "average price"),
       lastPrice: finiteNumber(row.last_price, "last price"),
       pnl: finiteNumber(row.pnl, "P&L")
@@ -101,8 +108,9 @@ export function normalizeNiftyPositions(payload, expiry, { expiryKind = "unknown
   }
   return normalized;
 }
-export function normalizeNiftyTrades(payload, expiry, { expiryKind = "unknown" } = {}) {
+export function normalizeNiftyTrades(payload, expiry, { expiryKind = "unknown", lotSize } = {}) {
   if (!exactIsoDate(expiry)) throw new Error("Expiry must be an exact ISO date.");
+  const contractLotSize = exactLotSize(lotSize);
   const rows = payload?.data;
   assertPayload(payload, rows, "trades");
   const normalized = [];
@@ -114,7 +122,7 @@ export function normalizeNiftyTrades(payload, expiry, { expiryKind = "unknown" }
     if (transactionType !== "BUY" && transactionType !== "SELL") throw new Error("Zerodha trade must be BUY or SELL.");
     const quantity = finiteNumber(row.quantity, "trade quantity");
     if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("Zerodha trade quantity must be positive.");
-    if (quantity % LOT_SIZE !== 0) throw new Error("Zerodha trade must use whole NIFTY lots.");
+    if (quantity % contractLotSize !== 0) throw new Error("Zerodha trade must use whole NIFTY lots.");
     if (typeof row.trade_id !== "string" || !row.trade_id) throw new Error("Invalid Zerodha trade ID.");
     normalized.push({
       id: row.trade_id,

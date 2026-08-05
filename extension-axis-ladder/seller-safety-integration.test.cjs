@@ -72,6 +72,7 @@ function upstreamFixture() {
     chain: {
       source: "Upstox",
       expiry: EXPIRY,
+      lotSize: 65,
       spot: 24120,
       rows: Array.from({ length: 13 }, (_, index) => ({
         strike: 23800 + index * 50,
@@ -100,7 +101,7 @@ async function startBridge(overrides = {}) {
     sessionStore,
     zerodhaClientFactory: overrides.zerodhaClientFactory,
     chainLoader: overrides.chainLoader,
-    expiryMetadata: () => ({ expiry: EXPIRY, weekly: false }),
+    expiryMetadata: () => ({ expiry: EXPIRY, weekly: false, lotSize: 65 }),
     extensionOrigin: EXTENSION_ORIGIN,
     now: () => new Date(ACCEPTED_AT)
   });
@@ -197,6 +198,7 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
   assert.equal(runtime.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
   assert.equal(runtime.requests.filter((url) => url.includes("/api/nifty-chain")).length, 0);
   assert.equal(runtime.storage.sellerSafetyChain.rows.length, 13);
+  assert.equal(runtime.storage.sellerSafetyChain.lotSize, 65);
   assert.deepEqual(runtime.storage.sellerSafetyLedger.importedTrades.map((trade) => trade.id), [
     "today-call", "today-put", "today-low-put"
   ]);
@@ -243,6 +245,7 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
   });
   t.after(() => controller.invalidate());
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
+  assert.equal(controller.chain().lotSize, 65);
   assert.deepEqual(renderedRows.map((row) => row.strike), [23800, 23900, 24000, 24100, 24200, 24300, 24400]);
   assert.equal(extraChainRequests, 0);
 

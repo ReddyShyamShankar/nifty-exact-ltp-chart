@@ -55,7 +55,7 @@ test("synchronized premium axis loads on-demand TradingView time observer", () =
   assert.deepEqual(mainWorld.js, ["axis-observer.js", "time-axis-observer.js"]);
 });
 
-test("manual plan mutations are owned by the manifest service worker", () => {
+test("atomic manual strategy mutations are owned by the manifest service worker", () => {
   const background = fs.readFileSync(path.join(__dirname, "background.js"), "utf8");
 
   assert.equal(manifest.version, "0.6.0");
@@ -63,6 +63,8 @@ test("manual plan mutations are owned by the manifest service worker", () => {
   assert.equal(manifest.permissions.includes("storage"), true);
   assert.match(background, /importScripts\([^)]*"manual-plan\.js"/);
   assert.match(background, /MUTATE_MANUAL_PLANS/);
+  assert.match(background, /deprecated[^\n]+atomic manual strategy/i);
+  assert.match(background, /MUTATE_MANUAL_STRATEGY/);
   assert.match(background, /importScripts\([^)]*"strategy-store\.js"/);
   assert.match(background, /MUTATE_STRATEGY_BOOK/);
   assert.match(background, /MIGRATE_MANUAL_PLANS/);

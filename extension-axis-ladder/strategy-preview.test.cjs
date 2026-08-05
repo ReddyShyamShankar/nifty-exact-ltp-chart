@@ -16,6 +16,7 @@ function leg(overrides) {
     optionType: "CALL",
     direction: "SELL",
     lots: 1,
+    lotSize: 1,
     premium: 10,
     callSnapshot: 10,
     putSnapshot: 10,
@@ -85,6 +86,77 @@ test("known charges shift combined break-evens and current P&L", () => {
   assert.equal(result.knownCharges, 4);
   assert.equal(result.chargesComplete, true);
   assert.equal(result.disclosure, null);
+});
+
+test("preview uses each 25/50 contract size and subtracts charges as rupees", () => {
+  const groups = [
+    {
+      id: "s1", instrumentKey: "NSE:NIFTY", expiry: "2026-08-25",
+      entries: [leg({ id: "call-25", optionType: "CALL", lotSize: 25,
+        charges: [{ kind: "BROKERAGE", amount: 20 }] })]
+    },
+    {
+      id: "s2", instrumentKey: "NSE:NIFTY", expiry: "2026-08-25",
+      entries: [leg({ id: "put-50", optionType: "PUT", lotSize: 50,
+        charges: [{ kind: "BROKERAGE", amount: 30 }] })]
+    }
+  ];
+  const result = preview.buildPreviewFromGroups(groups, [{ strike: 100, call: 8, put: 8 }], { lotSize: 1 });
+  assert.equal(result.status, "OK");
+  assert.ok(Math.abs(result.breakEvens[0] - 86) <= 1e-9);
+  assert.ok(Math.abs(result.breakEvens[1] - 128) <= 1e-9);
+  assert.equal(result.currentPnl, 100);
+  assert.equal(result.knownCharges, 50);
+});
+
+test("preview supports mixed 25/50/65 leg quantities", () => {
+  const groups = [
+    {
+      id: "s1", instrumentKey: "NSE:NIFTY", expiry: "2026-08-25",
+      entries: [
+        leg({ id: "call-25", optionType: "CALL", strike: 100, lotSize: 25, charges: [] }),
+        leg({ id: "call-65", optionType: "CALL", direction: "BUY", strike: 110,
+          premium: 2, lotSize: 65, charges: [] })
+      ]
+    },
+    {
+      id: "s2", instrumentKey: "NSE:NIFTY", expiry: "2026-08-25",
+      entries: [leg({ id: "put-50", optionType: "PUT", strike: 100, lotSize: 50, charges: [] })]
+    }
+  ];
+  const result = preview.buildPreviewFromGroups(groups, [
+    { strike: 100, call: 8, put: 8 },
+    { strike: 110, call: 3, put: 1 }
+  ]);
+  assert.equal(result.status, "OK");
+  assert.equal(result.currentPnl, 215);
+  assert.equal(result.breakEvens.length, 1);
+  assert.ok(Math.abs(result.breakEvens[0] - 87.6) <= 1e-9);
+});
+
+test("preview keeps legacy manual fallback but cannot rescue missing broker lot size", () => {
+  const legacyGroups = [
+    {
+      id: "s1", instrumentKey: "NSE:NIFTY", expiry: "2026-08-25",
+      entries: [leg({ id: "legacy-call", source: "MANUAL", optionType: "CALL", lotSize: undefined, charges: [] })]
+    },
+    {
+      id: "s2", instrumentKey: "NSE:NIFTY", expiry: "2026-08-25",
+      entries: [leg({ id: "legacy-put", source: "MANUAL", optionType: "PUT", lotSize: undefined, charges: [] })]
+    }
+  ];
+  const legacy = preview.buildPreviewFromGroups(legacyGroups, [{ strike: 100, call: 8, put: 8 }]);
+  assert.equal(legacy.status, "OK");
+  assert.equal(legacy.currentPnl, 260);
+  assert.deepEqual(legacy.breakEvens, [80, 120]);
+
+  const missingBroker = structuredClone(legacyGroups);
+  missingBroker[1].entries[0].source = "BROKER_POSITION";
+  const blocked = preview.buildPreviewFromGroups(missingBroker, [{ strike: 100, call: 8, put: 8 }], { lotSize: 65 });
+  assert.equal(blocked.status, "INCOMPLETE");
+  assert.equal(blocked.currentPnl, null);
+  assert.deepEqual(blocked.breakEvens, []);
+  assert.deepEqual(blocked.missingLotSizes, [{ legId: "legacy-put", source: "BROKER_POSITION" }]);
 });
 
 test("mixed instrument or expiry selection is rejected", () => {

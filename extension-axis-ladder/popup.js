@@ -356,7 +356,7 @@ function bindPanelViews() {
 async function mutateVersionedStrategies(command) {
   const response = await chrome.runtime.sendMessage({ type: "MUTATE_STRATEGY_BOOK", command });
   if (!response?.ok || !response.strategyBook) throw new Error(response?.error || "Strategy save failed.");
-  await persist({ strategyBook: response.strategyBook });
+  state = { ...state, strategyBook: response.strategyBook };
   renderStrategyManager();
   return response.strategyBook;
 }
@@ -538,6 +538,7 @@ function validStoredChain(snapshot, expiry = snapshot?.expiry) {
     NiftySellerViewIdentity.exactIsoDate(expiry) && snapshot.expiry === expiry &&
     typeof snapshot.updatedAt === "string" && Number.isFinite(updatedAt) &&
     Date.now() - updatedAt <= SELLER_SAFETY_STALE_MS &&
+    typeof snapshot.lotSize === "number" && Number.isInteger(snapshot.lotSize) && snapshot.lotSize > 0 &&
     Number.isFinite(Number(snapshot.spot)) && Array.isArray(snapshot.rows) && snapshot.rows.length >= 1 &&
     snapshot.rows.every((row) => Number.isFinite(Number(row?.strike))) &&
     new Set(snapshot.rows.map((row) => Number(row.strike))).size === snapshot.rows.length);
@@ -935,6 +936,7 @@ function validateRefreshPayload(data) {
   if (!data || typeof data.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt)) ||
     !Array.isArray(data.positions) || !Array.isArray(data.trades) ||
     !data.chain || data.chain.expiry !== state.expiry || !Number.isFinite(data.chain.spot) ||
+    typeof data.chain.lotSize !== "number" || !Number.isInteger(data.chain.lotSize) || data.chain.lotSize <= 0 ||
     !Array.isArray(data.chain.rows) || !data.trades.every((trade) => validRefreshTrade(trade, state.expiry))) {
     throw new Error("Bridge returned an invalid seller refresh snapshot.");
   }
@@ -952,6 +954,7 @@ function validateRefreshPayload(data) {
       version: 1,
       updatedAt: data.updatedAt,
       expiry: data.chain.expiry,
+      lotSize: data.chain.lotSize,
       spot: data.chain.spot,
       rows: data.chain.rows
     },

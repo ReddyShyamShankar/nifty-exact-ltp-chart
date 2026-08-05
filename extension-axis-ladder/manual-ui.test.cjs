@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const ui = require("./manual-ui.js");
 
-const row = { strike: 24450, call: 223.4, put: 409.8 };
+const row = { strike: 24450, call: 223.4, put: 409.8, lotSize: 25 };
 const expiry = "2026-08-25";
 
 function fakeDocument() {
@@ -55,6 +55,7 @@ test("choosing Call Sell fills Call quote and preserves both snapshots", () => {
   assert.equal(draft.premium, 223.4);
   assert.equal(draft.callSnapshot, 223.4);
   assert.equal(draft.putSnapshot, 409.8);
+  assert.equal(draft.lotSize, 25);
   assert.equal(ui.validateDraft(ui.setLots(draft, 2)).ok, true);
   assert.deepEqual(initial, ui.createDraft({ expiry, row }));
 });
@@ -89,7 +90,66 @@ test("edited traded premium replaces only selected snapshot", () => {
   let draft = actionDraft();
   draft = ui.setPremium(ui.setLots(draft, 2), 358);
   const entry = ui.entryFromDraft(draft, { id: "e1", now: "2026-07-29T10:00:00.000Z" });
-  assert.deepEqual([entry.callSnapshot, entry.putSnapshot, entry.premium], [358, 409.8, 358]);
+  assert.deepEqual([entry.callSnapshot, entry.putSnapshot, entry.premium, entry.lotSize], [358, 409.8, 358, 25]);
+});
+
+test("editing a legacy entry upgrades it with the authoritative current-expiry lot size", () => {
+  const legacy = {
+    id: "legacy-entry",
+    expiry,
+    strike: 24450,
+    optionType: "CALL",
+    direction: "SELL",
+    lots: 1,
+    premium: 358,
+    callSnapshot: 358,
+    putSnapshot: 414.6,
+    createdAt: "2026-07-28T10:00:00.000Z"
+  };
+  const draft = ui.createDraft({ expiry, row, entry: legacy });
+  const replacement = ui.entryFromDraft(draft, {
+    id: "replacement-entry",
+    now: "2026-07-29T10:00:00.000Z"
+  });
+
+  assert.equal(Object.hasOwn(legacy, "lotSize"), false);
+  assert.equal(draft.lotSize, 25);
+  assert.equal(replacement.lotSize, 25);
+});
+
+test("new manual creation fails closed without exact current-expiry lot metadata", () => {
+  const draft = ui.chooseAction(ui.createDraft({
+    expiry,
+    row: { strike: row.strike, call: row.call, put: row.put }
+  }), "CALL", "SELL");
+
+  assert.deepEqual(ui.validateDraft(draft), { ok: false, errors: ["lotSize"] });
+  assert.equal(ui.editorModel(draft).validationLabel, "LOT SIZE UNAVAILABLE");
+  assert.throws(() => ui.entryFromDraft(draft, {
+    id: "blocked-entry",
+    now: "2026-07-29T10:00:00.000Z"
+  }), /invalid manual draft/i);
+});
+
+test("stored and current lot-size conflict fails closed instead of silently changing quantity", () => {
+  const saved = {
+    id: "conflicting-entry",
+    expiry,
+    strike: row.strike,
+    optionType: "CALL",
+    direction: "SELL",
+    lots: 1,
+    lotSize: 65,
+    premium: 358,
+    callSnapshot: 358,
+    putSnapshot: 414.6,
+    createdAt: "2026-07-28T10:00:00.000Z"
+  };
+  const draft = ui.createDraft({ expiry, row, entry: saved });
+
+  assert.equal(draft.lotSize, null);
+  assert.equal(draft.lotSizeConflict, true);
+  assert.deepEqual(ui.validateDraft(draft), { ok: false, errors: ["lotSize"] });
 });
 
 test("editing preserves unavailable opposite snapshot instead of backfilling live quote", () => {
@@ -129,6 +189,8 @@ test("draft validation requires only selected snapshot and rejects malformed inp
     ["direction", { direction: "HOLD" }],
     ["lots zero", { lots: 0 }],
     ["lots fractional", { lots: 1.5 }],
+    ["lot size zero", { lotSize: 0 }],
+    ["lot size fractional", { lotSize: 25.5 }],
     ["premium negative", { premium: -1 }],
     ["premium malformed", { premium: null }],
     ["selected snapshot", { callSnapshot: null }]
@@ -283,6 +345,40 @@ test("renderRow places separate lot badges before price cells", () => {
   ]);
 });
 
+test("renderRow gives broker badges read-only position-detail labels", () => {
+  const document = fakeDocument();
+  const element = document.createElement("div");
+  ui.renderRow(document, element, {
+    liveRow: row,
+    isAtm: false,
+    entries: [
+      { id: "broker-call", source: "BROKER_POSITION", strike: 24450, direction: "BUY", optionType: "CALL", lots: 1 },
+      { id: "broker-put", source: "BROKER_POSITION", strike: 24450, direction: "SELL", optionType: "PUT", lots: 1 }
+    ],
+    activeEntryId: null
+  });
+
+  assert.deepEqual(element.children[0].children.map((badge) => badge.getAttribute("aria-label")), [
+    "Open broker Buy Call position details",
+    "Open broker Sell Put position details"
+  ]);
+
+  const aggregated = document.createElement("div");
+  ui.renderRow(document, aggregated, {
+    liveRow: row,
+    isAtm: false,
+    entries: [
+      { id: "broker-call-a", source: "BROKER_POSITION", strike: 24450, direction: "BUY", optionType: "CALL", lots: 1 },
+      { id: "broker-call-b", source: "BROKER_POSITION", strike: 24450, direction: "BUY", optionType: "CALL", lots: 2 }
+    ],
+    activeEntryId: null
+  });
+  assert.equal(
+    aggregated.children[0].children[0].getAttribute("aria-label"),
+    "Open broker Buy Call positions"
+  );
+});
+
 test("lot badges preserve buy and sell direction instead of merging opposite positions", () => {
   assert.deepEqual(ui.lotBadges([
     { id: "buy-call", optionType: "CALL", direction: "BUY", lots: 1 },
@@ -302,7 +398,16 @@ test("manual and broker positions at same strike remain separate badges", () => 
     { id: "broker-call", source: "BROKER_POSITION", optionType: "CALL", direction: "BUY", lots: 1 }
   ]), [
     { optionType: "CALL", direction: "BUY", source: "MANUAL", label: "C1", entryId: "manual-call" },
-    { optionType: "CALL", direction: "BUY", source: "BROKER_POSITION", label: "C1", entryId: null }
+    { optionType: "CALL", direction: "BUY", source: "BROKER_POSITION", label: "C1", entryId: "broker-call" }
+  ]);
+});
+
+test("aggregated broker badge never invents one entry identity", () => {
+  assert.deepEqual(ui.lotBadges([
+    { id: "broker-call-a", source: "BROKER_POSITION", optionType: "CALL", direction: "BUY", lots: 1 },
+    { id: "broker-call-b", source: "BROKER_POSITION", optionType: "CALL", direction: "BUY", lots: 2 }
+  ]), [
+    { optionType: "CALL", direction: "BUY", source: "BROKER_POSITION", label: "C3", entryId: null }
   ]);
 });
 
@@ -318,8 +423,8 @@ test("row model renders broker Call and Put lot badges like manual positions", (
   });
 
   assert.deepEqual(model.badges, [
-    { optionType: "CALL", direction: "BUY", source: "BROKER_POSITION", label: "C1", entryId: null },
-    { optionType: "PUT", direction: "SELL", source: "BROKER_POSITION", label: "P3", entryId: null }
+    { optionType: "CALL", direction: "BUY", source: "BROKER_POSITION", label: "C1", entryId: "broker-call" },
+    { optionType: "PUT", direction: "SELL", source: "BROKER_POSITION", label: "P3", entryId: "broker-put" }
   ]);
 });
 

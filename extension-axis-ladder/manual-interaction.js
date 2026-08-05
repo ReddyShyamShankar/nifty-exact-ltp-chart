@@ -35,7 +35,26 @@
 
     function doubleClick(context) {
       cancel();
-      options.onEditor({ ...context, entryId: faces.get(context.strike) || null });
+      const activeEntryId = faces.get(context.strike) || null;
+      const editableEntries = (Array.isArray(context?.entries) ? context.entries : [])
+        .filter((entry) => entry?.source !== "BROKER_POSITION");
+      const optionType = ["CALL", "PUT"].includes(context?.optionType) ? context.optionType : null;
+      const matchingEntries = optionType
+        ? editableEntries.filter((entry) => entry?.optionType === optionType)
+        : editableEntries;
+      const entryId = activeEntryId || (matchingEntries.length === 1 ? matchingEntries[0].id : null);
+      faces.delete(context.strike);
+      options.onEditor({ ...context, entryId });
+    }
+
+    function openFace(context, entryId) {
+      cancel();
+      const entries = Array.isArray(context?.entries) ? context.entries : [];
+      const entry = entries.find((candidate) => candidate?.id === entryId) || null;
+      if (!entry) return false;
+      faces.set(context.strike, entry.id);
+      options.onFace({ ...context, entryId: entry.id });
+      return true;
     }
 
     function reset() {
@@ -44,12 +63,19 @@
       options.onReset();
     }
 
+    function dispose() {
+      cancel();
+      faces.clear();
+    }
+
     return {
       click,
       doubleClick,
+      openFace,
       outside: reset,
       escape: reset,
       reset,
+      dispose,
       activeEntryId(strike) {
         return faces.get(strike) || null;
       }

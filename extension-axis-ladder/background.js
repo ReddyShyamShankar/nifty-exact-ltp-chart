@@ -7,13 +7,17 @@ NiftySidePanel.install(chrome);
 const manualPlanApi = globalThis.NiftyManualPlan;
 const strategyStoreApi = globalThis.OptionsStrategyStore;
 const MANUAL_PLAN_MUTATION = "MUTATE_MANUAL_PLANS";
+const MANUAL_STRATEGY_MUTATION = "MUTATE_MANUAL_STRATEGY";
 const STRATEGY_BOOK_MUTATION = "MUTATE_STRATEGY_BOOK";
 const STRATEGY_BOOK_MIGRATION = "MIGRATE_MANUAL_PLANS";
 const CHAIN_FETCH = "FETCH_NIFTY_CHAIN";
 const HISTORY_FETCH = "FETCH_OPTION_HISTORY";
 const BRIDGE_API = "http://127.0.0.1:8787";
-let manualPlanMutationTail = Promise.resolve();
-let strategyMutationTail = Promise.resolve();
+const LEGACY_MANUAL_LOT_SIZE = 65;
+let storageMutationTail = Promise.resolve();
+
+const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const nonEmpty = (value) => typeof value === "string" && Boolean(value.trim());
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -56,6 +60,10 @@ function isCaptureMessage(type) {
 
 function isManualPlanMutationMessage(type) {
   return type === MANUAL_PLAN_MUTATION;
+}
+
+function isManualStrategyMutationMessage(type) {
+  return type === MANUAL_STRATEGY_MUTATION;
 }
 
 function isChainFetchMessage(type) {
@@ -105,6 +113,12 @@ async function fetchNiftyChain(expiry, fetchImpl = globalThis.fetch) {
   );
   const chain = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(chain.error || "Option chain unavailable.");
+  if (chain.expiry !== expiry) {
+    throw new Error("Option chain expiry does not match the requested exact expiry.");
+  }
+  if (typeof chain.lotSize !== "number" || !Number.isInteger(chain.lotSize) || chain.lotSize <= 0) {
+    throw new Error("Option chain lot size must be an exact positive integer.");
+  }
   return chain;
 }
 
@@ -140,51 +154,339 @@ function applyManualPlanMutation(store, mutation) {
   throw new Error("Invalid manual plan mutation.");
 }
 
-function enqueueManualPlanMutation(mutation) {
-  const commit = async () => {
-    const stored = await chrome.storage.local.get(manualPlanApi.STORAGE_KEY);
-    const rawStore = stored && Object.hasOwn(stored, manualPlanApi.STORAGE_KEY)
-      ? stored[manualPlanApi.STORAGE_KEY]
-      : manualPlanApi.emptyStore();
-    const next = applyManualPlanMutation(
-      rawStore,
-      mutation
-    );
-    await chrome.storage.local.set({ [manualPlanApi.STORAGE_KEY]: next });
-    return next;
-  };
-  const result = manualPlanMutationTail.then(commit, commit);
-  manualPlanMutationTail = result.catch(() => {});
-  return result;
+const MANUAL_ENTRY_FIELDS = [
+  "id", "underlying", "expiry", "strike", "optionType", "direction", "lots", "lotSize", "premium",
+  "callSnapshot", "putSnapshot", "createdAt", "updatedAt"
+];
+
+function manualEntryMatchesLeg(entry, leg) {
+  return MANUAL_ENTRY_FIELDS.every((field) => {
+    if (field !== "lotSize") return Object.is(entry?.[field], leg?.[field]);
+    const entryLotSize = entry?.lotSize === undefined && entry?.underlying === "NIFTY"
+      ? LEGACY_MANUAL_LOT_SIZE
+      : entry?.lotSize;
+    return Object.is(entryLotSize, leg?.lotSize);
+  });
 }
 
-function enqueueStrategyCommit(commit) {
+function requireExactManualLotSize(entry) {
+  if (typeof entry?.lotSize !== "number" || !Number.isInteger(entry.lotSize) || entry.lotSize <= 0) {
+    throw new Error("Manual entry lot size must be an exact positive integer.");
+  }
+}
+
+function strategyLegFromManualEntry(entry, strategy) {
+  return strategyStoreApi.normalizeLeg({
+    ...entry,
+    source: "MANUAL",
+    instrumentKey: strategy.instrumentKey,
+    underlying: strategy.underlying,
+    charges: [],
+    chargesComplete: false
+  });
+}
+
+function manualTransactionMarker(id) {
+  return `manual:${id}`;
+}
+
+function requireManualOwnership(strategyBook, manualPlans, entryId) {
+  if (!nonEmpty(entryId)) throw new Error("Manual entry identity is invalid.");
+  const stored = manualPlanApi.entryById(manualPlans, entryId);
+  if (!stored) throw new Error("Manual entry not found.");
+  const leg = strategyBook.legs[entryId];
+  if (!leg || leg.source !== "MANUAL") throw new Error("Manual strategy leg not found.");
+  if (!manualEntryMatchesLeg(stored.entry, leg)) {
+    throw new Error("Manual plan and strategy leg are inconsistent.");
+  }
+  const strategy = strategyStoreApi.activeStrategyForLeg(strategyBook, entryId);
+  if (!strategy) throw new Error("Active manual strategy ownership not found.");
+  return { stored, leg, strategy };
+}
+
+function applyManualPlanReplacements(rawPlans, replacements) {
+  let manualPlans = manualPlanApi.normalizeStore(rawPlans);
+  for (const replacement of replacements || []) {
+    const prior = manualPlanApi.entryById(manualPlans, replacement.oldId);
+    if (!prior) {
+      if (manualPlanApi.entryById(manualPlans, replacement.newId)) continue;
+      throw new Error("Manual plan reconciliation entry not found.");
+    }
+    manualPlans = manualPlanApi.replaceEntry(manualPlans, replacement.oldId, {
+      ...prior.entry,
+      id: replacement.newId
+    });
+  }
+  return manualPlans;
+}
+
+function reconcileManualState(strategyBook, manualPlans, options) {
+  const outcome = strategyStoreApi.reconcileManualPlans(strategyBook, manualPlans, options);
+  let reconciledPlans = applyManualPlanReplacements(manualPlans, outcome.replacements);
+  reconciledPlans = manualPlanApi.removeEntries(reconciledPlans, outcome.removedEntryIds);
+  for (const leg of outcome.rehydratedEntries || []) {
+    const entry = manualEntryFromStrategyLeg(leg);
+    if (!entry) throw new Error("Active manual strategy leg cannot populate manual plans.");
+    const existing = manualPlanApi.entryById(reconciledPlans, entry.id);
+    if (existing && !manualEntryMatchesLeg(existing.entry, leg)) {
+      throw new Error("Active manual strategy leg conflicts with manual plans.");
+    }
+    reconciledPlans = manualPlanApi.upsertEntry(reconciledPlans, entry);
+  }
+  return {
+    strategyBook: outcome.strategyBook,
+    manualPlans: reconciledPlans,
+    replacements: outcome.replacements
+  };
+}
+
+function manualEntryFromStrategyLeg(leg) {
+  return manualPlanApi.normalizeEntry(Object.fromEntries(MANUAL_ENTRY_FIELDS.map((field) => [field, leg[field]])));
+}
+
+function syncRestoredManualPlans(beforeBook, afterBook, rawPlans, strategyId) {
+  let manualPlans = manualPlanApi.normalizeStore(rawPlans);
+  const priorManualIds = strategyStoreApi.legsForStrategy(beforeBook, strategyId)
+    .filter((leg) => leg.source === "MANUAL")
+    .map((leg) => leg.id);
+  const restoredManualLegs = strategyStoreApi.legsForStrategy(afterBook, strategyId)
+    .filter((leg) => leg.source === "MANUAL");
+  const globallyActiveManualIds = new Set(strategyStoreApi.activeStrategies(afterBook)
+    .flatMap((strategy) => strategyStoreApi.legsForStrategy(afterBook, strategy.id))
+    .filter((leg) => leg.source === "MANUAL")
+    .map((leg) => leg.id));
+  manualPlans = manualPlanApi.removeEntries(
+    manualPlans,
+    priorManualIds.filter((id) => !globallyActiveManualIds.has(id))
+  );
+  for (const leg of restoredManualLegs) {
+    const entry = manualEntryFromStrategyLeg(leg);
+    if (!entry) throw new Error("Restored manual strategy leg cannot populate manual plans.");
+    manualPlans = manualPlanApi.upsertEntry(manualPlans, entry);
+  }
+  return manualPlans;
+}
+
+function applyManualStrategyMutation(rawBook, rawPlans, mutation, now = new Date().toISOString()) {
+  if (!isRecord(mutation) || !nonEmpty(mutation.id)
+    || !["CREATE", "EDIT", "REMOVE"].includes(mutation.type)
+    || !manualPlanApi.isIsoTimestamp(now)) {
+    throw new Error("Invalid manual strategy mutation.");
+  }
+  let strategyBook = strategyStoreApi.normalizeBook(rawBook);
+  let manualPlans = manualPlanApi.normalizeStore(rawPlans);
+  const marker = manualTransactionMarker(mutation.id);
+  if (strategyBook.appliedCommands[marker]) return { strategyBook, manualPlans };
+
+  if (mutation.type === "CREATE") {
+    requireExactManualLotSize(mutation.entry);
+    const entry = manualPlanApi.normalizeEntry(mutation.entry);
+    if (!entry) throw new Error("Invalid manual entry.");
+    if (manualPlanApi.entryById(manualPlans, entry.id) || strategyBook.legs[entry.id]) {
+      throw new Error("Manual entry identity already exists.");
+    }
+    if (!isRecord(mutation.strategy) || !["EXISTING", "CREATE_NEW"].includes(mutation.strategy.mode)
+      || !nonEmpty(mutation.strategy.strategyId)) {
+      throw new Error("Manual strategy ownership is invalid.");
+    }
+    if (mutation.strategy.mode === "CREATE_NEW") {
+      if (!nonEmpty(mutation.strategy.instrumentKey) || mutation.strategy.underlying !== entry.underlying) {
+        throw new Error("Manual strategy identity is invalid.");
+      }
+      strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+        id: `${marker}:strategy`,
+        type: "CREATE_STRATEGY",
+        strategyId: mutation.strategy.strategyId,
+        versionId: `${marker}:strategy-version`,
+        label: `T${strategyBook.nextSequence}`,
+        instrumentKey: mutation.strategy.instrumentKey,
+        underlying: mutation.strategy.underlying,
+        expiry: entry.expiry
+      }, now);
+    }
+    const strategy = strategyStoreApi.strategyById(strategyBook, mutation.strategy.strategyId);
+    if (!strategy || strategy.status !== strategyStoreApi.ACTIVE
+      || strategy.underlying !== entry.underlying || strategy.expiry !== entry.expiry) {
+      throw new Error("Active manual strategy ownership is incompatible.");
+    }
+    const leg = strategyLegFromManualEntry(entry, strategy);
+    if (!leg) throw new Error("Invalid manual strategy leg.");
+    strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+      id: marker,
+      type: "ADD_LEG",
+      strategyId: strategy.id,
+      versionId: `${marker}:version`,
+      leg
+    }, now);
+    manualPlans = manualPlanApi.upsertEntry(manualPlans, entry);
+    return { strategyBook, manualPlans };
+  }
+
+  let entryId = mutation.entryId;
+  const storedBeforeRepair = manualPlanApi.entryById(manualPlans, entryId);
+  const legBeforeRepair = strategyBook.legs[entryId];
+  if (storedBeforeRepair && legBeforeRepair?.source === "MANUAL"
+    && !manualEntryMatchesLeg(storedBeforeRepair.entry, legBeforeRepair)) {
+    const repaired = reconcileManualState(strategyBook, manualPlans, {
+      instrumentKey: legBeforeRepair.instrumentKey,
+      underlying: legBeforeRepair.underlying,
+      at: now
+    });
+    strategyBook = repaired.strategyBook;
+    manualPlans = repaired.manualPlans;
+    entryId = repaired.replacements.find((item) => item.oldId === entryId)?.newId || entryId;
+  }
+  const ownership = requireManualOwnership(strategyBook, manualPlans, entryId);
+  if (mutation.type === "EDIT") {
+    requireExactManualLotSize(mutation.entry);
+    const entry = manualPlanApi.normalizeEntry(mutation.entry);
+    if (!entry) throw new Error("Invalid manual entry.");
+    const leg = strategyLegFromManualEntry(entry, ownership.strategy);
+    if (!leg) throw new Error("Invalid manual strategy leg.");
+    strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+      id: marker,
+      type: "EDIT_LEG",
+      strategyId: ownership.strategy.id,
+      versionId: `${marker}:version`,
+      legId: entryId,
+      replacementLeg: leg
+    }, now);
+    manualPlans = manualPlanApi.replaceEntry(manualPlans, entryId, entry);
+    return { strategyBook, manualPlans };
+  }
+
+  strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+    id: marker,
+    type: "REMOVE_LEG",
+    strategyId: ownership.strategy.id,
+    versionId: `${marker}:version`,
+    legId: entryId
+  }, now);
+  if (!strategyStoreApi.legsForStrategy(strategyBook, ownership.strategy.id).length) {
+    strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+      id: `${marker}:archive`,
+      type: "ARCHIVE_STRATEGY",
+      strategyId: ownership.strategy.id
+    }, now);
+  }
+  manualPlans = manualPlanApi.removeEntry(manualPlans, ownership.stored.expiry, entryId);
+  return { strategyBook, manualPlans };
+}
+
+function enqueueStorageCommit(commit) {
   const write = async () => {
     const stored = await chrome.storage.local.get([
       strategyStoreApi.STORAGE_KEY,
       manualPlanApi.STORAGE_KEY
     ]);
-    const rawBook = stored && Object.hasOwn(stored, strategyStoreApi.STORAGE_KEY)
-      ? stored[strategyStoreApi.STORAGE_KEY]
-      : strategyStoreApi.emptyBook();
-    const outcome = commit(rawBook, stored?.[manualPlanApi.STORAGE_KEY]);
-    const strategyBook = outcome?.strategyBook || outcome;
-    const values = { [strategyStoreApi.STORAGE_KEY]: strategyBook };
-    if (outcome?.manualPlans) values[manualPlanApi.STORAGE_KEY] = outcome.manualPlans;
+    const state = {
+      strategyBook: stored && Object.hasOwn(stored, strategyStoreApi.STORAGE_KEY)
+        ? stored[strategyStoreApi.STORAGE_KEY]
+        : strategyStoreApi.emptyBook(),
+      manualPlans: stored && Object.hasOwn(stored, manualPlanApi.STORAGE_KEY)
+        ? stored[manualPlanApi.STORAGE_KEY]
+        : manualPlanApi.emptyStore()
+    };
+    const outcome = commit(state);
+    if (!isRecord(outcome)) throw new Error("Storage mutation result is invalid.");
+    const values = {};
+    if (Object.hasOwn(outcome, strategyStoreApi.STORAGE_KEY)) {
+      values[strategyStoreApi.STORAGE_KEY] = outcome[strategyStoreApi.STORAGE_KEY];
+    }
+    if (Object.hasOwn(outcome, manualPlanApi.STORAGE_KEY)) {
+      values[manualPlanApi.STORAGE_KEY] = outcome[manualPlanApi.STORAGE_KEY];
+    }
+    if (!Object.keys(values).length) throw new Error("Storage mutation changed no values.");
     await chrome.storage.local.set(values);
-    return strategyBook;
+    return outcome;
   };
-  const result = strategyMutationTail.then(write, write);
-  strategyMutationTail = result.catch(() => {});
+  const result = storageMutationTail.then(write, write);
+  storageMutationTail = result.catch(() => {});
   return result;
+}
+
+function enqueueManualPlanMutation() {
+  return Promise.reject(new Error(
+    "Deprecated split manual plan mutation route; use atomic manual strategy mutation."
+  ));
+}
+
+function enqueueStrategyCommit(commit) {
+  return enqueueStorageCommit(({ strategyBook, manualPlans }) => {
+    const outcome = commit(strategyBook, manualPlans);
+    return isRecord(outcome) && Object.hasOwn(outcome, strategyStoreApi.STORAGE_KEY)
+      ? outcome
+      : { strategyBook: outcome };
+  }).then((outcome) => outcome.strategyBook);
+}
+
+function enqueueManualStrategyMutation(mutation) {
+  return enqueueStorageCommit(({ strategyBook, manualPlans }) => applyManualStrategyMutation(
+    strategyBook,
+    manualPlans,
+    mutation
+  ));
+}
+
+function manualStrategyTarget(book, command) {
+  const normalized = strategyStoreApi.normalizeBook(book);
+  const strategy = normalized.strategies[command?.strategyId];
+  if (!strategy || strategy.id.startsWith("broker:")) return null;
+  const versionIds = [strategy.currentVersionId];
+  if (command?.type === "RESTORE_VERSION" && nonEmpty(command.restoreVersionId)) {
+    versionIds.push(command.restoreVersionId);
+  }
+  const ownsManualEvidence = versionIds.some((versionId) =>
+    normalized.versions[versionId]?.legIds.some((id) => normalized.legs[id]?.source === "MANUAL"));
+  return ownsManualEvidence || strategy.id.startsWith("legacy:") || strategy.id.startsWith("legacy-v2:")
+    ? strategy
+    : null;
+}
+
+function allocateStrategyCreateLabel(book, command) {
+  if (!isRecord(command)) return command;
+  const label = `T${strategyStoreApi.normalizeBook(book).nextSequence}`;
+  if (command.type === "CREATE_STRATEGY") return { ...command, label };
+  if (["MERGE_STRATEGIES", "SPLIT_STRATEGY"].includes(command.type)
+    && command.destination?.mode === "CREATE_NEW") {
+    return { ...command, destination: { ...command.destination, label } };
+  }
+  return command;
 }
 
 function enqueueStrategyMutation(command) {
   return enqueueStrategyCommit((book, manualPlans) => {
+    const timestamp = new Date().toISOString();
+    let workingBook = book;
+    let workingPlans = manualPlans;
+    if (["ARCHIVE_STRATEGY", "RESTORE_VERSION"].includes(command?.type)) {
+      const target = manualStrategyTarget(workingBook, command);
+      if (target) {
+        const repaired = reconcileManualState(workingBook, workingPlans, {
+          instrumentKey: target.instrumentKey,
+          underlying: target.underlying,
+          at: timestamp
+        });
+        workingBook = repaired.strategyBook;
+        workingPlans = repaired.manualPlans;
+      }
+    }
     const archivedLegIds = command?.type === "ARCHIVE_STRATEGY"
-      ? strategyStoreApi.legsForStrategy(book, command.strategyId).map((leg) => leg.id)
+      ? strategyStoreApi.legsForStrategy(workingBook, command.strategyId).map((leg) => leg.id)
       : [];
-    const strategyBook = strategyStoreApi.applyCommand(book, command);
+    const allocatedCommand = allocateStrategyCreateLabel(workingBook, command);
+    const strategyBook = strategyStoreApi.applyCommand(workingBook, allocatedCommand, timestamp);
+    if (command?.type === "RESTORE_VERSION") {
+      return {
+        strategyBook,
+        manualPlans: syncRestoredManualPlans(
+          workingBook,
+          strategyBook,
+          workingPlans,
+          command.strategyId
+        )
+      };
+    }
     if (!archivedLegIds.length) return strategyBook;
     const activeLegIds = new Set(strategyStoreApi.activeStrategies(strategyBook)
       .flatMap((strategy) => strategyStoreApi.legsForStrategy(strategyBook, strategy.id))
@@ -192,15 +494,15 @@ function enqueueStrategyMutation(command) {
     const retiredLegIds = archivedLegIds.filter((id) => !activeLegIds.has(id));
     return {
       strategyBook,
-      manualPlans: manualPlanApi.removeEntries(manualPlans, retiredLegIds)
+      manualPlans: manualPlanApi.removeEntries(workingPlans, retiredLegIds)
     };
   });
 }
 
 function enqueueStrategyMigration({ instrumentKey, underlying, at }) {
   const timestamp = typeof at === "string" && at ? at : new Date().toISOString();
-  return enqueueStrategyCommit((book, manualPlans) => strategyStoreApi.migrateManualPlans(
-    book,
+  return enqueueStorageCommit(({ strategyBook, manualPlans }) => reconcileManualState(
+    strategyBook,
     manualPlans,
     { instrumentKey, underlying, at: timestamp }
   ));
@@ -373,11 +675,12 @@ async function captureAxisScale(_sender, message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const manualMutation = isManualPlanMutationMessage(message?.type);
+  const manualStrategyMutation = isManualStrategyMutationMessage(message?.type);
   const chainFetch = isChainFetchMessage(message?.type);
   const historyFetch = isHistoryFetchMessage(message?.type);
   const strategyMutation = isStrategyMutationMessage(message?.type);
   const strategyMigration = isStrategyMigrationMessage(message?.type);
-  if (!isCaptureMessage(message?.type) && !manualMutation && !chainFetch && !historyFetch
+  if (!isCaptureMessage(message?.type) && !manualMutation && !manualStrategyMutation && !chainFetch && !historyFetch
     && !strategyMutation && !strategyMigration) return;
   const trustedStrategySender = (strategyMutation || strategyMigration) && isExtensionSender(sender);
   if (!isTradingViewSender(sender) && !trustedStrategySender) {
@@ -389,6 +692,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ? "Option-chain refresh is limited to TradingView tabs."
         : strategyMutation || strategyMigration
         ? "Strategy mutations are limited to TradingView tabs."
+        : manualStrategyMutation
+        ? "Manual strategy mutations are limited to TradingView tabs."
         : manualMutation
         ? "Manual plan mutations are limited to TradingView tabs."
         : "Axis capture is limited to TradingView tabs."
@@ -404,7 +709,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((strategyBook) => ({ ok: true, strategyBook }))
     : strategyMigration
     ? enqueueStrategyMigration(message)
-      .then((strategyBook) => ({ ok: true, strategyBook }))
+      .then(({ strategyBook, manualPlans }) => ({ ok: true, strategyBook, manualPlans }))
+    : manualStrategyMutation
+    ? enqueueManualStrategyMutation(message.mutation)
+      .then(({ manualPlans, strategyBook }) => ({ ok: true, manualPlans, strategyBook }))
     : manualMutation
     ? enqueueManualPlanMutation(message.mutation)
       .then((manualPlans) => ({ ok: true, manualPlans }))
@@ -420,9 +728,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     applyManualPlanMutation,
+    applyManualStrategyMutation,
     axisPairsFromCandidates,
     captureAxisScale,
     enqueueManualPlanMutation,
+    enqueueManualStrategyMutation,
     extractAxisPrices,
     fetchNiftyChain,
     fetchOptionHistory,
@@ -430,7 +740,9 @@ if (typeof module !== "undefined" && module.exports) {
     isChainFetchMessage,
     isHistoryFetchMessage,
     isManualPlanMutationMessage,
+    isManualStrategyMutationMessage,
     isolateAxisCandidates,
+    manualEntryMatchesLeg,
     isStrategyMigrationMessage,
     isStrategyMutationMessage,
     enqueueStrategyMigration,

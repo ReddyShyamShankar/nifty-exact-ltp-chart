@@ -15,6 +15,10 @@
     return parsed !== null && parsed >= 0 ? parsed : null;
   }
 
+  function exactLotSize(value) {
+    return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+  }
+
   function money(value) {
     const parsed = snapshot(value);
     return parsed === null ? "—" : parsed.toFixed(2);
@@ -52,10 +56,17 @@
     return Number.isFinite(Date.parse(value));
   }
 
-  function createDraft({ expiry, row, entry, optionType: requestedOptionType } = {}) {
+  function createDraft(options = {}) {
+    const { expiry, row, entry, optionType: requestedOptionType } = options;
     const liveCall = snapshot(row?.call);
     const livePut = snapshot(row?.put);
     const editing = Boolean(entry && typeof entry === "object");
+    const currentLotSize = exactLotSize(Object.hasOwn(options, "lotSize") ? options.lotSize : row?.lotSize);
+    const storedLotSize = exactLotSize(entry?.lotSize);
+    const storedLotSizeInvalid = editing && entry?.lotSize !== undefined && storedLotSize === null;
+    const lotSizeConflict = storedLotSizeInvalid
+      || (currentLotSize !== null && storedLotSize !== null && currentLotSize !== storedLotSize);
+    const lotSize = lotSizeConflict ? null : currentLotSize ?? storedLotSize;
     const optionType = OPTION_TYPES.includes(entry?.optionType) ? entry.optionType : null;
     const actionOptionType = optionType || (OPTION_TYPES.includes(requestedOptionType) ? requestedOptionType : "CALL");
     const callSnapshot = editing ? snapshot(entry?.callSnapshot) : liveCall;
@@ -72,6 +83,8 @@
       actionOptionType,
       direction: DIRECTIONS.includes(entry?.direction) ? entry.direction : null,
       lots: number(entry?.lots) ?? 1,
+      lotSize,
+      ...(lotSizeConflict ? { lotSizeConflict: true } : {}),
       premium,
       callSnapshot,
       putSnapshot
@@ -118,6 +131,7 @@
     if (!OPTION_TYPES.includes(draft?.optionType)) errors.push("optionType");
     if (!DIRECTIONS.includes(draft?.direction)) errors.push("direction");
     if (!Number.isInteger(draft?.lots) || draft.lots <= 0) errors.push("lots");
+    if (exactLotSize(draft?.lotSize) === null) errors.push("lotSize");
     if (snapshot(draft?.premium) === null) errors.push("premium");
     if (draft?.optionType === "CALL" && snapshot(draft?.callSnapshot) === null) errors.push("callSnapshot");
     if (draft?.optionType === "PUT" && snapshot(draft?.putSnapshot) === null) errors.push("putSnapshot");
@@ -137,6 +151,7 @@
       optionType: draft.optionType,
       direction: draft.direction,
       lots: draft.lots,
+      lotSize: draft.lotSize,
       premium: draft.premium,
       callSnapshot: draft.callSnapshot,
       putSnapshot: draft.putSnapshot,
@@ -171,7 +186,7 @@
           direction,
           source,
           label: `${optionType[0]}${lots}`,
-          entryId: source === "MANUAL" && matching.length === 1 ? matching[0].id : null
+          entryId: matching.length === 1 ? matching[0].id : null
         };
       });
     }));
@@ -234,6 +249,8 @@
         ? "LOTS ≥ 1"
         : validation.errors.some((error) => ["premium", "callSnapshot", "putSnapshot"].includes(error))
           ? "ENTER PREMIUM"
+          : validation.errors.includes("lotSize")
+            ? "LOT SIZE UNAVAILABLE"
           : validation.ok ? "" : "ENTRY INVALID";
     return {
       actionOptions: DIRECTIONS.map((direction) => ({
@@ -286,9 +303,13 @@
         badge.dataset.source = modelBadge.source;
         if (modelBadge.entryId) badge.dataset.entryId = modelBadge.entryId;
         badge.textContent = modelBadge.label;
-        badge.setAttribute("aria-label", modelBadge.entryId
-          ? `Edit saved ${word(modelBadge.direction)} ${word(modelBadge.optionType)} position`
-          : `${modelBadge.source === "BROKER_POSITION" ? "Broker" : "Saved"} ${word(modelBadge.direction)} ${word(modelBadge.optionType)} positions`);
+        const positionLabel = `${word(modelBadge.direction)} ${word(modelBadge.optionType)}`;
+        const accessibleLabel = modelBadge.source === "BROKER_POSITION"
+          ? `Open broker ${positionLabel} ${modelBadge.entryId ? "position details" : "positions"}`
+          : modelBadge.entryId
+            ? `Edit saved ${positionLabel} position`
+            : `Saved ${positionLabel} positions`;
+        badge.setAttribute("aria-label", accessibleLabel);
         badges.append(badge);
       });
       cells.unshift(badges);

@@ -2,8 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const payoff = require("./manual-payoff.js");
 
-const leg = (overrides) => ({ id: "x", underlying: "NIFTY", expiry: "2026-08-25", strike: 24100,
-  optionType: "CALL", direction: "SELL", lots: 1, premium: 358, ...overrides });
+const leg = (overrides) => ({ id: "x", source: "MANUAL", underlying: "NIFTY", expiry: "2026-08-25", strike: 24100,
+  optionType: "CALL", direction: "SELL", lots: 1, lotSize: 1, premium: 358, ...overrides });
 
 test("four option directions use exact expiry payoff", () => {
   assert.equal(payoff.legPayoff(leg({ optionType: "CALL", direction: "BUY" }), 24500), 42);
@@ -22,20 +22,64 @@ test("approved lot changes move combined break-evens", () => {
 
 test("individual position P&L uses its own entry, live premium, direction, and lots", () => {
   assert.equal(payoff.positionPnl(
-    leg({ optionType: "CALL", direction: "SELL", lots: 2, premium: 358 }),
-    { strike: 24100, call: 418, put: 183 },
-    65
+    leg({ optionType: "CALL", direction: "SELL", lots: 2, lotSize: 65, premium: 358 }),
+    { strike: 24100, call: 418, put: 183 }
   ), -7800);
   assert.equal(payoff.positionPnl(
-    leg({ optionType: "PUT", direction: "BUY", strike: 24000, lots: 3, premium: 183 }),
-    { strike: 24000, call: 500, put: 200 },
-    65
+    leg({ optionType: "PUT", direction: "BUY", strike: 24000, lots: 3, lotSize: 65, premium: 183 }),
+    { strike: 24000, call: 500, put: 200 }
   ), 3315);
   assert.equal(payoff.positionPnl(
-    leg({ optionType: "PUT", direction: "BUY", strike: 24000, lots: 3, premium: 183 }),
-    { strike: 24000, call: 500, put: 0 },
-    65
+    leg({ optionType: "PUT", direction: "BUY", strike: 24000, lots: 3, lotSize: 65, premium: 183 }),
+    { strike: 24000, call: 500, put: 0 }
   ), null);
+});
+
+test("each leg uses its own contract size for payoff and current P&L", () => {
+  const mixed = [
+    leg({ id: "short-call-25", strike: 100, optionType: "CALL", direction: "SELL", premium: 10, lotSize: 25 }),
+    leg({ id: "short-put-50", strike: 100, optionType: "PUT", direction: "SELL", premium: 10, lotSize: 50 }),
+    leg({ id: "long-call-65", strike: 110, optionType: "CALL", direction: "BUY", premium: 2, lotSize: 65 })
+  ];
+  assert.equal(payoff.payoffAt(mixed, 120), 770);
+  assert.equal(payoff.positionPnl(mixed[0], { strike: 100, call: 8, put: 8 }), 50);
+  assert.equal(payoff.positionPnl(mixed[1], { strike: 100, call: 8, put: 8 }), 100);
+  assert.equal(payoff.positionPnl(mixed[2], { strike: 110, call: 3, put: 1 }), 65);
+});
+
+test("mixed contract sizes weight break-even slopes and rupee charges directly", () => {
+  const entries = [
+    leg({ id: "call-25", strike: 100, optionType: "CALL", direction: "SELL", premium: 10, lotSize: 25 }),
+    leg({ id: "put-50", strike: 100, optionType: "PUT", direction: "SELL", premium: 10, lotSize: 50 })
+  ];
+  const withoutCharges = payoff.breakEvens(entries).points;
+  const withCharges = payoff.breakEvens(entries, 50).points;
+  assert.ok(Math.abs(withoutCharges[0] - 85) <= 1e-9);
+  assert.ok(Math.abs(withoutCharges[1] - 130) <= 1e-9);
+  assert.ok(Math.abs(withCharges[0] - 86) <= 1e-9);
+  assert.ok(Math.abs(withCharges[1] - 128) <= 1e-9);
+  assert.equal(payoff.payoffAt(entries, 100, 50), 700);
+});
+
+test("legacy manual entry alone falls back to 65 while broker entry without lot size fails closed", () => {
+  const legacyManual = leg({ source: "MANUAL", lotSize: undefined, lots: 2, premium: 10 });
+  const unknownNonNiftyManual = leg({
+    source: "MANUAL",
+    instrumentKey: "NSE_INDEX|BANKNIFTY",
+    underlying: "BANKNIFTY",
+    lotSize: undefined,
+    lots: 2,
+    premium: 10
+  });
+  const missingBrokerSize = leg({ source: "BROKER_POSITION", lotSize: undefined, premium: 10 });
+  assert.equal(payoff.positionPnl(legacyManual, { strike: 24100, call: 8, put: 8 }), 260);
+  assert.equal(payoff.lotSizeForEntry(unknownNonNiftyManual), null);
+  assert.equal(payoff.positionPnl(unknownNonNiftyManual, { strike: 24100, call: 8, put: 8 }), null);
+  assert.equal(payoff.legPayoff(unknownNonNiftyManual, 24100), null);
+  assert.deepEqual(payoff.breakEvens([unknownNonNiftyManual]), { status: "invalid", points: [] });
+  assert.equal(payoff.positionPnl(missingBrokerSize, { strike: 24100, call: 8, put: 8 }, 65), null);
+  assert.equal(payoff.legPayoff(missingBrokerSize, 24100), null);
+  assert.deepEqual(payoff.breakEvens([missingBrokerSize]), { status: "invalid", points: [] });
 });
 
 test("solver returns every root and detects fully flat payoff", () => {

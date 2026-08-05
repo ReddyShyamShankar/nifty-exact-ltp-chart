@@ -24,7 +24,8 @@ function mainWorldHarness() {
   };
   const documentElement = {
     getAttribute: (name) => attributes.get(name) || null,
-    setAttribute: (name, value) => attributes.set(name, String(value))
+    setAttribute: (name, value) => attributes.set(name, String(value)),
+    removeAttribute: (name) => attributes.delete(name)
   };
   const sandbox = {
     CanvasRenderingContext2D,
@@ -59,6 +60,16 @@ function mainWorldHarness() {
     enable() {
       documentElement.setAttribute("data-options-time-sync", "on");
       syncMutation?.([]);
+    },
+    disable() {
+      documentElement.removeAttribute("data-options-time-sync");
+      syncMutation?.([]);
+    },
+    coalescedReopen() {
+      documentElement.removeAttribute("data-options-time-axis");
+      documentElement.removeAttribute("data-options-time-sync");
+      documentElement.setAttribute("data-options-time-sync", "on");
+      syncMutation?.([]);
     }
   };
 }
@@ -83,6 +94,35 @@ test("enabling sync publishes the last stable axis even when TradingView does no
   const published = JSON.parse(harness.attributes.get("data-options-time-axis") || "null");
   assert.equal(published?.stableCount >= 2, true);
   assert.deepEqual(Array.from(published.pairs, (pair) => Math.round(pair.x)), [150, 350]);
+});
+
+test("re-enabling sync republishes cached stable axis without TradingView repaint", () => {
+  const harness = mainWorldHarness();
+  harness.fillText.call(harness.context, "Jul 30", 100, 10);
+  harness.fillText.call(harness.context, "Jul 31", 300, 10);
+  harness.flushFrames();
+  harness.flushTimers();
+  harness.enable();
+  harness.disable();
+  harness.attributes.delete("data-options-time-axis");
+
+  harness.enable();
+
+  assert.equal(harness.attributes.has("data-options-time-axis"), true);
+});
+
+test("coalesced close and reopen still republishes cached stable axis", () => {
+  const harness = mainWorldHarness();
+  harness.fillText.call(harness.context, "Jul 30", 100, 10);
+  harness.fillText.call(harness.context, "Jul 31", 300, 10);
+  harness.flushFrames();
+  harness.flushTimers();
+  harness.enable();
+
+  harness.coalescedReopen();
+
+  assert.equal(harness.attributes.has("data-options-time-axis"), true,
+    "final on state must replay cached axis even when off/on mutations share one callback");
 });
 
 test("parses exact date month-day and intraday labels against anchor", () => {

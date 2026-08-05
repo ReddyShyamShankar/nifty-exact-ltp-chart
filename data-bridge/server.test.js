@@ -29,7 +29,7 @@ async function runningServer(overrides = {}) {
     chainLoader: overrides.chainLoader || (async (expiry) => ({ source: "Upstox", expiry, rows: [] })),
     optionHistoryLoader: overrides.optionHistoryLoader,
     expiryLoader: overrides.expiryLoader || (async () => ({ source: "Upstox", expiries: [] })),
-    expiryMetadata: overrides.expiryMetadata || ((expiry) => ({ expiry, weekly: false })),
+    expiryMetadata: overrides.expiryMetadata || ((expiry) => ({ expiry, weekly: false, lotSize: 65 })),
     normalizePositions: normalizeNiftyPositions,
     normalizeTrades: normalizeNiftyTrades,
     extensionOrigin: overrides.extensionOrigin || EXTENSION_ORIGIN,
@@ -239,7 +239,217 @@ test("one seller refresh coordinates positions, trades, and chain exactly once",
   assert.equal(payload.positions[0].contractId, "NFO:NIFTY:2026-08-25:24100:CE");
   assert.equal(payload.trades[0].id, "trade-1");
   assert.equal(payload.chain.expiry, "2026-08-25");
+  assert.equal(payload.chain.lotSize, 65);
   assert.doesNotMatch(JSON.stringify(payload), /daily-token|access.?token|api.?secret/i);
+});
+
+test("seller refresh passes the exact Upstox lot size into position and trade normalization", async (t) => {
+  const server = await runningServer({
+    zerodhaClientFactory: () => ({
+      getPositions: async () => ({ status: "success", data: { net: [{
+        exchange: "NFO", tradingsymbol: "NIFTY26AUG24100CE", quantity: -50,
+        average_price: 358.8, last_price: 320, pnl: 1940
+      }] } }),
+      getTrades: async () => ({ status: "success", data: [{
+        trade_id: "trade-25", exchange: "NFO", tradingsymbol: "NIFTY26AUG24100CE",
+        transaction_type: "SELL", quantity: 25, average_price: 358.8,
+        fill_timestamp: "2026-08-01 09:15:00"
+      }] })
+    }),
+    expiryMetadata: (expiry) => ({ expiry, weekly: false, lotSize: 25 })
+  });
+  t.after(() => close(server));
+
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.positions[0].signedQuantity, -50);
+  assert.equal(payload.positions[0].lotSize, 25);
+  assert.equal(payload.trades[0].quantity, 25);
+  assert.equal(payload.chain.lotSize, 25);
+});
+
+test("public chain exposes the exact lot size for the expiry resolved by Upstox", async (t) => {
+  const metadataRequests = [];
+  const server = await runningServer({
+    chainLoader: async () => ({
+      source: "Upstox",
+      expiry: "2026-08-25",
+      spot: 23900,
+      rows: [{ strike: 23900, call: 100, put: 90 }]
+    }),
+    expiryMetadata: (expiry) => {
+      metadataRequests.push(expiry);
+      return { expiry, weekly: false, lotSize: 25 };
+    }
+  });
+  t.after(() => close(server));
+
+  const response = await fetch(`${baseUrl(server)}/api/nifty-chain?expiry=current_month`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.expiry, "2026-08-25");
+  assert.equal(payload.lotSize, 25);
+  assert.deepEqual(metadataRequests, ["2026-08-25"]);
+});
+
+test("public chain rejects a different expiry when an exact date was requested", async (t) => {
+  let metadataRequests = 0;
+  const server = await runningServer({
+    chainLoader: async () => ({
+      source: "Upstox",
+      expiry: "2026-09-01",
+      spot: 23900,
+      rows: []
+    }),
+    expiryMetadata: () => {
+      metadataRequests += 1;
+      return { expiry: "2026-09-01", weekly: true, lotSize: 25 };
+    }
+  });
+  t.after(() => close(server));
+
+  const response = await fetch(`${baseUrl(server)}/api/nifty-chain?expiry=2026-08-25`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 502);
+  assert.equal(payload.kind, "expiry_mismatch");
+  assert.match(payload.error, /expiry.*did not match requested expiry/i);
+  assert.equal(metadataRequests, 0);
+  assert.equal(Object.hasOwn(payload, "rows"), false);
+});
+
+test("public chain refreshes expired expiry metadata before exposing its lot size", async (t) => {
+  const nowMs = Date.parse("2026-08-05T12:00:00.000Z");
+  let expiryLoads = 0;
+  let cache = {
+    updatedAt: nowMs - 16 * 60 * 1000,
+    payload: {
+      expiries: [{ expiry: "2026-08-25", weekly: false, lotSize: 65 }]
+    }
+  };
+  const server = await runningServer({
+    chainLoader: async (expiry) => ({ source: "Upstox", expiry, spot: 23900, rows: [] }),
+    expiryMetadata: (expiry) => bridgeServer.findFreshExpiryMetadata(cache, expiry, nowMs),
+    expiryLoader: async () => {
+      expiryLoads += 1;
+      cache = {
+        updatedAt: nowMs,
+        payload: {
+          expiries: [{ expiry: "2026-08-25", weekly: false, lotSize: 25 }]
+        }
+      };
+      return cache.payload;
+    }
+  });
+  t.after(() => close(server));
+
+  const response = await fetch(`${baseUrl(server)}/api/nifty-chain?expiry=2026-08-25`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.lotSize, 25);
+  assert.equal(expiryLoads, 1);
+});
+
+test("public chain coalesces concurrent expiry metadata cache misses", async (t) => {
+  let metadata = null;
+  let expiryLoads = 0;
+  let releaseLoader;
+  let markLoaderStarted;
+  const loaderGate = new Promise((resolve) => { releaseLoader = resolve; });
+  const loaderStarted = new Promise((resolve) => { markLoaderStarted = resolve; });
+  const server = await runningServer({
+    chainLoader: async (expiry) => ({ source: "Upstox", expiry, spot: 23900, rows: [] }),
+    expiryMetadata: () => metadata,
+    expiryLoader: async () => {
+      expiryLoads += 1;
+      markLoaderStarted();
+      await loaderGate;
+      metadata = { expiry: "2026-08-25", weekly: false, lotSize: 25 };
+      return { source: "Upstox", expiries: [metadata] };
+    }
+  });
+  t.after(() => close(server));
+
+  const pending = Array.from({ length: 3 }, () =>
+    fetch(`${baseUrl(server)}/api/nifty-chain?expiry=2026-08-25`));
+  await loaderStarted;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const observedLoads = expiryLoads;
+  releaseLoader();
+  const responses = await Promise.all(pending);
+  const payloads = await Promise.all(responses.map((response) => response.json()));
+
+  assert.equal(observedLoads, 1);
+  assert.equal(expiryLoads, 1);
+  assert.equal(responses.every((response) => response.status === 200), true);
+  assert.equal(payloads.every((payload) => payload.lotSize === 25), true);
+});
+
+test("failed shared expiry metadata load clears so next request can retry", async (t) => {
+  let metadata = null;
+  let expiryLoads = 0;
+  let fail = true;
+  const server = await runningServer({
+    chainLoader: async (expiry) => ({ source: "Upstox", expiry, spot: 23900, rows: [] }),
+    expiryMetadata: () => metadata,
+    expiryLoader: async () => {
+      expiryLoads += 1;
+      if (fail) throw new Error("expiry metadata unavailable");
+      metadata = { expiry: "2026-08-25", weekly: false, lotSize: 25 };
+      return { source: "Upstox", expiries: [metadata] };
+    }
+  });
+  t.after(() => close(server));
+
+  const failed = await fetch(`${baseUrl(server)}/api/nifty-chain?expiry=2026-08-25`);
+  fail = false;
+  const retried = await fetch(`${baseUrl(server)}/api/nifty-chain?expiry=2026-08-25`);
+
+  assert.equal(failed.status, 502);
+  assert.equal(retried.status, 200);
+  assert.equal((await retried.json()).lotSize, 25);
+  assert.equal(expiryLoads, 2);
+});
+
+test("public chain loads current expiry metadata once and fails closed when no lot size exists", async (t) => {
+  let metadata = null;
+  let expiryLoads = 0;
+  const server = await runningServer({
+    chainLoader: async (expiry) => ({ source: "Upstox", expiry, spot: 23900, rows: [] }),
+    expiryMetadata: () => metadata,
+    expiryLoader: async () => {
+      expiryLoads += 1;
+      return { source: "Upstox", expiries: [] };
+    }
+  });
+  t.after(() => close(server));
+
+  const response = await fetch(`${baseUrl(server)}/api/nifty-chain?expiry=2026-08-25`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 502);
+  assert.equal(expiryLoads, 1);
+  assert.match(payload.error, /lot size.*positive integer/i);
+  assert.equal(Object.hasOwn(payload, "rows"), false);
+});
+
+test("public chain rejects a lot size that conflicts with authoritative expiry metadata", async (t) => {
+  const server = await runningServer({
+    chainLoader: async (expiry) => ({ source: "Upstox", expiry, lotSize: 50, spot: 23900, rows: [] }),
+    expiryMetadata: (expiry) => ({ expiry, weekly: false, lotSize: 25 })
+  });
+  t.after(() => close(server));
+
+  const response = await fetch(`${baseUrl(server)}/api/nifty-chain?expiry=2026-08-25`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 502);
+  assert.match(payload.error, /conflicting.*lot size/i);
+  assert.equal(Object.hasOwn(payload, "rows"), false);
 });
 
 test("seller refresh loads expiry proof when bridge cache is empty", async (t) => {
@@ -256,7 +466,7 @@ test("seller refresh loads expiry proof when bridge cache is empty", async (t) =
     expiryMetadata: () => metadata,
     expiryLoader: async () => {
       expiryLoads += 1;
-      metadata = { expiry: "2026-08-25", weekly: false };
+      metadata = { expiry: "2026-08-25", weekly: false, lotSize: 65 };
       return { source: "Upstox", expiries: [metadata] };
     }
   });
@@ -386,14 +596,43 @@ test("public bridge responses use the configured exact origin and never wildcard
 
 test("preserves weekly and monthly markers from cached Upstox contract metadata", () => {
   assert.deepEqual(bridgeServer.summarizeNiftyExpiries([
-    { expiry: "2026-08-18", weekly: true, instrument_type: "CE" },
-    { expiry: "2026-08-18", weekly: true, instrument_type: "PE" },
-    { expiry: "2026-08-25", weekly: false, instrument_type: "CE" },
-    { expiry: "2026-08-25", weekly: false, instrument_type: "PE" }
+    { expiry: "2026-08-18", weekly: true, lot_size: 25, instrument_type: "CE" },
+    { expiry: "2026-08-18", weekly: true, lot_size: 25, instrument_type: "PE" },
+    { expiry: "2026-08-25", weekly: false, lot_size: 25, instrument_type: "CE" },
+    { expiry: "2026-08-25", weekly: false, lot_size: 25, instrument_type: "PE" }
   ], "2026-08-01"), [
-    { expiry: "2026-08-18", daysToExpiry: 17, weekly: true },
-    { expiry: "2026-08-25", daysToExpiry: 24, weekly: false }
+    { expiry: "2026-08-18", daysToExpiry: 17, weekly: true, lotSize: 25 },
+    { expiry: "2026-08-25", daysToExpiry: 24, weekly: false, lotSize: 25 }
   ]);
+});
+
+test("rejects missing or inexact Upstox lot sizes while summarizing contract metadata", () => {
+  for (const lotSize of [undefined, null, 0, -1, 25.5, "25"]) {
+    assert.throws(() => bridgeServer.summarizeNiftyExpiries([
+      { expiry: "2026-08-18", weekly: true, lot_size: lotSize, instrument_type: "CE" }
+    ], "2026-08-01"), /lot size.*positive integer/i);
+  }
+});
+
+test("rejects conflicting Upstox lot sizes for one expiry", () => {
+  assert.throws(() => bridgeServer.summarizeNiftyExpiries([
+    { expiry: "2026-08-18", weekly: true, lot_size: 25, instrument_type: "CE" },
+    { expiry: "2026-08-18", weekly: true, lot_size: 50, instrument_type: "PE" }
+  ], "2026-08-01"), /conflicting.*lot sizes/i);
+});
+
+test("seller refresh fails closed when expiry metadata has no exact lot size", async (t) => {
+  const server = await runningServer({
+    expiryMetadata: (expiry) => ({ expiry, weekly: false })
+  });
+  t.after(() => close(server));
+
+  const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
+  const payload = await response.json();
+
+  assert.equal(response.status, 502);
+  assert.match(payload.error, /lot size.*positive integer/i);
+  assert.equal(Object.hasOwn(payload, "positions"), false);
 });
 
 test("fails coordinated refresh when Upstox resolves a different expiry", async (t) => {
@@ -413,7 +652,7 @@ test("fails coordinated refresh when Upstox resolves a different expiry", async 
   assert.deepEqual(calls, { positions: 1, trades: 1, chain: 1 });
 });
 
-test("fails closed when monthly Zerodha identity lacks cached monthly proof", async (t) => {
+test("fails closed when the requested expiry lacks cached Upstox metadata", async (t) => {
   const server = await runningServer({
     zerodhaClientFactory: () => ({
       getPositions: async () => ({ status: "success", data: { net: [{
@@ -429,6 +668,6 @@ test("fails closed when monthly Zerodha identity lacks cached monthly proof", as
   const response = await accountFetch(server, "/api/seller-refresh?expiry=2026-08-25");
   const payload = await response.json();
   assert.equal(response.status, 502);
-  assert.match(payload.error, /monthly expiry.*cannot be proved/i);
+  assert.match(payload.error, /lot size.*positive integer/i);
   assert.equal(Object.hasOwn(payload, "positions"), false);
 });

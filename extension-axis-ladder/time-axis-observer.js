@@ -190,9 +190,10 @@
   const syncObserver = root.MutationObserver && root.document?.documentElement
     ? new root.MutationObserver(() => {
       const next = timeSyncEnabled(root.document.documentElement.getAttribute(SYNC_ATTRIBUTE));
-      if (next === syncActive) return;
-      syncActive = next;
-      clearObservation();
+      if (next !== syncActive) {
+        syncActive = next;
+        clearObservation();
+      }
       if (syncActive && lastStable && root.document?.documentElement) {
         root.document.documentElement.setAttribute(ATTRIBUTE, JSON.stringify(lastStable));
       }

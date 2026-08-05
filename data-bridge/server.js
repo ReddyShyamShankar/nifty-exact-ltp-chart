@@ -152,6 +152,13 @@ function openInterest(value) {
   return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
 }
 
+function exactPositiveIntegerLotSize(value, label = "Upstox lot size") {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be an exact positive integer.`);
+  }
+  return value;
+}
+
 export function formatChain(chain) {
   const spot = chain.find((item) => Number.isFinite(item.underlying_spot_price))?.underlying_spot_price;
   if (!Number.isFinite(spot)) throw new Error("Upstox response did not contain NIFTY spot price.");
@@ -211,13 +218,19 @@ export function summarizeNiftyExpiries(contracts, today) {
   const markers = new Map();
   for (const contract of Array.isArray(contracts) ? contracts : []) {
     if (!exactIsoDate(contract?.expiry) || contract.expiry < today) continue;
-    if (!markers.has(contract.expiry)) markers.set(contract.expiry, new Set());
-    if (typeof contract.weekly === "boolean") markers.get(contract.expiry).add(contract.weekly);
+    const lotSize = exactPositiveIntegerLotSize(contract.lot_size, `Upstox lot size for ${contract.expiry}`);
+    if (!markers.has(contract.expiry)) markers.set(contract.expiry, { weekly: new Set(), lotSize });
+    const metadata = markers.get(contract.expiry);
+    if (metadata.lotSize !== lotSize) {
+      throw new Error(`Upstox contract metadata contains conflicting lot sizes for ${contract.expiry}.`);
+    }
+    if (typeof contract.weekly === "boolean") metadata.weekly.add(contract.weekly);
   }
-  return Array.from(markers, ([expiry, values]) => ({
+  return Array.from(markers, ([expiry, metadata]) => ({
     expiry,
     daysToExpiry: Math.ceil((new Date(`${expiry}T00:00:00Z`) - new Date(`${today}T00:00:00Z`)) / 86400000),
-    weekly: values.size === 1 ? values.values().next().value : null
+    weekly: metadata.weekly.size === 1 ? metadata.weekly.values().next().value : null,
+    lotSize: metadata.lotSize
   })).sort((left, right) => left.expiry.localeCompare(right.expiry));
 }
 
@@ -238,8 +251,13 @@ async function niftyExpiries() {
   return payload;
 }
 
+export function findFreshExpiryMetadata(cache, expiry, nowMs = Date.now()) {
+  if (!cache || !Number.isFinite(cache.updatedAt) || nowMs - cache.updatedAt >= EXPIRY_CACHE_MS) return null;
+  return cache.payload?.expiries?.find((entry) => entry.expiry === expiry) || null;
+}
+
 function cachedExpiryMetadata(expiry) {
-  return expiryCache?.payload?.expiries?.find((entry) => entry.expiry === expiry) || null;
+  return findFreshExpiryMetadata(expiryCache, expiry);
 }
 
 function tokenOrThrow() {
@@ -357,6 +375,59 @@ export function createRequestHandler({
 } = {}) {
   const allowedOrigin = validatedExtensionOrigin(extensionOrigin);
   const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/seller-refresh", "/api/option-history"]);
+  let expiryLoadInFlight = null;
+
+  function loadExpiryMetadataOnce() {
+    if (!expiryLoadInFlight) {
+      expiryLoadInFlight = Promise.resolve()
+        .then(() => expiryLoader())
+        .finally(() => { expiryLoadInFlight = null; });
+    }
+    return expiryLoadInFlight;
+  }
+
+  async function resolveChainMetadata(chain) {
+    const resolvedExpiry = chain?.expiry;
+    if (!chain || typeof chain !== "object" || Array.isArray(chain) || !exactIsoDate(resolvedExpiry)) {
+      throw Object.assign(new Error("Upstox chain did not resolve an exact expiry."), {
+        status: 502,
+        kind: "expiry_mismatch"
+      });
+    }
+
+    let metadata = expiryMetadata(resolvedExpiry);
+    if (!metadata) {
+      await loadExpiryMetadataOnce();
+      metadata = expiryMetadata(resolvedExpiry);
+    }
+    if (metadata?.expiry !== undefined && metadata.expiry !== resolvedExpiry) {
+      throw Object.assign(new Error("Upstox expiry metadata did not match the resolved chain expiry."), {
+        status: 502,
+        kind: "expiry_mismatch"
+      });
+    }
+
+    const lotSize = exactPositiveIntegerLotSize(
+      metadata?.lotSize,
+      `Upstox lot size metadata for ${resolvedExpiry}`
+    );
+    if (Object.hasOwn(chain, "lotSize")) {
+      const chainLotSize = exactPositiveIntegerLotSize(
+        chain.lotSize,
+        `Upstox chain lot size for ${resolvedExpiry}`
+      );
+      if (chainLotSize !== lotSize) {
+        throw new Error(`Upstox chain contains a conflicting lot size for ${resolvedExpiry}.`);
+      }
+    }
+
+    return {
+      chain: { ...chain, lotSize },
+      metadata,
+      lotSize
+    };
+  }
+
   return async function requestHandler(request, response) {
   const respondPublic = (status, payload) => respondJson(response, status, payload, allowedOrigin);
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
@@ -432,17 +503,14 @@ export function createRequestHandler({
         error.kind = "expiry_mismatch";
         throw error;
       }
-      let metadata = expiryMetadata(expiry);
-      if (!metadata) {
-        await expiryLoader();
-        metadata = expiryMetadata(expiry);
-      }
+      const resolved = await resolveChainMetadata(chain);
+      const metadata = resolved.metadata;
       const expiryKind = metadata?.weekly === false ? "monthly" : metadata?.weekly === true ? "weekly" : "unknown";
       respondJson(response, 200, {
         updatedAt: new Date(now()).toISOString(),
-        positions: normalizePositions(positionsPayload, expiry, { expiryKind }),
-        trades: normalizeTrades(tradesPayload, expiry, { expiryKind }),
-        chain
+        positions: normalizePositions(positionsPayload, expiry, { expiryKind, lotSize: resolved.lotSize }),
+        trades: normalizeTrades(tradesPayload, expiry, { expiryKind, lotSize: resolved.lotSize }),
+        chain: resolved.chain
       }, allowedOrigin);
     } catch (error) {
       respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
@@ -514,7 +582,15 @@ export function createRequestHandler({
     return;
   }
   try {
-    respondPublic(200, await niftyChain(expiry));
+    const chain = await chainLoader(expiry);
+    if (exactIsoDate(expiry) && chain?.expiry !== expiry) {
+      throw Object.assign(new Error("Upstox chain expiry did not match requested expiry."), {
+        status: 502,
+        kind: "expiry_mismatch"
+      });
+    }
+    const resolved = await resolveChainMetadata(chain);
+    respondPublic(200, resolved.chain);
   } catch (error) {
     respondPublic(error.status || 502, { error: error.message, kind: error.kind || "upstream" });
   }

@@ -5,6 +5,7 @@
   const LABELS_ID = "nifty-axis-ladder";
   const PREMIUM_STRIKE_MAP_ID = "options-premium-strike-map";
   const PREMIUM_CHART_TRIALS_ID = "options-premium-chart-trials";
+  const PREMIUM_HISTORY_STATUS_ID = "options-premium-history-status";
   const RISK_LABEL_GAP_PX = 12;
   const EDGE_STACK_GAP_PX = 4;
   const POSITION_CONTROL_WIDTH_PX = 47;
@@ -13,6 +14,7 @@
   const POSITION_PUT_GUTTER_PX = 60;
   const BREAK_EVEN_LABEL_HEIGHT = 15;
   const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
+  const VIEWPORT_RESIZE_SETTLE_MS = 500;
   const timeframeApi = root.NiftyTimeframeLadder
     || (typeof module !== "undefined" && module.exports ? require("./timeframe-ladder.js") : null);
   const riskOverlayApi = root.NiftyRiskOverlay
@@ -199,6 +201,55 @@
     return Math.max(plotLeft, layout.call.left - POSITION_LANE_GAP_PX);
   }
 
+  function breakEvenLabelRightForRenderedBlockers(labelRight, rect = {}, blockers = [], gap = POSITION_LANE_GAP_PX) {
+    const plotLeft = Number(rect.left);
+    const plotRight = Number(rect.right);
+    const requested = Number(labelRight);
+    if (![plotLeft, plotRight, requested].every(Number.isFinite) || plotRight <= plotLeft) return null;
+    const resolved = Math.max(plotLeft, Math.min(plotRight, requested));
+    const clearance = Number.isFinite(Number(gap)) ? Math.max(0, Number(gap)) : POSITION_LANE_GAP_PX;
+    const visibleLefts = (Array.isArray(blockers) ? blockers : [])
+      .filter((blocker) => blocker && blocker.hidden !== true && blocker.visible !== false)
+      .map((blocker) => ({
+        left: Number(blocker.left),
+        right: Number(blocker.right),
+        top: Number(blocker.top),
+        bottom: Number(blocker.bottom)
+      }))
+      .filter((blocker) => [blocker.left, blocker.right, blocker.top, blocker.bottom].every(Number.isFinite)
+        && blocker.right > blocker.left
+        && blocker.bottom > blocker.top
+        && blocker.right > plotLeft
+        && blocker.left < plotRight)
+      .map((blocker) => blocker.left);
+    if (!visibleLefts.length) return resolved;
+    return Math.max(plotLeft, Math.min(resolved, Math.min(...visibleLefts) - clearance));
+  }
+
+  function renderedStrategyBlockerRects(rootNodeValue) {
+    if (!rootNodeValue?.querySelectorAll) return [];
+    const selectors = [
+      ".nifty-strategy__card",
+      ".nifty-position-spine__compact",
+      ".nifty-position-spine__cluster",
+      ".nifty-position-spine__cluster-flyout",
+      ".nifty-position-spine__card",
+      ".nifty-edge-stack__group",
+      ".nifty-edge-stack__selector",
+      ".nifty-edge-stack__flyout"
+    ];
+    return selectors.flatMap((selector) => [...rootNodeValue.querySelectorAll(selector)])
+      .filter((element) => !element.hidden && !element.classList?.contains?.("is-grouped"))
+      .map((element) => {
+        try {
+          return element.getBoundingClientRect?.() || null;
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  }
+
   function visibleRowIndexes(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
     if (!Array.isArray(rows) || !Array.isArray(dimensions) || rows.length !== dimensions.length) return [];
     if (!Array.isArray(lanes) || lanes.length !== rows.length) return [];
@@ -273,6 +324,53 @@
     return /extension context invalidated/i.test(String(state?.error || ""))
       ? "RELOAD TRADINGVIEW · EXTENSION UPDATED"
       : null;
+  }
+
+  function premiumHistoryStatusView(state, skylinePainted = true) {
+    const status = String(state?.status || "closed");
+    if (status === "closed" || (status === "ready" && skylinePainted)) return null;
+    const strike = Number(state?.selection?.strike);
+    const identity = [
+      Number.isFinite(strike) ? strike.toLocaleString("en-IN") : null,
+      state?.selection?.expiry,
+      state?.selection?.interval
+    ].filter(Boolean).join(" · ");
+    if (status === "loading") {
+      return {
+        kind: "loading",
+        title: "PREMIUM HISTORY · LOADING…",
+        detail: identity,
+        canRetry: false
+      };
+    }
+    if (status === "ready") {
+      return {
+        kind: "synchronizing",
+        title: "PREMIUM HISTORY · SYNCHRONIZING…",
+        detail: "ALIGNING WITH TRADINGVIEW TIME AXIS",
+        canRetry: false
+      };
+    }
+    const error = String(state?.error || "CONTRACT HISTORY UNAVAILABLE");
+    const reload = premiumHistoryStatusMessage(state);
+    const offline = /failed to fetch|fetch failed|network|bridge offline|load failed/i.test(error);
+    return {
+      kind: status === "stale" ? "stale" : "unavailable",
+      title: status === "stale" ? "PREMIUM HISTORY · STALE" : "PREMIUM HISTORY UNAVAILABLE",
+      detail: reload || (offline ? "LOCAL BRIDGE OFFLINE" : error),
+      canRetry: true
+    };
+  }
+
+  function premiumHistoryStatusMaxWidth(plotWidth) {
+    const width = Number(plotWidth);
+    return Number.isFinite(width) ? Math.max(0, width - 24) : null;
+  }
+
+  function reconcilePremiumCanvas(documentRef, paint) {
+    const painted = Boolean(typeof paint === "function" && paint());
+    if (!painted) documentRef?.getElementById?.(PREMIUM_CHART_TRIALS_ID)?.remove?.();
+    return painted;
   }
 
   function normalizePremiumTimeAxis(raw) {
@@ -622,6 +720,9 @@
         || typeof snapshot.updatedAt !== "string"
         || !Number.isFinite(Date.parse(snapshot.updatedAt))
         || Number(now()) - Date.parse(snapshot.updatedAt) > SELLER_SAFETY_STALE_MS
+        || typeof snapshot.lotSize !== "number"
+        || !Number.isInteger(snapshot.lotSize)
+        || snapshot.lotSize <= 0
         || !Number.isFinite(Number(snapshot.spot))
         || !Array.isArray(snapshot.rows)
         || snapshot.rows.length < 1
@@ -631,6 +732,7 @@
         version: 1,
         updatedAt: snapshot.updatedAt,
         expiry: snapshot.expiry,
+        lotSize: snapshot.lotSize,
         spot: Number(snapshot.spot),
         rows: snapshot.rows.map((row) => ({ ...row }))
       };
@@ -1008,7 +1110,7 @@
       }
     }
 
-    async function place(visualPlacementRevision) {
+    async function updateAxisPlacement(replaceMembership, visualPlacementRevision) {
       const snapshot = current;
       if (!snapshot || rebuilding || snapshot.expiry !== expiry || snapshot.timeframe !== desiredTimeframe) return false;
       const localVisualPlacementRevision = visualPlacementRevision === undefined
@@ -1037,20 +1139,22 @@
         if (!toY) throw new Error("Native axis map is unavailable.");
         const nativeInterval = timeframeApi.snapStrikeInterval(intervalFromAxisScale(scale));
         const latestMembership = current;
-        const axisMembership = freezeMembership({
-          timeframe: latestMembership.timeframe,
-          expiry: latestMembership.expiry,
-          interval: nativeInterval,
-          nativeInterval,
-          axisPrices: scale.axisPairs.map((pair) => Number(pair.price)),
-          spot: Number(cachedChain?.spot ?? latestMembership.atm),
-          chainRows: cachedChain?.rows || latestMembership.rows,
-          pinnedStrikes: activeStrikes()
-        });
-        if (!axisMembership) throw new Error("Visible axis contracts are unavailable.");
-        const membershipChanged = !sameStrikes(latestMembership, axisMembership);
-        current = axisMembership;
-        if (membershipChanged) renderRows(current.rows, current);
+        if (replaceMembership) {
+          const axisMembership = freezeMembership({
+            timeframe: latestMembership.timeframe,
+            expiry: latestMembership.expiry,
+            interval: nativeInterval,
+            nativeInterval,
+            axisPrices: scale.axisPairs.map((pair) => Number(pair.price)),
+            spot: Number(cachedChain?.spot ?? latestMembership.atm),
+            chainRows: cachedChain?.rows || latestMembership.rows,
+            pinnedStrikes: activeStrikes()
+          });
+          if (!axisMembership) throw new Error("Visible axis contracts are unavailable.");
+          const membershipChanged = !sameStrikes(latestMembership, axisMembership);
+          current = axisMembership;
+          if (membershipChanged) renderRows(current.rows, current);
+        }
         cachedAxisToY = toY;
         if (!placeCached(current, localVisualPlacementRevision)) throw new Error("Exact strike positions are unavailable.");
         if (Number.isFinite(Number(scale.observedAt))) {
@@ -1071,6 +1175,14 @@
         setStatus(error?.message || "AXIS CALIBRATION UNAVAILABLE");
         return false;
       }
+    }
+
+    function place(visualPlacementRevision) {
+      return updateAxisPlacement(true, visualPlacementRevision);
+    }
+
+    function remap(visualPlacementRevision) {
+      return updateAxisPlacement(false, visualPlacementRevision);
     }
 
     async function setExpiry(nextExpiry) {
@@ -1129,6 +1241,7 @@
       invalidate,
       membership: () => current,
       place,
+      remap,
       rebuild,
       refreshLtp,
       setChainSnapshot,
@@ -1188,12 +1301,16 @@
     positionSpineBounds,
     positionSpineLayout,
     breakEvenLabelRight,
+    breakEvenLabelRightForRenderedBlockers,
     rowsFitPlot,
     strategyOwnershipChoices,
     chartInstrumentIdentity,
     normalizePremiumTimeAxis,
     premiumHistoryRange,
     premiumHistoryStatusMessage,
+    premiumHistoryStatusMaxWidth,
+    premiumHistoryStatusView,
+    reconcilePremiumCanvas,
     rankOpenInterestRows,
     setPremiumTimeSync,
     visibleRowIndexes,
@@ -1209,6 +1326,9 @@
   let controller = null;
   let timeframeTimer = null;
   let axisPlacementTimer = null;
+  let viewportResizeTimer = null;
+  let viewportResizeActive = false;
+  let axisPlacementPreserveMembership = false;
   let retryTimers = [];
   let currentLabel = null;
   let currentUrl = String(root.location?.href || "");
@@ -1308,7 +1428,8 @@
       canvas = document.createElement("canvas");
       if (typeof canvas.getContext !== "function") return null;
       canvas.id = PREMIUM_CHART_TRIALS_ID;
-      canvas.setAttribute("aria-hidden", "true");
+      canvas.setAttribute("aria-hidden", "false");
+      canvas.setAttribute("role", "img");
       canvas.style.pointerEvents = "none";
       node.append(canvas);
     }
@@ -1428,6 +1549,8 @@
     const target = premiumSkylineCanvas(plotRect, width, height);
     if (!target) return false;
     const { canvas, ratio } = target;
+    canvas.setAttribute("aria-label",
+      `PREMIUM SKYLINE · ${selectedStrike.toLocaleString("en-IN")} · CALL AND PUT`);
     const context = canvas.getContext("2d");
     if (!context) return false;
     context.setTransform?.(1, 0, 0, 1, 0, 0);
@@ -1504,15 +1627,86 @@
   function renderPremiumChartTrials(state, placement = premiumChartPlacement) {
     premiumSkylineState = state || null;
     premiumChartPlacement = placement || premiumChartPlacement;
-    if (!samePlotRect(state?.timeAxis?.plotRect, premiumChartPlacement?.plotRect)) {
+    const statePlotRect = state?.timeAxis?.plotRect;
+    const placementPlotRect = premiumChartPlacement?.plotRect;
+    if (!statePlotRect) {
+      premiumSkylineCrosshair = null;
+      document.getElementById(PREMIUM_CHART_TRIALS_ID)?.remove();
+      return false;
+    }
+    if (!samePlotRect(statePlotRect, placementPlotRect)) {
       premiumChartPlacement = null;
       premiumSkylineCrosshair = null;
       document.getElementById(PREMIUM_CHART_TRIALS_ID)?.remove();
       return false;
     }
-    const painted = paintPremiumSkyline(state, premiumChartPlacement);
+    const painted = reconcilePremiumCanvas(document, () => paintPremiumSkyline(state, premiumChartPlacement));
+    if (!painted) premiumSkylineCrosshair = null;
     if (painted) bindPremiumSkylineCrosshair();
     return painted;
+  }
+
+  function clearPremiumHistoryStatus() {
+    document.getElementById(PREMIUM_HISTORY_STATUS_ID)?.remove();
+  }
+
+  function renderPremiumHistoryStatus(state, skylinePainted = false) {
+    const view = premiumHistoryStatusView(state, skylinePainted);
+    if (!view) {
+      clearPremiumHistoryStatus();
+      return false;
+    }
+    const selection = state?.selection;
+    const chartRect = premiumChartPlacement?.plotRect || chartCanvas()?.getBoundingClientRect?.();
+    let node = document.getElementById(PREMIUM_HISTORY_STATUS_ID);
+    if (!node) {
+      node = document.createElement("section");
+      node.id = PREMIUM_HISTORY_STATUS_ID;
+      rootNode().append(node);
+    }
+    node.dataset.status = view.kind;
+    node.setAttribute("role", view.canRetry ? "alert" : "status");
+    node.setAttribute("aria-live", view.canRetry ? "assertive" : "polite");
+    node.setAttribute("aria-label", view.title || "PREMIUM HISTORY");
+    if (Number.isFinite(Number(chartRect?.left))) node.style.left = `${Number(chartRect.left) + 12}px`;
+    if (Number.isFinite(Number(chartRect?.top))) node.style.top = `${Number(chartRect.top) + 12}px`;
+    if (Number.isFinite(Number(chartRect?.right)) && Number.isFinite(Number(chartRect?.left))) {
+      const maxWidth = premiumHistoryStatusMaxWidth(Number(chartRect.right) - Number(chartRect.left));
+      if (maxWidth !== null) node.style.maxWidth = `${maxWidth}px`;
+    }
+
+    const title = document.createElement("strong");
+    title.className = "options-premium-history-status__title";
+    title.textContent = view.title;
+    const detail = document.createElement("span");
+    detail.className = "options-premium-history-status__detail";
+    detail.textContent = view.detail || "";
+    const actions = document.createElement("span");
+    actions.className = "options-premium-history-status__actions";
+    if (view.canRetry && selection) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.setAttribute("data-action", "retry");
+      retry.textContent = "RETRY";
+      retry.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void openPremiumHistory(selection.strike, selection.interval);
+      });
+      actions.append(retry);
+    }
+    const close = document.createElement("button");
+    close.type = "button";
+    close.setAttribute("data-action", "close");
+    close.textContent = "CLOSE";
+    close.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closePremiumHistory();
+    });
+    actions.append(close);
+    node.replaceChildren(title, detail, actions);
+    return true;
   }
 
   function clearPremiumStrikeMap() {
@@ -1577,12 +1771,47 @@
     active?.collapse?.();
   }
 
+  function removeOpenedPositionGroupDom() {
+    const strategyRoot = document.getElementById("nifty-strategy-rails");
+    strategyRoot?.querySelectorAll?.(".nifty-position-spine__cluster-flyout")
+      .forEach((flyout) => flyout.remove());
+    strategyRoot?.querySelectorAll?.(".nifty-position-spine__cluster-select")
+      .forEach((selector) => selector.setAttribute("aria-expanded", "false"));
+  }
+
+  function collapseOpenedPositionGroup() {
+    if (!openedEdgeGroupKey) return false;
+    openedEdgeGroupKey = null;
+    removeOpenedPositionGroupDom();
+    void controller?.place();
+    return true;
+  }
+
   function collapseOpenedStrategyDetails() {
     if (!openedStrategyId && !openedEdgeGroupKey) return false;
     openedStrategyId = null;
     visibleStrategyRailId = null;
     openedEdgeGroupKey = null;
+    removeOpenedPositionGroupDom();
     void controller?.place();
+    return true;
+  }
+
+  function closeBrokerPositionDetails(strategyId, strategyRoot) {
+    if (!strategyId || openedStrategyId !== strategyId) return false;
+    openedStrategyId = null;
+    if (visibleStrategyRailId === strategyId) visibleStrategyRailId = null;
+    strategyRoot?.querySelectorAll?.(".nifty-position-spine__card").forEach((card) => {
+      if (card.dataset.strategyId === strategyId) card.remove();
+    });
+    strategyRoot?.querySelectorAll?.(".nifty-position-spine__be-rail").forEach((rail) => {
+      if (rail.dataset.strategyId === strategyId) rail.remove();
+    });
+    strategyRoot?.querySelectorAll?.(".nifty-position-spine__marker").forEach((marker) => {
+      if (marker.dataset.strategyId !== strategyId) return;
+      marker.classList.remove("is-open");
+      marker.setAttribute("aria-expanded", "false");
+    });
     return true;
   }
 
@@ -1717,7 +1946,8 @@
       loadHistory: loadPremiumHistory,
       render: (state) => {
         renderPremiumStrikeMap(state);
-        renderPremiumChartTrials(state);
+        const skylinePainted = renderPremiumChartTrials(state);
+        renderPremiumHistoryStatus(state, skylinePainted);
         const statusMessage = premiumHistoryStatusMessage(state);
         if (statusMessage) showStatus(statusMessage);
       }
@@ -1729,8 +1959,12 @@
     premiumHistoryPane?.close?.();
     clearPremiumStrikeMap();
     clearPremiumChartTrials();
-    premiumChartPlacement = null;
+    clearPremiumHistoryStatus();
     setPremiumTimeSync(document, false);
+  }
+
+  function invalidatePremiumHistoryPlacement() {
+    premiumChartPlacement = null;
   }
 
   async function openPremiumHistory(strike, interval = null) {
@@ -1741,6 +1975,7 @@
       return false;
     }
     setPremiumTimeSync(document, true);
+    pane.setTimeAxis?.(currentPremiumTimeAxis());
     return pane.open(selection);
   }
 
@@ -1751,6 +1986,7 @@
     const identity = chartInstrumentIdentity(label);
     if (!identity || identity.instrumentKey !== state.selection.instrumentKey) {
       closePremiumHistory();
+      invalidatePremiumHistoryPlacement();
       return false;
     }
     const interval = timeframeApi.timeframeKey(label);
@@ -1764,12 +2000,54 @@
   }
 
   function activeLadderEntries() {
-    const entries = manualEntriesForExpiry();
+    const entries = manualEntriesForExpiry().map((entry) => ({ ...entry, source: "MANUAL" }));
     if (!strategyStoreApi) return entries;
     const brokerEntries = activeChartStrategies().flatMap((strategy) =>
       strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
         .filter((entry) => entry.source === "BROKER_POSITION"));
     return [...new Map([...entries, ...brokerEntries].map((entry) => [entry.id, entry])).values()];
+  }
+
+  function activeFaceEntry(strike = breakEvenSelection.current()?.strike) {
+    const numericStrike = Number(strike);
+    const entryId = Number.isFinite(numericStrike)
+      ? ensureManualInteraction()?.activeEntryId(numericStrike)
+      : null;
+    if (!entryId) return null;
+    return activeLadderEntries().find((entry) => entry.id === entryId
+      && Number(entry.strike) === numericStrike) || null;
+  }
+
+  function activeStrategyOwnerForEntry(entryId) {
+    if (!strategyStoreApi || typeof entryId !== "string" || !entryId) return null;
+    return activeChartStrategies().find((strategy) =>
+      strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+        .some((entry) => entry.id === entryId)) || null;
+  }
+
+  function openBrokerEntryDetails(entryId) {
+    const entry = activeLadderEntries().find((candidate) => candidate.id === entryId) || null;
+    if (entry?.source !== "BROKER_POSITION") return false;
+    const owner = activeStrategyOwnerForEntry(entry.id);
+    if (!owner) return false;
+    const viewId = brokerLegViewId(owner.id, entry.id);
+    const strike = Number(entry.strike);
+    const liveRow = controller?.membership()?.rows?.find((row) => Number(row?.strike) === strike) || null;
+    const alreadyActive = Number(breakEvenSelection.current()?.strike) === strike
+      && activeFaceEntry(strike)?.id === entry.id;
+    if (liveRow && !alreadyActive) {
+      const context = {
+        strike,
+        liveRow,
+        entries: manualEntriesByStrike().get(strike) || []
+      };
+      if (!ensureManualInteraction()?.openFace?.(context, entry.id)) return false;
+    } else if (!alreadyActive) {
+      resetStrategyInteractionState();
+    }
+    openedEdgeGroupKey = null;
+    if (openedStrategyId !== viewId) ensureStrategyChartController()?.label(viewId);
+    return true;
   }
 
   function activeTradeStrikes() {
@@ -1850,8 +2128,10 @@
     const right = row.style?.right || (Number.isFinite(bounds?.right)
       ? `${Math.max(0, window.innerWidth - bounds.right)}px`
       : null);
+    const rowZIndex = Number.parseInt(row.style?.zIndex, 10);
     if (top) manualEditor.element.style.top = top;
     if (right) manualEditor.element.style.right = right;
+    if (Number.isFinite(rowZIndex)) manualEditor.element.style.zIndex = String(rowZIndex + 1);
   }
 
   function ensureManualInteraction() {
@@ -1862,10 +2142,12 @@
       clearTimer: (timer) => clearTimeout(timer),
       onQuick: ({ strike, liveRow }) => {
         closeManualEditorForOtherRow(strike);
+        resetStrategyInteractionState();
         handleQuickSelection(liveRow);
       },
       onFace: ({ strike, liveRow }) => {
         closeManualEditorForOtherRow(strike);
+        resetStrategyInteractionState();
         if (breakEvenSelection.current()?.strike !== strike && liveRow) {
           clearBreakEvenRails();
           breakEvenSelection.select(liveRow);
@@ -1875,10 +2157,16 @@
       },
       onEditor: (context) => {
         closeManualEditorForOtherRow(context?.strike);
+        const brokerEntry = activeLadderEntries().find((entry) => entry.id === context?.entryId
+          && entry.source === "BROKER_POSITION");
+        resetStrategyInteractionState();
         clearBreakEvenSelection({ repaintStrategyRails: true });
-        openManualEditor(context);
+        openManualEditor(brokerEntry ? { ...context, entryId: null } : context);
       },
-      onReset: () => renderManualRows()
+      onReset: () => {
+        resetStrategyInteractionState();
+        renderManualRows();
+      }
     });
     return manualInteraction;
   }
@@ -2125,13 +2413,23 @@
     document.getElementById("nifty-strategy-rails")?.remove();
   }
 
-  function clearStrategyPreview() {
+  function resetStrategyInteractionState() {
     openedStrategyId = null;
     visibleStrategyRailId = null;
     openedEdgeGroupKey = null;
     strategyOwnershipChooser?.remove?.();
     strategyOwnershipChooser = null;
     installStrategyChartController();
+  }
+
+  function discardStoredInteractionIdentities() {
+    manualInteraction?.dispose?.();
+    manualInteraction = null;
+    resetStrategyInteractionState();
+  }
+
+  function clearStrategyPreview() {
+    resetStrategyInteractionState();
     clearStrategyRails();
   }
 
@@ -2180,7 +2478,10 @@
     const rows = controller?.membership()?.rows || [];
     return entries.map((entry) => {
       const row = rows.find((candidate) => Number(candidate.strike) === Number(entry.strike));
-      const pnl = manualPayoffApi?.positionPnl?.(entry, row, 65);
+      const importedBrokerPnl = Number(entry?.brokerPnl);
+      const pnl = entry?.source === "BROKER_POSITION" && Number.isFinite(importedBrokerPnl)
+        ? importedBrokerPnl
+        : manualPayoffApi?.positionPnl?.(entry, row);
       const side = entry.optionType === "CALL" ? "C" : "P";
       return {
         entry,
@@ -2204,7 +2505,7 @@
   }
 
   function strategyLevelModels({ strategyId, strategyLabel, entries, viewKind = "STANDARD" }) {
-    const chargeOffset = knownStrategyCharges(entries) / 65;
+    const chargeOffset = knownStrategyCharges(entries);
     const result = manualPayoffApi?.levels?.(entries, `${strategyLabel} BE`, chargeOffset);
     if (result?.status !== "ok") return [];
     const chargesComplete = entries.every((entry) => entry.chargesComplete === true);
@@ -2256,7 +2557,6 @@
     const selectedIds = ensureStrategyChartController()?.selected() || [];
     if (selectedIds.length < 2 || !strategyPreviewApi) return { models: [], preview: null };
     const previewOptions = {
-      lotSize: 65,
       quoteUpdatedAt: controller?.chain()?.updatedAt,
       now: new Date().toISOString(),
       maxQuoteAgeMs: SELLER_SAFETY_STALE_MS
@@ -2602,7 +2902,7 @@
       marker.setAttribute("title", `${side === "call" ? "C" : "P"}${lots} · ${entry.direction} · ${Number(entry.strike).toLocaleString("en-IN")}`);
       marker.addEventListener("click", (event) => {
         event.stopPropagation?.();
-        ensureStrategyChartController()?.label(model.strategyId);
+        openBrokerEntryDetails(entry.id);
       });
       if (side === "call") compact.append(compactSelect, marker);
       else compact.append(marker, compactSelect);
@@ -2615,6 +2915,7 @@
         tone: direction,
         label: `${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`,
         strategyId: model.strategyId,
+        entryId: entry.id,
         element: compact
       });
 
@@ -2641,6 +2942,7 @@
       const item = strategyPnlItems(model.entries)[0];
       const card = document.createElement("span");
       card.className = `nifty-position-spine__card is-${direction}`;
+      card.dataset.strategyId = model.strategyId;
       card.style.right = `${Math.max(0, window.innerWidth - spineX + 12)}px`;
       card.style.top = `${Math.max(Number(rect.top) + 6, Math.min(Number(rect.bottom) - 104, y - 52))}px`;
 
@@ -2684,7 +2986,7 @@
       const showRail = document.createElement("button");
       showRail.type = "button";
       showRail.className = "nifty-position-spine__rail-toggle";
-      const hasActiveStrike = Boolean(breakEvenSelection.current());
+      const hasActiveStrike = Number(breakEvenSelection.current()?.strike) === Number(entry.strike);
       showRail.disabled = !hasActiveStrike || railProjection.mode !== "RAIL";
       showRail.textContent = !hasActiveStrike
         ? "SELECT STRIKE FOR BE"
@@ -2693,7 +2995,7 @@
         : visibleStrategyRailId === model.strategyId ? "HIDE BE RAIL" : "SHOW BE RAIL";
       showRail.addEventListener("click", (event) => {
         event.stopPropagation?.();
-        if (!breakEvenSelection.current()) return;
+        if (Number(breakEvenSelection.current()?.strike) !== Number(entry.strike)) return;
         visibleStrategyRailId = visibleStrategyRailId === model.strategyId ? null : model.strategyId;
         void controller?.place();
       });
@@ -2703,7 +3005,8 @@
       close.textContent = "CLOSE";
       close.addEventListener("click", (event) => {
         event.stopPropagation?.();
-        ensureStrategyChartController()?.label(model.strategyId);
+        if (!closeBrokerPositionDetails(model.strategyId, rootNodeValue)) return;
+        void controller?.place();
       });
       actions.append(showRail, close);
       card.append(header, pnl, actions);
@@ -2758,8 +3061,11 @@
       if (openedEdgeGroupKey !== cluster.key) return;
       const flyout = document.createElement("span");
       flyout.className = `nifty-position-spine__cluster-flyout is-${cluster.side}`;
-      flyout.style.right = `${Math.max(0, window.innerWidth - layout.call.left + 12)}px`;
-      flyout.style.top = `${Math.max(8, cluster.y - cluster.items.length * 12)}px`;
+      flyout.style.right = `${Math.max(0, window.innerWidth - lane.left + 12)}px`;
+      const flyoutHeight = cluster.items.length * 24 + 2;
+      const centeredTop = cluster.y - flyoutHeight / 2;
+      const maxTop = Math.max(8, Number(window.innerHeight) - flyoutHeight - 8);
+      flyout.style.top = `${Math.max(8, Math.min(maxTop, centeredTop))}px`;
       cluster.items.forEach((item) => {
         const row = document.createElement("span");
         row.className = `nifty-position-spine__cluster-row is-${item.tone}`;
@@ -2780,7 +3086,8 @@
           openItem.addEventListener("click", (event) => {
             event.stopPropagation?.();
             openedEdgeGroupKey = null;
-            strategyChartController.label(item.strategyId);
+            if (item.kind === "BROKER" && item.entryId) openBrokerEntryDetails(item.entryId);
+            else strategyChartController.label(item.strategyId);
           });
           row.append(itemSelector, openItem);
         } else {
@@ -2792,43 +3099,33 @@
     });
   }
 
-  function attachQuickBreakEvenStrategyCards(rootNodeValue) {
-    const labels = [...(document.getElementById("nifty-break-even-rails")
-      ?.querySelectorAll(".nifty-break-even__label") || [])];
-    const cards = [...(rootNodeValue?.querySelectorAll(".nifty-strategy__card") || [])]
-      .filter((card) => card.classList.contains("is-collapsed")
-        && !card.hidden && Number.isFinite(Number(card.dataset.exact)));
-    const used = new Set();
-    labels.forEach((label) => {
-      const exact = Number(label.dataset.exact);
-      if (!Number.isFinite(exact)) return;
-      const card = cards.find((candidate) => !used.has(candidate)
-        && Math.abs(Number(candidate.dataset.exact) - exact) < 0.01);
-      if (!card) return;
-      used.add(card);
-      const text = document.createElement("span");
-      text.className = "nifty-break-even__text";
-      text.textContent = label.textContent;
-      const divider = document.createElement("span");
-      divider.className = "nifty-break-even__divider";
-      divider.setAttribute("aria-hidden", "true");
-      label.replaceChildren(card, divider, text);
-      label.classList.add("has-strategy-card");
-      card.classList.add("is-inline-be");
-    });
-  }
-
   function placeStrategyRails(toY, rect, labelRight, visualPlacementRevision, spineGuide = {}) {
     if (!visualPlacementIsCurrent(visualPlacementRevision) || !strategyChartApi || !strategyStoreApi) return false;
     const originals = originalStrategyModels();
     const spineModels = brokerPositionSpineModels(originals);
     const showStrategyBreakEvens = Boolean(breakEvenSelection.current());
-    const chartOriginals = showStrategyBreakEvens
-      ? originals.filter((model) => !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind))
-      : [];
     const selectedIds = ensureStrategyChartController()?.selected() || [];
     const selectedIdSet = new Set(selectedIds);
-    const { models: combined, preview } = showStrategyBreakEvens
+    const faceEntry = activeFaceEntry();
+    const manualFaceOwner = faceEntry?.source === "MANUAL"
+      ? activeStrategyOwnerForEntry(faceEntry.id)
+      : null;
+    const manualFaceOwnerIds = new Set(manualFaceOwner ? [manualFaceOwner.id] : []);
+    const strategySelectionActive = selectedIds.length > 0;
+    const manualFaceStrike = faceEntry?.source === "MANUAL" ? Number(faceEntry.strike) : null;
+    if (strategySelectionActive && Number.isFinite(manualFaceStrike)) {
+      activeChartStrategies().forEach((strategy) => {
+        const ownsManualAtFaceStrike = strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+          .some((entry) => entry.source === "MANUAL" && Number(entry.strike) === manualFaceStrike);
+        if (ownsManualAtFaceStrike) manualFaceOwnerIds.add(strategy.id);
+      });
+    }
+    const manualOriginals = originals.filter((model) =>
+      !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind));
+    const chartOriginals = showStrategyBreakEvens
+      ? manualOriginals.filter((model) => manualFaceOwnerIds.has(model.strategyId))
+      : [];
+    const { models: combined, preview } = showStrategyBreakEvens && strategySelectionActive
       ? combinedStrategyModels(originals)
       : { models: [], preview: null };
     const previewingCombined = showStrategyBreakEvens && selectedIds.length >= 2 && combined.length > 0;
@@ -3047,7 +3344,6 @@
         element
       }));
     renderEdgeStackGroups(rootNodeValue, [...edgeStrategyItems, ...brokerItems, ...edgeTradeItems], typeLayout);
-    attachQuickBreakEvenStrategyCards(rootNodeValue);
     return true;
   }
 
@@ -3062,9 +3358,20 @@
     const saved = manualEntriesForExpiry();
     const draft = manualEditor?.draft || null;
     const validDraft = Boolean(draft && manualUiApi?.validateDraft?.(draft).ok);
-    return validDraft
+    const displayed = validDraft
       ? manualUiApi.previewEntries(saved, draft, manualDraftIdentity(draft))
       : saved;
+    return displayed.map((entry) => {
+      const ownedLeg = settings.strategyBook?.legs?.[entry.id];
+      return {
+        ...entry,
+        source: "MANUAL",
+        ...(entry.lotSize === undefined && ownedLeg?.source === "MANUAL"
+          && Number.isInteger(ownedLeg.lotSize) && ownedLeg.lotSize > 0
+          ? { lotSize: ownedLeg.lotSize }
+          : {})
+      };
+    });
   }
 
   function manualLevels() {
@@ -3090,7 +3397,7 @@
       .filter((entry) => !optionType || entry.optionType === optionType)
       .map((entry) => {
         const row = membershipRows.find((candidate) => candidate.strike === entry.strike);
-        const pnl = manualPayoffApi?.positionPnl?.(entry, row, 65);
+        const pnl = manualPayoffApi?.positionPnl?.(entry, row);
         const side = entry.optionType === "CALL" ? "C" : "P";
         const label = `${side} ${Number(entry.strike).toLocaleString("en-IN")} ${entry.direction} ×${entry.lots}`;
         const pnlText = signedApproxRupees(pnl);
@@ -3274,9 +3581,9 @@
     return placements.some(({ projection }) => !projection) ? null : placements;
   }
 
-  function sharedRailDecorations(toY, rect) {
+  function sharedRailDecorations(toY, rect, { includeManual = true } = {}) {
     const quick = quickRailPlacements(toY, rect);
-    const manual = manualRailPlacements(toY, rect);
+    const manual = includeManual ? manualRailPlacements(toY, rect) : null;
     if (!quick && !manual) return { quick: null, manual: null };
     const combined = [...(quick || []), ...(manual || [])];
     const decorations = breakEvenApi?.layoutDecorations?.(combined, rect, BREAK_EVEN_LABEL_HEIGHT, 2);
@@ -3344,10 +3651,34 @@
     if (!Number.isFinite(selectedStrike)) clearBreakEvenRails();
   }
 
+  function reconcileBreakEvenSelection(rows, visibleStrikes) {
+    const selected = breakEvenSelection.current();
+    if (!selected) return false;
+    const activeRow = (Array.isArray(rows) ? rows : [])
+      .find((row) => Number(row?.strike) === Number(selected.strike));
+    const visible = visibleStrikes instanceof Set
+      ? visibleStrikes.has(Number(selected.strike))
+      : Boolean(activeRow);
+    if (!activeRow || !visible) {
+      clearBreakEvenSelection();
+      return true;
+    }
+    const quoteChanged = Number(activeRow.call) !== Number(selected.call)
+      || Number(activeRow.put) !== Number(selected.put)
+      || (activeRow.call == null) !== (selected.call == null)
+      || (activeRow.put == null) !== (selected.put == null);
+    if (!quoteChanged) return false;
+    if (breakEvenSelection.select(activeRow)) clearBreakEvenStatusOverride();
+    else showStatus("OPTION PRICE UNAVAILABLE");
+    return false;
+  }
+
   function clearBreakEvenSelection({ repaintStrategyRails = false } = {}) {
     const hadSelection = Boolean(breakEvenSelection.current());
     breakEvenSelection.clear();
-    visibleStrategyRailId = null;
+    manualInteraction?.dispose?.();
+    manualInteraction = null;
+    resetStrategyInteractionState();
     clearBreakEvenRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
@@ -3384,11 +3715,11 @@
   async function renderStorageStrategyBook() {
     if (manualRowsConcealed || !settings.enabled || !controller) return;
     try {
-      await controller.place();
+      renderManualRows();
     } catch (_) {}
     if (manualRowsConcealed || !settings.enabled || !controller) return;
     try {
-      renderManualRows();
+      await controller.place();
     } catch (_) {}
   }
 
@@ -3408,22 +3739,25 @@
     } catch (_) {}
   }
 
-  async function persistManualPlans(mutation) {
+  async function persistManualStrategy(mutation) {
     let response;
     try {
       response = await chrome.runtime.sendMessage({
-        type: "MUTATE_MANUAL_PLANS",
+        type: "MUTATE_MANUAL_STRATEGY",
         mutation
       });
     } catch (cause) {
       throw storageWriteFailure(cause);
     }
-    if (!response?.ok || !response.manualPlans) {
-      throw storageWriteFailure(new Error(response?.error || "Manual plan mutation failed."));
+    if (!response?.ok || !response.manualPlans || !response.strategyBook) {
+      throw storageWriteFailure(new Error(response?.error || "Manual strategy mutation failed."));
     }
-    const normalized = normalizeManualPlans(response.manualPlans);
-    settings.manualPlans = normalized;
-    return normalized;
+    settings.manualPlans = normalizeManualPlans(response.manualPlans);
+    settings.strategyBook = normalizeStrategyBook(response.strategyBook);
+    return {
+      manualPlans: settings.manualPlans,
+      strategyBook: settings.strategyBook
+    };
   }
 
   async function persistStrategyCommand(command) {
@@ -3435,17 +3769,6 @@
     return settings.strategyBook;
   }
 
-  function strategyLegFromManualEntry(entry, identity) {
-    return {
-      ...entry,
-      source: "MANUAL",
-      instrumentKey: identity.instrumentKey,
-      underlying: identity.underlying,
-      charges: [],
-      chargesComplete: false
-    };
-  }
-
   function openManualEditor(context) {
     if (!manualUiApi?.createDraft || !manualUiApi?.renderEditor || !manualPlanApi) return;
     const strike = Number(context?.strike);
@@ -3454,10 +3777,15 @@
     if (!liveRow || !rowElement) return;
     const entries = manualEntriesByStrike().get(strike) || [];
     const entry = entries.find((item) => item.id === context?.entryId) || null;
+    if (entry?.source === "BROKER_POSITION") {
+      openBrokerEntryDetails(entry.id);
+      return;
+    }
     let draft = manualUiApi.createDraft({
       expiry: settings.expiry,
       row: liveRow,
       entry,
+      lotSize: controller?.chain()?.lotSize,
       optionType: context?.optionType
     });
     let editor = null;
@@ -3475,31 +3803,33 @@
       if (remove) remove.disabled = pendingCommit;
     }
 
-    async function commitManualPlan(mutation) {
-      if (pendingCommit) return;
+    async function commitManualStrategy(mutation) {
+      if (pendingCommit) return false;
       pendingCommit = true;
       syncCommitControls();
       try {
-        await persistManualPlans(mutation);
+        await persistManualStrategy(mutation);
         if (manualEditorOriginIsCurrent(origin)) {
           closeManualEditor();
           focusManualRow(strike);
         }
         await renderCommittedManualPlans(origin);
+        return true;
       } catch (error) {
-        if (!manualLifecycleOriginIsCurrent(origin)) return;
+        if (!manualLifecycleOriginIsCurrent(origin)) return false;
         if (manualEditorOriginIsCurrent(origin)) {
           pendingCommit = false;
           syncCommitControls();
         }
         if (error?.manualStorageWriteFailure) showStatus("PLAN NOT SAVED");
+        return false;
       }
     }
 
     function requestStrategyOwnership(entryToSave) {
       const identity = currentStrategyIdentity();
       if (!identity || !strategyStoreApi) {
-        void commitManualPlan({ type: "upsert", entry: entryToSave });
+        showStatus("STRATEGY NOT SAVED");
         return;
       }
       strategyOwnershipChooser?.remove?.();
@@ -3519,31 +3849,27 @@
           event.stopPropagation?.();
           chooser.querySelectorAll(".nifty-strategy-owner__choice").forEach((node) => { node.disabled = true; });
           try {
-            let strategyId = choice.strategyId;
-            if (choice.kind === "CREATE_NEW") {
-              strategyId = crypto.randomUUID();
-              const strategySequence = Number(settings.strategyBook?.nextSequence) || 1;
-              await persistStrategyCommand({
-                id: crypto.randomUUID(),
-                type: "CREATE_STRATEGY",
-                strategyId,
-                versionId: crypto.randomUUID(),
-                label: `T${strategySequence}`,
-                instrumentKey: identity.instrumentKey,
-                underlying: identity.underlying,
-                expiry: entryToSave.expiry
-              });
-            }
-            await persistStrategyCommand({
+            const createNew = choice.kind === "CREATE_NEW";
+            const strategyId = createNew ? crypto.randomUUID() : choice.strategyId;
+            const strategySequence = Number(settings.strategyBook?.nextSequence) || 1;
+            const committed = await commitManualStrategy({
               id: crypto.randomUUID(),
-              type: "ADD_LEG",
-              strategyId,
-              versionId: crypto.randomUUID(),
-              leg: strategyLegFromManualEntry(entryToSave, identity)
+              type: "CREATE",
+              entry: entryToSave,
+              strategy: createNew
+                ? {
+                  mode: "CREATE_NEW",
+                  strategyId,
+                  label: `T${strategySequence}`,
+                  instrumentKey: identity.instrumentKey,
+                  underlying: identity.underlying
+                }
+                : { mode: "EXISTING", strategyId }
             });
-            chooser.remove();
-            strategyOwnershipChooser = null;
-            await commitManualPlan({ type: "upsert", entry: entryToSave });
+            if (!committed) {
+              chooser.querySelectorAll(".nifty-strategy-owner__choice")
+                .forEach((node) => { node.disabled = false; });
+            }
           } catch (_) {
             chooser.querySelectorAll(".nifty-strategy-owner__choice").forEach((node) => { node.disabled = false; });
             showStatus("STRATEGY NOT SAVED");
@@ -3585,25 +3911,30 @@
         },
         async save() {
           if (!manualUiApi.validateDraft(draft).ok) return;
+          const priorEntryId = draft.id || null;
           const entryToSave = manualUiApi.entryFromDraft(draft, {
-            id: draft.id || crypto.randomUUID(),
+            id: crypto.randomUUID(),
             now: new Date().toISOString()
           });
-          if (draft.id) await commitManualPlan({ type: "upsert", entry: entryToSave });
+          if (priorEntryId) await commitManualStrategy({
+            id: crypto.randomUUID(),
+            type: "EDIT",
+            entryId: priorEntryId,
+            entry: entryToSave
+          });
           else requestStrategyOwnership(entryToSave);
         },
         async remove() {
           if (!draft.id) return;
-          try {
-            await removeManualEntryFromStrategies(draft.id);
-          } catch (_) {
-            showStatus("STRATEGY NOT UPDATED");
-            return;
-          }
-          await commitManualPlan({ type: "remove", expiry: draft.expiry, entryId: draft.id });
+          await commitManualStrategy({
+            id: crypto.randomUUID(),
+            type: "REMOVE",
+            entryId: draft.id
+          });
         },
         close() {
           closeManualEditor();
+          renderManualRows([strike]);
           focusManualRow(strike);
           void controller?.place();
         }
@@ -3621,30 +3952,7 @@
 
     closeManualEditor();
     renderEditor(true);
-  }
-
-  async function removeManualEntryFromStrategies(entryId) {
-    if (!strategyStoreApi || typeof entryId !== "string" || !entryId) return;
-    const owners = activeChartStrategies().filter((strategy) =>
-      strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
-        .some((leg) => leg.id === entryId));
-    for (const strategy of owners) {
-      const prior = strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id);
-      await persistStrategyCommand({
-        id: crypto.randomUUID(),
-        type: "REMOVE_LEG",
-        strategyId: strategy.id,
-        versionId: crypto.randomUUID(),
-        legId: entryId
-      });
-      if (prior.length === 1) {
-        await persistStrategyCommand({
-          id: crypto.randomUUID(),
-          type: "ARCHIVE_STRATEGY",
-          strategyId: strategy.id
-        });
-      }
-    }
+    if (context?.focusEditor) editor?.querySelector?.(".nifty-manual-editor__action")?.focus?.();
   }
 
   function riskRoot() {
@@ -3832,6 +4140,7 @@
       }
       const visibleIndexSet = new Set(visibleIndexes);
       const renderedStrikes = visibleIndexes.map((index) => Number(rows[index].strike));
+      reconcileBreakEvenSelection(rows, new Set(renderedStrikes));
       const displayAtm = displayAtmStrike(renderedStrikes, membership?.atm);
       elements.forEach(({ row, element }, index) => {
         element.hidden = !visibleIndexSet.has(index);
@@ -3848,8 +4157,10 @@
           : "";
       });
       premiumChartPlacement = { toY, plotRect: rect };
-      renderPremiumStrikeMap(premiumHistoryPane?.state?.());
-      renderPremiumChartTrials(premiumHistoryPane?.state?.());
+      const premiumState = premiumHistoryPane?.state?.();
+      renderPremiumStrikeMap(premiumState);
+      const skylinePainted = renderPremiumChartTrials(premiumState);
+      renderPremiumHistoryStatus(premiumState, skylinePainted);
       positionManualEditor();
       const laneZeroRows = elements
         .filter(({ element }, index) => !element.hidden && layout.lanes[index] === 0)
@@ -3874,18 +4185,28 @@
         offGridTitle.style.top = `${rect.top + 6}px`;
       }
       const strategyLabelRight = Math.min(labelRight, rowLeft - EDGE_STACK_GAP_PX);
-      const quickLabelRight = breakEvenLabelRight(strategyLabelRight, rect, window.innerWidth,
-        brokerPositionSpineModels(originalStrategyModels()).length > 0);
-      const railDecorations = sharedRailDecorations(toY, rect);
-      placeBreakEvenRails(toY, rect, quickLabelRight, railDecorations.quick, visualPlacementRevision);
-      if (activeChartStrategies().length) {
+      const chartStrategies = activeChartStrategies();
+      const railDecorations = sharedRailDecorations(toY, rect, {
+        includeManual: chartStrategies.length === 0
+      });
+      if (chartStrategies.length) {
         clearManualPlanRails(visualPlacementRevision);
         placeStrategyRails(toY, rect, strategyLabelRight, visualPlacementRevision, {
           visibleStrikes: renderedStrikes,
           atm: displayAtm
         });
+        const estimatedQuickLabelRight = breakEvenLabelRight(strategyLabelRight, rect, window.innerWidth,
+          brokerPositionSpineModels(originalStrategyModels()).length > 0);
+        const quickLabelRight = breakEvenLabelRightForRenderedBlockers(
+          estimatedQuickLabelRight,
+          rect,
+          renderedStrategyBlockerRects(document.getElementById("nifty-strategy-rails")),
+          POSITION_LANE_GAP_PX
+        );
+        placeBreakEvenRails(toY, rect, quickLabelRight, railDecorations.quick, visualPlacementRevision);
       } else {
         clearStrategyRails();
+        placeBreakEvenRails(toY, rect, strategyLabelRight, railDecorations.quick, visualPlacementRevision);
         placeManualPlanRails(toY, rect, strategyLabelRight, railDecorations.manual, visualPlacementRevision);
       }
       return { riskLayout: { labelRight } };
@@ -3921,6 +4242,7 @@
     if (!isNiftyChartLabel(label)) {
       clearRetries();
       closePremiumHistory();
+      invalidatePremiumHistoryPlacement();
       clearBreakEvenSelection();
       clearStrategyPreview();
       clearManualTransientState();
@@ -3956,8 +4278,12 @@
   }
 
   function scheduleAxisPlacement() {
+    axisPlacementPreserveMembership = axisPlacementPreserveMembership
+      || viewportResizeActive;
     if (axisPlacementTimer !== null) return;
     axisPlacementTimer = setTimeout(async () => {
+      const preserveMembership = axisPlacementPreserveMembership || viewportResizeActive;
+      axisPlacementPreserveMembership = false;
       axisPlacementTimer = null;
       if (!settings.enabled) return;
       const membership = controller?.membership();
@@ -3966,8 +4292,21 @@
         await rebuildCurrent(false);
         return;
       }
-      await controller.place();
+      await (preserveMembership ? controller.remap() : controller.place());
     }, 100);
+  }
+
+  function handleViewportResize() {
+    viewportResizeActive = true;
+    axisPlacementPreserveMembership = true;
+    clearTimeout(viewportResizeTimer);
+    scheduleAxisPlacement();
+    viewportResizeTimer = setTimeout(() => {
+      viewportResizeTimer = null;
+      axisPlacementPreserveMembership = true;
+      scheduleAxisPlacement();
+      viewportResizeActive = false;
+    }, VIEWPORT_RESIZE_SETTLE_MS);
   }
 
   function handleRuntimeMutations(records) {
@@ -3976,6 +4315,7 @@
       currentUrl = nextUrl;
       manualRowsConcealed = true;
       closePremiumHistory();
+      invalidatePremiumHistoryPlacement();
       clearBreakEvenSelection();
       clearStrategyPreview();
       clearManualTransientState();
@@ -3995,6 +4335,7 @@
     currentUrl = String(root.location?.href || "");
     manualRowsConcealed = true;
     closePremiumHistory();
+    invalidatePremiumHistoryPlacement();
     clearBreakEvenSelection();
     clearStrategyPreview();
     clearManualTransientState();
@@ -4004,6 +4345,7 @@
   function handlePageHide() {
     manualRowsConcealed = true;
     closePremiumHistory();
+    invalidatePremiumHistoryPlacement();
     clearBreakEvenSelection();
     clearStrategyPreview();
     clearManualTransientState();
@@ -4011,14 +4353,25 @@
   }
 
   function handleDocumentPointerDown(event) {
+    if (event.target?.closest?.(`#${PREMIUM_HISTORY_STATUS_ID}`)) return;
     const insideEdgeStack = event.target?.closest?.(".nifty-edge-stack__group")
       || event.target?.closest?.(".nifty-edge-stack__selector")
       || event.target?.closest?.(".nifty-edge-stack__flyout");
     const insidePositionGroup = event.target?.closest?.(".nifty-position-spine__cluster")
       || event.target?.closest?.(".nifty-position-spine__cluster-flyout");
     const insideBrokerCard = event.target?.closest?.(".nifty-position-spine__card");
+    const ladderBrokerBadge = event.target?.closest?.(".nifty-axis-ladder__badge");
+    const insideBrokerControl = event.target?.closest?.(".nifty-position-spine__compact")
+      || event.target?.closest?.(".nifty-position-spine__marker")
+      || event.target?.closest?.(".nifty-position-spine__compact-select")
+      || ladderBrokerBadge?.dataset?.source === "BROKER_POSITION";
+    if (openedEdgeGroupKey && !insidePositionGroup) {
+      collapseOpenedPositionGroup();
+      return;
+    }
     const outsideStrategyCard = !event.target?.closest?.(".nifty-strategy__card")
       && !insideBrokerCard
+      && !insideBrokerControl
       && !insideEdgeStack
       && !insidePositionGroup;
     if (event.target?.closest?.(".nifty-manual-plan__label.is-flippable")) {
@@ -4074,10 +4427,19 @@
       return;
     }
     closeManualEditorForOtherRow(context.strike);
-    const entryId = event.target?.closest?.(".nifty-axis-ladder__badge")?.dataset?.entryId;
+    const badge = event.target?.closest?.(".nifty-axis-ladder__badge");
+    const entryId = badge?.dataset?.entryId;
+    if (badge?.dataset?.source === "BROKER_POSITION") {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      if (entryId) openBrokerEntryDetails(entryId);
+      return;
+    }
     if (entryId) {
       event.preventDefault?.();
       event.stopPropagation?.();
+      resetStrategyInteractionState();
+      clearBreakEvenSelection({ repaintStrategyRails: true });
       openManualEditor({ ...context, entryId });
       return;
     }
@@ -4090,6 +4452,22 @@
     if (event.target?.closest?.(".nifty-axis-ladder__strike-face")) return;
     const context = manualRowContext(event.target?.closest?.(".nifty-axis-ladder__row"));
     if (!context) return;
+    const badge = event.target?.closest?.(".nifty-axis-ladder__badge");
+    if (badge?.dataset?.source === "BROKER_POSITION") {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      if (badge.dataset.entryId) openBrokerEntryDetails(badge.dataset.entryId);
+      return;
+    }
+    if (badge?.dataset?.entryId) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      closeManualEditorForOtherRow(context.strike);
+      resetStrategyInteractionState();
+      clearBreakEvenSelection({ repaintStrategyRails: true });
+      openManualEditor({ ...context, entryId: badge.dataset.entryId });
+      return;
+    }
     const optionType = event.target?.closest?.(".nifty-axis-ladder__cell")?.dataset?.optionType;
     closeManualEditorForOtherRow(context.strike);
     ensureManualInteraction()?.doubleClick({
@@ -4113,7 +4491,7 @@
       const context = manualRowContext(row);
       if (!context) return;
       closeManualEditorForOtherRow(context.strike);
-      ensureManualInteraction()?.doubleClick(context);
+      ensureManualInteraction()?.doubleClick({ ...context, focusEditor: true });
       return;
     }
     if (!["Enter", " "].includes(event.key) || !row) return;
@@ -4157,6 +4535,7 @@
     rootNode().addEventListener("click", handleLadderClick);
     rootNode().addEventListener("dblclick", handleLadderDoubleClick);
     document.addEventListener("keydown", handleDocumentKeyDown);
+    root.addEventListener?.("resize", handleViewportResize);
     root.addEventListener?.("pagehide", handlePageHide);
     root.addEventListener?.("popstate", handleUrlNavigation);
     root.addEventListener?.("hashchange", handleUrlNavigation);
@@ -4170,6 +4549,7 @@
     premiumHistoryPane = null;
     clearPremiumStrikeMap();
     clearPremiumChartTrials();
+    clearPremiumHistoryStatus();
     premiumChartPlacement = null;
     clearBreakEvenSelection();
     clearStrategyPreview();
@@ -4179,6 +4559,7 @@
     document.getElementById(LABELS_ID)?.removeEventListener("click", handleLadderClick);
     document.getElementById(LABELS_ID)?.removeEventListener("dblclick", handleLadderDoubleClick);
     document.removeEventListener("keydown", handleDocumentKeyDown);
+    root.removeEventListener?.("resize", handleViewportResize);
     root.removeEventListener?.("pagehide", handlePageHide);
     root.removeEventListener?.("popstate", handleUrlNavigation);
     root.removeEventListener?.("hashchange", handleUrlNavigation);
@@ -4187,6 +4568,10 @@
     timeframeTimer = null;
     clearTimeout(axisPlacementTimer);
     axisPlacementTimer = null;
+    clearTimeout(viewportResizeTimer);
+    viewportResizeTimer = null;
+    viewportResizeActive = false;
+    axisPlacementPreserveMembership = false;
     clearRetries();
     runtimeObserver?.disconnect();
     runtimeObserver = null;
@@ -4227,19 +4612,24 @@
     if (changes.sellerSafetyChain) settings.sellerSafetyChain = changes.sellerSafetyChain.newValue || null;
     if (changes.manualPlans) {
       settings.manualPlans = normalizeManualPlans(changes.manualPlans.newValue);
-      void renderStorageManualPlans();
+      discardStoredInteractionIdentities();
+      if (!changes.strategyBook) void renderStorageManualPlans();
     }
     if (changes.brokerConnection) {
       settings.brokerConnection = changes.brokerConnection.newValue || null;
-      clearStrategyPreview();
+      discardStoredInteractionIdentities();
+      clearStrategyRails();
       if (settings.enabled) void renderStorageStrategyBook();
     }
     if (changes.strategyBook) {
       settings.strategyBook = normalizeStrategyBook(changes.strategyBook.newValue);
+      discardStoredInteractionIdentities();
+      clearStrategyRails();
       if (settings.enabled) void renderStorageStrategyBook();
     }
     if (changes.expiry) {
       closePremiumHistory();
+      invalidatePremiumHistoryPlacement();
       clearBreakEvenSelection();
       clearStrategyPreview();
       clearManualTransientState();
@@ -4266,6 +4656,7 @@
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
     if (!["CLEAR_BREAK_EVEN_SELECTION", "CLEAR_STRATEGY_PREVIEW", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS", "GET_STRATEGY_PREVIEW_STATE", "OPEN_STRATEGY_ON_CHART"].includes(message?.type)) return false;
     if (message.type === "CLEAR_BREAK_EVEN_SELECTION") {
+      clearManualTransientState();
       clearBreakEvenSelection({ repaintStrategyRails: true });
       sendResponse({ ok: true });
       return false;

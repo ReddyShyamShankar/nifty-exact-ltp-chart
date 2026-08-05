@@ -26,6 +26,29 @@
     };
   }
 
+  function calculatePosition(entry) {
+    const ownerId = typeof entry?.id === "string" && entry.id.trim() ? entry.id : null;
+    const source = typeof entry?.source === "string" && entry.source.trim() ? entry.source : null;
+    const strike = finiteNonNegative(entry?.strike);
+    const premium = finiteNonNegative(entry?.premium);
+    const optionType = String(entry?.optionType || "").toUpperCase();
+    const direction = String(entry?.direction || "").toUpperCase();
+    if (!ownerId || !source || strike === null || strike <= 0 || premium === null
+      || !["CALL", "PUT"].includes(optionType) || !["BUY", "SELL"].includes(direction)) return null;
+    const exact = optionType === "CALL" ? strike + premium : strike - premium;
+    if (!Number.isFinite(exact) || exact < 0) return null;
+    const winsAbove = (direction === "BUY" && optionType === "CALL")
+      || (direction === "SELL" && optionType === "PUT");
+    return {
+      kind: optionType.toLowerCase(),
+      exact,
+      rounded: Math.round(exact),
+      label: `${optionType} BE ${formatPoint(exact)} · ${direction} ${winsAbove ? "ABOVE ↑" : "BELOW ↓"}`,
+      ownerId,
+      source
+    };
+  }
+
   function project(level, toY, plotRect) {
     const rawY = Number(typeof toY === "function" ? toY(level?.exact) : NaN);
     const y = Number.isFinite(rawY) ? Number(rawY.toFixed(10)) : rawY;
@@ -101,7 +124,7 @@
     };
   }
 
-  const api = { calculate, createSelectionController, layoutDecorations, project };
+  const api = { calculate, calculatePosition, createSelectionController, layoutDecorations, project };
   root.NiftyBreakEvenRails = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

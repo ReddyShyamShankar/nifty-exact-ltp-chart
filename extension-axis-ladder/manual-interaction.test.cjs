@@ -85,6 +85,46 @@ test("double click cancels pending single click", () => {
   assert.deepEqual(h.calls, [["editor", null]]);
 });
 
+test("double click passes exact face to editor then clears cycle ownership", () => {
+  const h = harness();
+  const context = { strike: 24450, entries: [{ id: "saved" }] };
+  h.controller.click(context);
+  h.flush();
+  assert.equal(h.controller.activeEntryId(24450), "saved");
+
+  h.controller.doubleClick(context);
+
+  assert.deepEqual(h.calls, [["face", "saved"], ["editor", "saved"]]);
+  assert.equal(h.controller.activeEntryId(24450), null);
+});
+
+test("neutral double click infers the sole editable manual entry", () => {
+  const h = harness();
+  const context = {
+    strike: 24450,
+    optionType: "CALL",
+    entries: [
+      { id: "manual", source: "MANUAL", optionType: "CALL" },
+      { id: "broker", source: "BROKER_POSITION", optionType: "CALL" }
+    ]
+  };
+
+  h.controller.doubleClick(context);
+
+  assert.deepEqual(h.calls, [["editor", "manual"]]);
+});
+
+test("neutral double click never edits the sole manual entry from the opposite side", () => {
+  const h = harness();
+  h.controller.doubleClick({
+    strike: 24450,
+    optionType: "PUT",
+    entries: [{ id: "saved-call", source: "MANUAL", optionType: "CALL" }]
+  });
+
+  assert.deepEqual(h.calls, [["editor", null]]);
+});
+
 test("double click ignores already-queued stale single callback", () => {
   const h = queuedHarness();
   const context = { strike: 24450, entries: [], liveRow: { strike: 24450 } };
@@ -139,4 +179,32 @@ test("Escape and reset clear active face after completed cycles", () => {
   h.controller.reset();
   assert.equal(h.controller.activeEntryId(24450), null);
   assert.deepEqual(h.calls, [["face", "new"], ["reset"], ["face", "new"], ["reset"]]);
+});
+
+test("dispose cancels pending work and clears stored face without redraw callback", () => {
+  const h = harness();
+  const context = { strike: 24450, entries: [{ id: "new" }] };
+  h.controller.click(context);
+  h.flush();
+  assert.equal(h.controller.activeEntryId(24450), "new");
+
+  h.controller.click(context);
+  h.controller.dispose();
+  h.flush();
+
+  assert.equal(h.controller.activeEntryId(24450), null);
+  assert.deepEqual(h.calls, [["face", "new"]]);
+});
+
+test("exact badge opens one owned face and cancels any queued row click", () => {
+  const h = queuedHarness();
+  const context = { strike: 24450, entries: [{ id: "manual" }, { id: "broker" }] };
+
+  h.controller.click(context);
+  assert.equal(h.controller.openFace(context, "broker"), true);
+  h.flush();
+
+  assert.equal(h.controller.activeEntryId(24450), "broker");
+  assert.deepEqual(h.calls, [["face", "broker"]]);
+  assert.equal(h.controller.openFace(context, "missing"), false);
 });

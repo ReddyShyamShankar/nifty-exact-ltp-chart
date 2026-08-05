@@ -215,6 +215,7 @@ function storedChain(expiry, spot) {
     version: 1,
     updatedAt: "2026-08-01T09:00:00+05:30",
     expiry,
+    lotSize: 65,
     spot,
     rows: Array.from({ length: 13 }, (_, index) => ({
       strike: atm - 300 + index * 50,
@@ -353,7 +354,7 @@ function popupHarness(initialStorage = {}, options = {}) {
       signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
     }],
     trades: [],
-    chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
+    chain: { expiry: "2026-08-25", lotSize: 65, spot: 24120, rows: [] }
   };
   const refreshPayloads = options.refreshPayloads || [options.refreshPayload || defaultRefreshPayload];
   let refreshIndex = 0;
@@ -374,7 +375,11 @@ function popupHarness(initialStorage = {}, options = {}) {
           if (message?.type !== "MUTATE_STRATEGY_BOOK") return { ok: false, error: "unexpected message" };
           strategyMutationMessages.push(structuredClone(message.command));
           storage.strategyBook = require("./strategy-store.js").applyCommand(storage.strategyBook, message.command);
-          return { ok: true, strategyBook: storage.strategyBook };
+          const responseBook = structuredClone(storage.strategyBook);
+          if (typeof options.concurrentStrategyBook === "function") {
+            storage.strategyBook = options.concurrentStrategyBook(structuredClone(responseBook));
+          }
+          return { ok: true, strategyBook: responseBook };
         }
       },
       storage: { local: {
@@ -471,6 +476,24 @@ test("connected broker bootstraps missing strategy without manual refresh", asyn
   assert.equal(harness.strategyMutationMessages.length, 1);
   assert.equal(harness.strategyMutationMessages[0].type, "SYNC_BROKER_POSITIONS");
   assert.equal(harness.storage.brokerStrategyBootstrapVersion, 1);
+});
+
+test("popup never re-persists a strategy mutation response over a newer background book", async () => {
+  const harness = popupHarness({ brokerStrategyBootstrapVersion: 0 }, {
+    concurrentStrategyBook(responseBook) {
+      return { ...responseBook, nextSequence: 99 };
+    }
+  });
+  await settle();
+  await settle();
+
+  assert.equal(harness.strategyMutationMessages.length, 1);
+  assert.equal(harness.storage.strategyBook.nextSequence, 99,
+    "the background's newer B2 book must survive the popup receiving stale B1");
+  assert.equal(harness.writes.some((write) => Object.hasOwn(write, "strategyBook")), false,
+    "background-owned strategy mutations must not be written back by the popup");
+  assert.equal(harness.writes.some((write) => Object.hasOwn(write, "manualTradePlans")), false,
+    "popup strategy mutation responses must not re-persist either versioned store");
 });
 
 test("strategies tab switches task view without mixing ladder controls into dashboard", async () => {
@@ -836,7 +859,7 @@ test("REFRESH ALL persists validated chain rows for chart consumption without a 
       updatedAt: "2026-08-01T03:50:00.000Z",
       positions: [],
       trades: [],
-      chain: { expiry: "2026-08-25", spot: 24120, rows }
+      chain: { expiry: "2026-08-25", lotSize: 25, spot: 24120, rows }
     }
   });
   await settle();
@@ -847,11 +870,35 @@ test("REFRESH ALL persists validated chain rows for chart consumption without a 
     version: 1,
     updatedAt: "2026-08-01T03:50:00.000Z",
     expiry: "2026-08-25",
+    lotSize: 25,
     spot: 24120,
     rows
   });
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
   assert.equal(harness.requests.filter((url) => url.includes("/api/nifty-chain")).length, 0);
+});
+
+test("REFRESH ALL rejects a chain snapshot with no authoritative lot-size metadata", async () => {
+  const rows = Array.from({ length: 13 }, (_, index) => ({
+    strike: 23800 + index * 50,
+    call: 200 - index,
+    put: 100 + index
+  }));
+  const harness = popupHarness({}, {
+    refreshPayload: {
+      updatedAt: "2026-08-01T03:50:00.000Z",
+      positions: [],
+      trades: [],
+      chain: { expiry: "2026-08-25", spot: 24120, rows }
+    }
+  });
+  await settle();
+
+  await harness.listeners.get("refresh-all:click")();
+
+  assert.equal(harness.storage.sellerSafetyChain, null);
+  assert.equal(harness.storage.sellerSafetyPending, null);
+  assert.match(harness.nodes.get("placement-status").textContent, /invalid seller refresh snapshot/i);
 });
 
 test("REFRESH ALL persists and deduplicates current-day trade IDs without silently assigning ownership", async () => {
@@ -868,7 +915,7 @@ test("REFRESH ALL persists and deduplicates current-day trade IDs without silent
       signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
     }],
     trades: [bridgeTrade],
-    chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
+    chain: { expiry: "2026-08-25", lotSize: 65, spot: 24120, rows: [] }
   };
   const harness = popupHarness({}, { refreshPayloads: [payload, payload] });
   await settle();
@@ -898,7 +945,7 @@ test("operator explicitly assigns post-import daily trade once and unknown trade
       signedQuantity: -65, lotSize: 65, averagePrice: 358.8, lastPrice: 320, pnl: 2522
     }],
     trades: [daily],
-    chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
+    chain: { expiry: "2026-08-25", lotSize: 65, spot: 24120, rows: [] }
   };
   const first = popupHarness(dailyReviewStorage(), {
     Date: fixedDate("2026-08-02T10:00:00+05:30"), refreshPayload: basePayload
@@ -962,7 +1009,7 @@ test("malformed refresh clears old candidate and cannot be accepted", async () =
       signedQuantity: -65, lotSize: 65, averagePrice: 100, lastPrice: 90, pnl: 650
     }],
     trades: [],
-    chain: { expiry: "2026-08-25", spot: 24120, rows: [] }
+    chain: { expiry: "2026-08-25", lotSize: 65, spot: 24120, rows: [] }
   };
   const malformed = { ...valid, trades: { not: "an array" } };
   const harness = popupHarness({}, { refreshPayloads: [valid, malformed] });

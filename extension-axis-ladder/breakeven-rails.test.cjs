@@ -82,3 +82,60 @@ test("invalid selection reports unavailable while retaining the clicked row unti
   controller.clear();
   assert.equal(controller.current(), null);
 });
+
+test("calculatePosition binds one break-even to exact broker or manual entry economics", () => {
+  assert.deepEqual(api.calculatePosition({
+    id: "broker-put-24200",
+    source: "BROKER_POSITION",
+    strike: 24200,
+    optionType: "PUT",
+    direction: "BUY",
+    premium: 84
+  }), {
+    kind: "put",
+    exact: 24116,
+    rounded: 24116,
+    label: "PUT BE 24,116 · BUY BELOW ↓",
+    ownerId: "broker-put-24200",
+    source: "BROKER_POSITION"
+  });
+
+  assert.equal(api.calculatePosition({
+    id: "manual-put-24200",
+    source: "MANUAL",
+    strike: 24200,
+    optionType: "PUT",
+    direction: "SELL",
+    premium: 118.25
+  }).label, "PUT BE 24,082 · SELL ABOVE ↑");
+
+  assert.equal(api.calculatePosition({
+    id: "manual-call-24200",
+    source: "MANUAL",
+    strike: 24200,
+    optionType: "CALL",
+    direction: "BUY",
+    premium: 533.8
+  }).label, "CALL BE 24,734 · BUY ABOVE ↑");
+
+  assert.equal(api.calculatePosition({
+    id: "manual-call-sell-24200",
+    source: "MANUAL",
+    strike: 24200,
+    optionType: "CALL",
+    direction: "SELL",
+    premium: 533.8
+  }).label, "CALL BE 24,734 · SELL BELOW ↓");
+});
+
+test("calculatePosition rejects missing identity, invalid direction, and impossible Put BE", () => {
+  assert.equal(api.calculatePosition({
+    strike: 24200, optionType: "PUT", direction: "BUY", premium: 84
+  }), null);
+  assert.equal(api.calculatePosition({
+    id: "x", source: "MANUAL", strike: 24200, optionType: "PUT", direction: "HOLD", premium: 84
+  }), null);
+  assert.equal(api.calculatePosition({
+    id: "x", source: "MANUAL", strike: 50, optionType: "PUT", direction: "BUY", premium: 84
+  }), null);
+});

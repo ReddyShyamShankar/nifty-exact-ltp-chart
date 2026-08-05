@@ -5,9 +5,36 @@ const plan = require("./manual-plan.js");
 const callEntry = {
   id: "entry-1", underlying: "NIFTY", expiry: "2026-08-25",
   strike: 24100, optionType: "CALL", direction: "SELL", lots: 2,
-  premium: 358, callSnapshot: 358, putSnapshot: 315.45,
+  lotSize: 25, premium: 358, callSnapshot: 358, putSnapshot: 315.45,
   createdAt: "2026-07-29T10:00:00.000Z", updatedAt: "2026-07-29T10:00:00.000Z"
 };
+
+test("exact current-expiry lot size survives manual entry normalization and persistence", () => {
+  const normalized = plan.normalizeEntry(callEntry);
+  const stored = plan.upsertEntry(plan.emptyStore(), callEntry);
+
+  assert.equal(normalized.lotSize, 25);
+  assert.equal(plan.entriesFor(stored, callEntry.expiry)[0].lotSize, 25);
+});
+
+test("legacy manual entry without lot size remains readable without inventing stored metadata", () => {
+  const { lotSize: _omitted, ...legacy } = callEntry;
+  const normalized = plan.normalizeStore({
+    version: 1,
+    plans: { [legacy.expiry]: { entries: [legacy] } }
+  });
+  const [entry] = plan.entriesFor(normalized, legacy.expiry);
+
+  assert.equal(entry.id, legacy.id);
+  assert.equal(Object.hasOwn(entry, "lotSize"), false);
+  assert.equal(plan.invalidCount(normalized), 0);
+});
+
+test("manual entry rejects present malformed lot metadata", () => {
+  for (const lotSize of [null, 0, -1, 25.5, "25"]) {
+    assert.equal(plan.normalizeEntry({ ...callEntry, lotSize }), null, String(lotSize));
+  }
+});
 
 test("upsert keeps old store immutable and groups exact strikes", () => {
   const before = plan.emptyStore();
@@ -110,4 +137,46 @@ test("remove deletes only exact id in exact expiry", () => {
   const second = { ...callEntry, id: "entry-2", strike: 24000, optionType: "PUT" };
   const stored = plan.upsertEntry(plan.upsertEntry(plan.emptyStore(), callEntry), second);
   assert.deepEqual(plan.entriesFor(plan.removeEntry(stored, callEntry.expiry, callEntry.id), callEntry.expiry), [second]);
+});
+
+test("immutable replacement removes the old identity and preserves quarantine", () => {
+  const raw = { ...callEntry, id: "recover-me", direction: "HOLD" };
+  const stored = plan.upsertEntry(plan.normalizeStore({
+    version: 1,
+    plans: { [callEntry.expiry]: { entries: [raw] } }
+  }), callEntry);
+  const replacement = {
+    ...callEntry,
+    id: "entry-2",
+    lots: 3,
+    updatedAt: "2026-07-29T10:05:00.000Z"
+  };
+
+  const changed = plan.replaceEntry(stored, callEntry.id, replacement);
+
+  assert.equal(plan.entryById(changed, callEntry.id), null);
+  assert.deepEqual(plan.entryById(changed, replacement.id), {
+    expiry: replacement.expiry,
+    entry: replacement
+  });
+  assert.equal(plan.invalidCount(changed), 1);
+  assert.deepEqual(plan.invalidEntries(changed)[0].raw, raw);
+});
+
+test("immutable replacement fails closed for missing, reused, or duplicated identities", () => {
+  const second = { ...callEntry, id: "entry-2", strike: 24000 };
+  const stored = plan.upsertEntry(plan.upsertEntry(plan.emptyStore(), callEntry), second);
+
+  assert.throws(() => plan.replaceEntry(stored, "missing", { ...callEntry, id: "entry-3" }), /not found/i);
+  assert.throws(() => plan.replaceEntry(stored, callEntry.id, callEntry), /new identity/i);
+  assert.throws(() => plan.replaceEntry(stored, callEntry.id, second), /already exists/i);
+
+  const duplicated = {
+    version: 1,
+    plans: {
+      [callEntry.expiry]: { entries: [callEntry] },
+      "2026-09-29": { entries: [{ ...callEntry, expiry: "2026-09-29" }] }
+    }
+  };
+  assert.throws(() => plan.entryById(duplicated, callEntry.id), /duplicate/i);
 });

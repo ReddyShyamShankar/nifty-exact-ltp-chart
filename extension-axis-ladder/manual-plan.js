@@ -38,6 +38,11 @@
   function normalizeEntry(input) {
     const strike = finite(input?.strike);
     const lots = finite(input?.lots);
+    const hasLotSize = input?.lotSize !== undefined;
+    const lotSize = hasLotSize && typeof input.lotSize === "number"
+      && Number.isInteger(input.lotSize) && input.lotSize > 0
+      ? input.lotSize
+      : null;
     const premium = finite(input?.premium);
     const callSnapshot = snapshot(input?.callSnapshot);
     const putSnapshot = snapshot(input?.putSnapshot);
@@ -45,11 +50,12 @@
       || !isIsoDate(input.expiry)
       || !["CALL", "PUT"].includes(input.optionType) || !["BUY", "SELL"].includes(input.direction)
       || strike === null || strike <= 0 || lots === null || !Number.isInteger(lots) || lots <= 0
+      || (hasLotSize && lotSize === null)
       || premium === null || premium < 0
       || (input.optionType === "CALL" ? callSnapshot === null : putSnapshot === null)
       || !isIsoTimestamp(input.createdAt) || !isIsoTimestamp(input.updatedAt)) return null;
     return { id: input.id, underlying: "NIFTY", expiry: input.expiry, strike, optionType: input.optionType,
-      direction: input.direction, lots, premium, callSnapshot,
+      direction: input.direction, lots, ...(hasLotSize ? { lotSize } : {}), premium, callSnapshot,
       putSnapshot, createdAt: input.createdAt, updatedAt: input.updatedAt };
   }
 
@@ -87,6 +93,18 @@
     return next;
   }
   function entriesFor(store, expiry) { return normalizeStore(store).plans[expiry]?.entries || []; }
+  function entryById(store, entryId) {
+    if (typeof entryId !== "string" || !entryId) return null;
+    const matches = [];
+    const normalized = normalizeStore(store);
+    for (const [expiry, plan] of Object.entries(normalized.plans)) {
+      for (const entry of plan.entries) {
+        if (entry.id === entryId) matches.push({ expiry, entry });
+      }
+    }
+    if (matches.length > 1) throw new Error("duplicate manual entry identity");
+    return matches[0] || null;
+  }
   function invalidEntries(store, expiry) {
     const entries = normalizeStore(store)[QUARANTINE_KEY];
     return typeof expiry === "string" ? entries.filter((item) => item.planExpiry === expiry) : entries;
@@ -104,6 +122,16 @@
     const next = normalizeStore(store); const remaining = entriesFor(next, expiry).filter((entry) => entry.id !== entryId);
     if (remaining.length) next.plans[expiry] = { entries: remaining }; else delete next.plans[expiry];
     return next;
+  }
+  function replaceEntry(store, entryId, input) {
+    const entry = normalizeEntry(input);
+    if (!entry) throw new Error("invalid manual entry");
+    const next = normalizeStore(store);
+    const prior = entryById(next, entryId);
+    if (!prior) throw new Error("manual entry not found");
+    if (entry.id === entryId) throw new Error("replacement manual entry must have new identity");
+    if (entryById(next, entry.id)) throw new Error("replacement manual entry identity already exists");
+    return upsertEntry(removeEntry(next, prior.expiry, entryId), entry);
   }
   function removeEntries(store, entryIds) {
     const ids = new Set(Array.isArray(entryIds) ? entryIds.filter((id) => typeof id === "string" && id) : []);
@@ -131,10 +159,12 @@
     normalizeEntry,
     normalizeStore,
     entriesFor,
+    entryById,
     invalidEntries,
     invalidCount,
     upsertEntry,
     removeEntry,
+    replaceEntry,
     removeEntries,
     groupByStrike
   };

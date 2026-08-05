@@ -3,28 +3,50 @@
 
   const ROOT_EPSILON = 1e-9;
   const DEDUPE_EPSILON = 1e-7;
+  const LEGACY_MANUAL_LOT_SIZE = 65;
+
+  function lotSizeForEntry(entry, legacyManualLotSize = LEGACY_MANUAL_LOT_SIZE) {
+    if (typeof entry?.lotSize === "number" && Number.isInteger(entry.lotSize) && entry.lotSize > 0) {
+      return entry.lotSize;
+    }
+    if (entry?.source === "MANUAL" && entry?.underlying === "NIFTY" && entry.lotSize === undefined
+      && typeof legacyManualLotSize === "number" && Number.isInteger(legacyManualLotSize)
+      && legacyManualLotSize > 0) {
+      return legacyManualLotSize;
+    }
+    return null;
+  }
 
   function legPayoff(entry, underlyingPrice) {
     const s = Number(underlyingPrice);
     const k = Number(entry.strike);
     const premium = Number(entry.premium);
     const lots = Number(entry.lots);
+    const lotSize = lotSizeForEntry(entry);
+    if (![s, k, premium, lots].every(Number.isFinite) || lotSize === null
+      || lots <= 0 || !["CALL", "PUT"].includes(entry?.optionType)
+      || !["BUY", "SELL"].includes(entry?.direction)) return null;
     const intrinsic = entry.optionType === "CALL" ? Math.max(s - k, 0) : Math.max(k - s, 0);
-    return lots * (entry.direction === "BUY" ? intrinsic - premium : premium - intrinsic);
+    return lots * lotSize * (entry.direction === "BUY" ? intrinsic - premium : premium - intrinsic);
   }
 
   function payoffAt(entries, underlyingPrice, offset = 0) {
     const fixedOffset = Number(offset);
-    return entries.reduce((sum, entry) => sum + legPayoff(entry, underlyingPrice), 0)
-      - (Number.isFinite(fixedOffset) ? fixedOffset : 0);
+    let total = 0;
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const value = legPayoff(entry, underlyingPrice);
+      if (!Number.isFinite(value)) return null;
+      total += value;
+    }
+    return total - (Number.isFinite(fixedOffset) ? fixedOffset : 0);
   }
 
-  function positionPnl(entry, liveRow, lotSize = 65) {
+  function positionPnl(entry, liveRow, legacyManualLotSize = LEGACY_MANUAL_LOT_SIZE) {
     const entryPremium = Number(entry?.premium);
     const lots = Number(entry?.lots);
-    const contractSize = Number(lotSize);
+    const contractSize = lotSizeForEntry(entry, legacyManualLotSize);
     const livePremium = Number(entry?.optionType === "CALL" ? liveRow?.call : entry?.optionType === "PUT" ? liveRow?.put : NaN);
-    if (![entryPremium, lots, contractSize, livePremium].every(Number.isFinite)
+    if (![entryPremium, lots, livePremium].every(Number.isFinite) || contractSize === null
       || entryPremium < 0 || livePremium <= 0 || lots <= 0 || contractSize <= 0
       || !["BUY", "SELL"].includes(entry?.direction)) return null;
     const points = entry.direction === "BUY" ? livePremium - entryPremium : entryPremium - livePremium;
@@ -51,6 +73,10 @@
 
   function breakEvens(entries, offset = 0) {
     if (!Array.isArray(entries) || entries.length === 0) return { status: "empty", points: [] };
+
+    if (entries.some((entry) => !Number.isFinite(legPayoff(entry, Number(entry?.strike))))) {
+      return { status: "invalid", points: [] };
+    }
 
     const knots = sortedKnots(entries);
     if (!knots.length) return { status: "empty", points: [] };
@@ -109,7 +135,7 @@
     };
   }
 
-  const api = { legPayoff, payoffAt, positionPnl, breakEvens, levels };
+  const api = { lotSizeForEntry, legPayoff, payoffAt, positionPnl, breakEvens, levels };
   root.NiftyManualPayoff = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis === "undefined" ? this : globalThis);

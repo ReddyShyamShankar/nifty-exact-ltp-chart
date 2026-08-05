@@ -6,10 +6,11 @@
   const ACTIVE = "ACTIVE";
   const ARCHIVED = "ARCHIVED";
   const EXPIRED = "EXPIRED";
+  const LEGACY_NIFTY_LOT_SIZE = 65;
   const STATUSES = new Set([ACTIVE, ARCHIVED, EXPIRED]);
   const OPERATIONS = new Set([
     "CREATE", "ADD", "EDIT", "REMOVE", "MERGE", "SPLIT", "RESTORE", "MIGRATE_LEGACY_PLAN",
-    "SYNC_BROKER"
+    "SYNC_BROKER", "RECONCILE_MANUAL_PLAN"
   ]);
 
   const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -47,11 +48,18 @@
   }
 
   function normalizeLeg(input) {
+    const usesLegacyNiftyLotSize = isRecord(input) && input.lotSize === undefined
+      && input.underlying === "NIFTY"
+      && ["MANUAL", "BROKER_POSITION"].includes(input.source);
+    const lotSize = usesLegacyNiftyLotSize
+      ? LEGACY_NIFTY_LOT_SIZE
+      : finite(input?.lotSize);
     if (!isRecord(input) || !nonEmpty(input.id) || !nonEmpty(input.source)
       || !nonEmpty(input.instrumentKey) || !nonEmpty(input.underlying) || !isIsoDate(input.expiry)
       || !["CALL", "PUT"].includes(input.optionType) || !["BUY", "SELL"].includes(input.direction)
       || finite(input.strike) === null || input.strike <= 0
       || finite(input.lots) === null || !Number.isInteger(input.lots) || input.lots <= 0
+      || lotSize === null || !Number.isInteger(lotSize) || lotSize <= 0
       || finite(input.premium) === null || input.premium < 0
       || !isIsoTimestamp(input.createdAt) || !isIsoTimestamp(input.updatedAt)) return null;
     const callSnapshot = input.callSnapshot === null ? null : finite(input.callSnapshot);
@@ -71,6 +79,7 @@
       optionType: input.optionType,
       direction: input.direction,
       lots: input.lots,
+      lotSize,
       premium: input.premium,
       callSnapshot,
       putSnapshot,
@@ -120,6 +129,14 @@
     };
   }
 
+  function isBrokerStrategy(book, strategy) {
+    if (strategy.id.startsWith("broker:")) return true;
+    const version = book.versions[strategy.currentVersionId];
+    if (version?.operation === "SYNC_BROKER") return true;
+    return Boolean(version?.legIds.length)
+      && version.legIds.every((id) => book.legs[id]?.source === "BROKER_POSITION");
+  }
+
   function normalizeBook(input) {
     const next = emptyBook();
     if (input === undefined || input === null) return next;
@@ -148,11 +165,10 @@
         if (nonEmpty(id) && isIsoTimestamp(at)) next.appliedCommands[id] = at;
       }
     }
-    const highest = Object.values(next.strategies).reduce((max, item) => Math.max(max, item.sequence), 0);
-    next.nextSequence = Math.max(
-      Number.isInteger(input.nextSequence) && input.nextSequence > 0 ? input.nextSequence : 1,
-      highest + 1
-    );
+    const highestManual = Object.values(next.strategies)
+      .filter((item) => !isBrokerStrategy(next, item))
+      .reduce((max, item) => Math.max(max, item.sequence), 0);
+    next.nextSequence = highestManual + 1;
     return next;
   }
 
@@ -189,6 +205,18 @@
     return version.legIds.map((id) => normalized.legs[id]).filter(Boolean);
   }
 
+  function activeStrategyForLeg(book, legId) {
+    if (!nonEmpty(legId)) return null;
+    const normalized = normalizeBook(book);
+    const owners = Object.values(normalized.strategies).filter((strategy) => {
+      if (strategy.status !== ACTIVE) return false;
+      const version = normalized.versions[strategy.currentVersionId];
+      return version?.strategyId === strategy.id && version.legIds.includes(legId);
+    });
+    if (owners.length > 1) throw new Error(`Leg ${legId} belongs to multiple active strategies.`);
+    return owners[0] || null;
+  }
+
   function requireStrategy(book, id, { active = true } = {}) {
     const strategy = book.strategies[id];
     if (!strategy || (active && strategy.status !== ACTIVE)) throw new Error("Active strategy not found.");
@@ -222,7 +250,9 @@
     strategy.updatedAt = now;
   }
 
-  function createStrategy(book, command, now, { operation = "CREATE", legIds = [], sourceStrategyIds = [] } = {}) {
+  function createStrategy(book, command, now, {
+    operation = "CREATE", legIds = [], sourceStrategyIds = [], consumeSequence = true
+  } = {}) {
     if (!nonEmpty(command.strategyId) || book.strategies[command.strategyId]) throw new Error("Strategy ID already exists or is invalid.");
     if (!nonEmpty(command.instrumentKey) || !nonEmpty(command.underlying) || !isIsoDate(command.expiry)) {
       throw new Error("Strategy identity is invalid.");
@@ -241,7 +271,7 @@
       createdAt: now,
       updatedAt: now
     };
-    book.nextSequence += 1;
+    if (consumeSequence) book.nextSequence += 1;
     book.strategies[strategy.id] = strategy;
     createVersion(book, strategy, command.versionId, operation, legIds, now, sourceStrategyIds);
     return strategy;
@@ -409,6 +439,7 @@
       optionType,
       direction: position.signedQuantity > 0 ? "BUY" : "SELL",
       lots: Math.abs(position.signedQuantity / position.lotSize),
+      lotSize: position.lotSize,
       premium: position.averagePrice,
       callSnapshot: optionType === "CALL" ? position.lastPrice : null,
       putSnapshot: optionType === "PUT" ? position.lastPrice : null,
@@ -445,7 +476,8 @@
     if (!existing) {
       createStrategy(book, command, now, {
         operation: "SYNC_BROKER",
-        legIds: legs.map((item) => item.id)
+        legIds: legs.map((item) => item.id),
+        consumeSequence: false
       });
       return;
     }
@@ -481,6 +513,11 @@
     activeOwnership(next);
     next.appliedCommands[command.id] = now;
     return normalizeBook(next);
+  }
+
+  function applyCommands(input, commands, now = new Date().toISOString()) {
+    if (!Array.isArray(commands) || !commands.length) throw new Error("Strategy command batch is invalid.");
+    return commands.reduce((book, command) => applyCommand(book, command, now), normalizeBook(input));
   }
 
   function migrateManualPlans(input, manualPlans, options = {}) {
@@ -531,6 +568,168 @@
     return normalizeBook(next);
   }
 
+  const MANUAL_PLAN_FIELDS = [
+    "id", "underlying", "expiry", "strike", "optionType", "direction", "lots", "lotSize", "premium",
+    "callSnapshot", "putSnapshot", "createdAt", "updatedAt"
+  ];
+
+  function manualPlanMatchesLeg(planLeg, storedLeg) {
+    return MANUAL_PLAN_FIELDS.every((field) => Object.is(planLeg?.[field], storedLeg?.[field]));
+  }
+
+  function stableIdentityHash(value) {
+    let hash = 0x811c9dc5;
+    for (const character of value) {
+      hash ^= character.codePointAt(0);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function manualPlanLeg(raw, instrumentKey, underlying, id = raw?.id) {
+    return normalizeLeg({
+      ...raw,
+      id,
+      source: "MANUAL",
+      instrumentKey,
+      underlying,
+      charges: [],
+      chargesComplete: false
+    });
+  }
+
+  function activeOwnerInBook(book, legId) {
+    const owners = Object.values(book.strategies).filter((strategy) => strategy.status === ACTIVE
+      && book.versions[strategy.currentVersionId]?.legIds.includes(legId));
+    if (owners.length > 1) throw new Error(`Leg ${legId} belongs to multiple active strategies.`);
+    return owners[0] || null;
+  }
+
+  function reconciliationIdentity(raw, authoritative) {
+    const evidence = MANUAL_PLAN_FIELDS.filter((field) => field !== "id")
+      .map((field) => [field, authoritative[field]]);
+    return `${raw.id}:reconciled:v2:${stableIdentityHash(JSON.stringify(evidence))}`;
+  }
+
+  function reconcileManualPlans(input, manualPlans, options = {}) {
+    const instrumentKey = options.instrumentKey;
+    const underlying = options.underlying;
+    const now = options.at;
+    if (!nonEmpty(instrumentKey) || !nonEmpty(underlying) || !isIsoTimestamp(now)) {
+      throw new Error("Legacy reconciliation identity is invalid.");
+    }
+    let next = normalizeBook(input);
+    const replacements = [];
+    const removedEntryIds = [];
+    const rehydratedEntries = [];
+    const plans = isRecord(manualPlans?.plans) ? manualPlans.plans : {};
+    const activePlanIds = new Set();
+    const entries = Object.keys(plans).sort().flatMap((expiry) => {
+      if (!isIsoDate(expiry) || !Array.isArray(plans[expiry]?.entries)) return [];
+      return plans[expiry].entries.map((raw) => ({ expiry, raw }));
+    }).sort((a, b) => a.expiry.localeCompare(b.expiry)
+      || String(a.raw?.id || "").localeCompare(String(b.raw?.id || "")));
+
+    for (const { expiry, raw } of entries) {
+      const authoritative = manualPlanLeg(raw, instrumentKey, underlying);
+      if (!authoritative || authoritative.expiry !== expiry) continue;
+      const prior = next.legs[authoritative.id];
+      if (!prior) {
+        next.legs[authoritative.id] = authoritative;
+        const legacyId = `legacy:${instrumentKey}:${expiry}`;
+        const repairId = `legacy-v2:${instrumentKey}:${expiry}`;
+        let strategy = [next.strategies[legacyId], next.strategies[repairId]]
+          .find((item) => item?.status === ACTIVE) || null;
+        if (!strategy) {
+          const strategyId = next.strategies[legacyId] ? repairId : legacyId;
+          strategy = createStrategy(next, {
+            strategyId,
+            versionId: `${strategyId}:manual-plan-v2:${stableIdentityHash(authoritative.id)}`,
+            label: `T${next.nextSequence}`,
+            instrumentKey,
+            underlying,
+            expiry
+          }, now, { operation: "MIGRATE_LEGACY_PLAN", legIds: [authoritative.id] });
+        } else {
+          requireCompatible(strategy, authoritative);
+          const versionId = `${strategy.id}:manual-plan-v2:${stableIdentityHash(authoritative.id)}`;
+          createVersion(next, strategy, versionId, "MIGRATE_LEGACY_PLAN",
+            [...currentVersion(next, strategy).legIds, authoritative.id], now);
+        }
+        activePlanIds.add(authoritative.id);
+        continue;
+      }
+      const owner = activeOwnerInBook(next, prior.id);
+      if (prior.source !== "MANUAL") {
+        next.quarantine.push({ kind: "MANUAL_PLAN_ID_COLLISION", id: raw.id, raw: clone(raw) });
+        continue;
+      }
+      if (manualPlanMatchesLeg(authoritative, prior)) {
+        if (owner) activePlanIds.add(authoritative.id);
+        else removedEntryIds.push(authoritative.id);
+        continue;
+      }
+      const replacementId = reconciliationIdentity(raw, authoritative);
+      const replacement = manualPlanLeg(raw, instrumentKey, underlying, replacementId);
+      const replacementOwner = activeOwnerInBook(next, replacementId);
+      if (replacementOwner) {
+        if (!manualPlanMatchesLeg(replacement, next.legs[replacementId])) {
+          throw new Error("Manual plan reconciliation identity conflicts with stored evidence.");
+        }
+        replacements.push({ oldId: raw.id, newId: replacementId });
+        activePlanIds.add(replacementId);
+        continue;
+      }
+      if (!owner) {
+        if (!next.quarantine.some((item) => item?.kind === "MANUAL_PLAN_MISMATCH" && item.id === raw.id)) {
+          next.quarantine.push({ kind: "MANUAL_PLAN_MISMATCH", id: raw.id, raw: clone(raw) });
+        }
+        removedEntryIds.push(raw.id);
+        continue;
+      }
+      requireCompatible(owner, replacement);
+      if (next.legs[replacementId]) {
+        throw new Error("Manual plan reconciliation identity already exists.");
+      }
+      next.legs[replacementId] = replacement;
+      const priorVersion = currentVersion(next, owner);
+      const versionId = `${owner.id}:manual-plan-v2:${stableIdentityHash(`${raw.id}:${replacementId}`)}`;
+      createVersion(next, owner, versionId, "RECONCILE_MANUAL_PLAN",
+        priorVersion.legIds.map((id) => id === raw.id ? replacementId : id), now);
+      replacements.push({ oldId: raw.id, newId: replacementId });
+      activePlanIds.add(replacementId);
+    }
+
+    activeOwnership(next);
+    for (const strategy of Object.values(next.strategies)) {
+      if (strategy.status !== ACTIVE || strategy.instrumentKey !== instrumentKey
+        || strategy.underlying !== underlying || isBrokerStrategy(next, strategy)) continue;
+      const version = currentVersion(next, strategy);
+      if (version.legIds.length || !["CREATE", "MIGRATE_LEGACY_PLAN"].includes(version.operation)) continue;
+      strategy.status = ARCHIVED;
+      strategy.archivedReason = "EMPTY_MANUAL_RECOVERY";
+      strategy.updatedAt = now;
+    }
+    for (const strategy of Object.values(next.strategies)) {
+      if (strategy.status !== ACTIVE || strategy.instrumentKey !== instrumentKey
+        || strategy.underlying !== underlying) continue;
+      for (const legId of currentVersion(next, strategy).legIds) {
+        const leg = next.legs[legId];
+        if (leg?.source !== "MANUAL" || activePlanIds.has(legId)) continue;
+        rehydratedEntries.push(clone(leg));
+        activePlanIds.add(legId);
+      }
+    }
+    const commandId = `migration:manualPlans:v2:${instrumentKey}`;
+    if (!next.appliedCommands[commandId]) next.appliedCommands[commandId] = now;
+    return {
+      strategyBook: normalizeBook(next),
+      replacements,
+      removedEntryIds: [...new Set(removedEntryIds)],
+      rehydratedEntries
+    };
+  }
+
   const api = {
     STORAGE_KEY,
     ACTIVE,
@@ -540,12 +739,15 @@
     normalizeLeg,
     normalizeBook,
     activeStrategies,
+    activeStrategyForLeg,
     contextKey,
     resolveLastSelected,
     strategyById,
     legsForStrategy,
     applyCommand,
-    migrateManualPlans
+    applyCommands,
+    migrateManualPlans,
+    reconcileManualPlans
   };
   root.OptionsStrategyStore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

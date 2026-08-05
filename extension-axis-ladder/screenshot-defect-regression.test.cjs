@@ -360,7 +360,8 @@ test("business: known charges shift roots and reduce current P&L", () => {
   ], { lotSize: 1 });
   assert.equal(result.knownCharges, 4);
   assert.equal(result.chargesComplete, true);
-  assert.equal(result.currentPnl, 0);
+  assert.equal(result.currentPnl, 256,
+    "per-leg 65-contract quantities override obsolete global lotSize preview option");
 });
 
 test("business: unknown charges are disclosed and never invented", () => {
@@ -400,7 +401,8 @@ test("business: mixed exact expiry or instrument selection fails closed", () => 
     instrumentKey: "EUREX:ESTX50",
     underlying: "EURO STOXX 50",
     expiry: "2026-09-18",
-    strike: 4250.5
+    strike: 4250.5,
+    lotSize: 10
   }));
   assert.equal(preview.buildPreview(book, ["s1", "mixed"], []).status, "INCOMPATIBLE");
 });

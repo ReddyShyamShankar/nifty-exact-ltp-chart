@@ -45,6 +45,7 @@
       chargesComplete: false,
       disclosure: null,
       missingQuotes: [],
+      missingLotSizes: [],
       ...extra
     };
   }
@@ -75,6 +76,9 @@
 
     const entries = [...new Map(selected.flatMap((item) => item.entries)
       .map((entry) => [entry.id, entry])).values()];
+    const missingLotSizes = entries
+      .filter((entry) => manualPayoff.lotSizeForEntry(entry) === null)
+      .map((entry) => ({ legId: entry.id, source: entry.source || null }));
     const rows = Array.isArray(quoteRows) ? quoteRows : [];
     const missingQuotes = [];
     const liveRows = new Map();
@@ -91,40 +95,52 @@
     const knownCharges = entries.reduce((sum, entry) => sum + chargeTotal(entry), 0);
     const chargesComplete = entries.every((entry) => entry.chargesComplete === true);
     const disclosure = chargesComplete ? null : "EXCLUDING UNKNOWN CHARGES";
-    const lotSize = Number(options.lotSize ?? 65);
-    if (missingQuotes.length || !Number.isFinite(lotSize) || lotSize <= 0) {
+    if (missingQuotes.length || missingLotSizes.length) {
       return emptyResult("INCOMPLETE", ids, {
         entries,
         knownCharges,
         chargesComplete,
         disclosure,
-        missingQuotes
+        missingQuotes,
+        missingLotSizes
       });
     }
 
-    const pnls = entries.map((entry) => manualPayoff.positionPnl(entry, liveRows.get(entry.id), lotSize));
+    const pnls = entries.map((entry) => manualPayoff.positionPnl(entry, liveRows.get(entry.id)));
     if (pnls.some((value) => value === null)) {
       return emptyResult("INCOMPLETE", ids, {
         entries,
         knownCharges,
         chargesComplete,
         disclosure,
-        missingQuotes
+        missingQuotes,
+        missingLotSizes
       });
     }
-    const chargeOffset = knownCharges / lotSize;
+    const breakEvenResult = manualPayoff.breakEvens(entries, knownCharges);
+    if (breakEvenResult.status === "invalid") {
+      return emptyResult("INCOMPLETE", ids, {
+        entries,
+        knownCharges,
+        chargesComplete,
+        disclosure,
+        missingQuotes,
+        missingLotSizes
+      });
+    }
     return {
       status: "OK",
       selectedIds: ids,
       instrumentKey: first.instrumentKey,
       expiry: first.expiry,
       entries,
-      breakEvens: manualPayoff.breakEvens(entries, chargeOffset).points,
+      breakEvens: breakEvenResult.points,
       currentPnl: pnls.reduce((sum, value) => sum + value, 0) - knownCharges,
       knownCharges,
       chargesComplete,
       disclosure,
-      missingQuotes: []
+      missingQuotes: [],
+      missingLotSizes: []
     };
   }
 
