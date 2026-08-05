@@ -3,8 +3,8 @@
 ## Candidate identity
 
 - Branch: `codex/arbdesk-theme-system`
-- HEAD: `fc32ef1e328c`
-- State: dirty working candidate loaded into Chrome from `extension-axis-ladder/`
+- Product commit: `239ad4e99cc0`
+- State: committed and pushed candidate; product code loaded into Chrome from `extension-axis-ladder/` matched this commit
 
 ## Current verdict
 
@@ -17,6 +17,7 @@ Critical repaired workflows below pass automated checks and live Chrome checks. 
 - Patch integrity: `git diff --check` passed.
 - Deleted tracked files: **0** (`git diff --diff-filter=D --name-status` returned empty).
 - Local bridge: `status=ok`, `bridge=online`, `upstox=reachable`.
+- GitHub branch `codex/arbdesk-theme-system` was verified at product commit `239ad4e99cc0` after push.
 
 Zero deleted files does not mean zero removed lines. Existing working changes include replacements and removals inside modified files; no tracked file was deleted.
 
