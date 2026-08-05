@@ -8,6 +8,7 @@
   const RISK_LABEL_GAP_PX = 12;
   const EDGE_STACK_GAP_PX = 4;
   const POSITION_CONTROL_WIDTH_PX = 47;
+  const POSITION_CONTROL_HEIGHT_PX = 18;
   const POSITION_LANE_GAP_PX = 6;
   const POSITION_PUT_GUTTER_PX = 60;
   const BREAK_EVEN_LABEL_HEIGHT = 15;
@@ -357,6 +358,63 @@
       side,
       key: `${side}:${cluster.key}`
     })));
+  }
+
+  function placeHeadersAroundFixedControls(cards, controls, options = {}) {
+    const minY = Number(options.minY);
+    const maxY = Number(options.maxY);
+    const gap = Number.isFinite(Number(options.gap)) ? Math.max(0, Number(options.gap)) : 0;
+    const controlHeight = Number.isFinite(Number(options.controlHeight))
+      ? Math.max(0, Number(options.controlHeight))
+      : POSITION_CONTROL_HEIGHT_PX;
+    if (!Array.isArray(cards) || !Number.isFinite(minY) || !Number.isFinite(maxY) || minY > maxY) return [];
+    const fixed = (Array.isArray(controls) ? controls : [])
+      .map((control) => ({ y: Number(control?.y), side: control?.side }))
+      .filter((control) => Number.isFinite(control.y))
+      .map((control) => ({
+        top: control.y - controlHeight / 2,
+        bottom: control.y + controlHeight / 2,
+        side: control.side
+      }));
+    const placed = [];
+    return cards.map((card, index) => ({
+      ...card,
+      railY: Number(card?.railY),
+      height: Math.max(0, Number(card?.height)),
+      _index: index
+    })).filter((card) => Number.isFinite(card.railY) && Number.isFinite(card.height))
+      .sort((left, right) => left.railY - right.railY || left._index - right._index)
+      .map((card) => {
+        const desired = card.railY - card.height / 2;
+        const obstacles = [...fixed, ...placed]
+          .filter((obstacle) => !card.side || !obstacle.side || obstacle.side !== card.side);
+        const candidates = new Set([
+          Math.max(minY, Math.min(maxY - card.height, desired)),
+          minY,
+          maxY - card.height
+        ]);
+        obstacles.forEach((obstacle) => {
+          candidates.add(obstacle.top - gap - card.height);
+          candidates.add(obstacle.bottom + gap);
+        });
+        const valid = [...candidates].filter((top) => Number.isFinite(top)
+          && top >= minY && top + card.height <= maxY
+          && obstacles.every((obstacle) => top + card.height + gap <= obstacle.top
+            || top >= obstacle.bottom + gap));
+        const cardY = (valid.length ? valid : [Math.max(minY, Math.min(maxY - card.height, desired))])
+          .sort((left, right) => Math.abs(left - desired) - Math.abs(right - desired) || left - right)[0];
+        placed.push({ top: cardY, bottom: cardY + card.height, side: card.side });
+        const { _index, ...result } = card;
+        return {
+          ...result,
+          cardY,
+          connector: {
+            fromY: cardY + card.height / 2,
+            toY: card.railY,
+            moved: Math.abs(cardY + card.height / 2 - card.railY) > 0.5
+          }
+        };
+      });
   }
 
   function axisPriceToY(axisPairs) {
@@ -2459,6 +2517,21 @@
     return sides[0] === "PUT" ? "put" : "call";
   }
 
+  function strategyRailText(model) {
+    const side = model?.side === "put" ? "PUT" : "CALL";
+    const directions = [...new Set((Array.isArray(model?.entries) ? model.entries : [])
+      .map((entry) => String(entry?.direction || "").toUpperCase())
+      .filter((direction) => ["BUY", "SELL"].includes(direction)))];
+    const direction = directions.length === 1 ? directions[0] : null;
+    const exact = Number(model?.exact);
+    if (!direction || !Number.isFinite(exact)) {
+      return String(model?.label || "").replace(`${model?.strategyLabel || ""} `, "");
+    }
+    const winsAbove = (direction === "BUY" && side === "CALL")
+      || (direction === "SELL" && side === "PUT");
+    return `${side} BE ${Math.round(exact).toLocaleString("en-IN")} · ${direction} ${winsAbove ? "ABOVE ↑" : "BELOW ↓"}`;
+  }
+
   function renderBrokerPositionSpine(rootNodeValue, models, toY, rect, spineX, guide = {}) {
     const visible = brokerPositionSpineModels(models).map((model) => {
       const entry = model.entries[0];
@@ -2469,7 +2542,12 @@
 
     const visibleStrikePoints = (guide.visibleStrikes || [])
       .map((strike) => ({ strike: Number(strike), y: Number(toY(Number(strike))) }));
-    const bounds = positionSpineBounds(visibleStrikePoints, rect)
+    const controlPoints = [
+      ...visibleStrikePoints,
+      ...visible.map(({ y }) => ({ y })),
+      ...(Array.isArray(guide.positionYs) ? guide.positionYs.map((y) => ({ y })) : [])
+    ];
+    const bounds = positionSpineBounds(controlPoints, rect)
       || { top: Number(rect.top), bottom: Number(rect.bottom) };
     const line = document.createElement("span");
     line.className = "nifty-position-spine__line";
@@ -2750,7 +2828,7 @@
         ...model,
         hideRail: previewingCombined
           ? !showComparedOriginalRails
-          : openedStrategyId !== model.strategyId
+          : false
       })),
       ...combined
     ];
@@ -2776,14 +2854,46 @@
       clearStrategyRails();
       return false;
     }
-    const cards = ["call", "put"].flatMap((side) => strategyChartApi.stackCards(
-      projected.filter((model) => model.side === side).map((model) => ({
-        id: model.id,
-        railY: model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY,
-        height: strategyChartApi.strategyCardHeight(model, openedStrategyId)
+    const projectedCards = projected.map((model) => ({
+      id: model.id,
+      side: model.side,
+      railY: model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY,
+      height: model.kind === "STRATEGY" && !openedStrategyId
+        ? POSITION_CONTROL_HEIGHT_PX
+        : strategyChartApi.strategyCardHeight(model, openedStrategyId)
+    }));
+    const fixedControls = [
+      ...spineModels.map((model) => ({
+        y: Number(toY(Number(model?.entries?.[0]?.strike))),
+        side: strategyColumnSide(model, spineGuide.atm)
       })),
-      { gap: 6, minY: Number(rect.top), maxY: Number(rect.bottom) }
-    ));
+      ...[...(document.getElementById(LABELS_ID)
+        ?.querySelectorAll(".nifty-axis-ladder__off-grid") || [])]
+        .filter((element) => !element.hidden)
+        .map((element) => ({
+          y: Number(toY(Number(element.dataset.strike))),
+          side: /^P\d/.test(element.textContent || "")
+            ? "put"
+            : /^C\d/.test(element.textContent || "")
+              ? "call"
+              : null
+        }))
+    ].filter((control) => Number.isFinite(control.y) && ["call", "put"].includes(control.side));
+    const cards = openedStrategyId
+      ? ["call", "put"].flatMap((side) => strategyChartApi.stackCards(
+        projected.filter((model) => model.side === side).map((model) => ({
+          id: model.id,
+          railY: model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY,
+          height: strategyChartApi.strategyCardHeight(model, openedStrategyId)
+        })),
+        { gap: 6, minY: Number(rect.top), maxY: Number(rect.bottom) }
+      ))
+      : placeHeadersAroundFixedControls(projectedCards, fixedControls, {
+        gap: POSITION_LANE_GAP_PX,
+        controlHeight: POSITION_CONTROL_HEIGHT_PX,
+        minY: Number(rect.top),
+        maxY: Number(rect.bottom)
+      });
     const cardById = new Map(cards.map((card) => [card.id, card]));
     const rootNodeValue = strategyRailsRoot();
     rootNodeValue.replaceChildren();
@@ -2833,11 +2943,11 @@
       const card = document.createElement("div");
       const isOpen = model.kind === "STRATEGY" && openedStrategyId === model.strategyId;
       card.className = `nifty-strategy__card is-${model.kind.toLowerCase()} is-${String(model.viewKind || "standard").toLowerCase()} is-${model.side} ${isOpen ? "is-open" : "is-collapsed"}`;
+      if (model.kind === "STRATEGY" && !isOpen) card.classList.add("is-rail-header");
       card.dataset.exact = String(model.exact);
       if (model.viewKind === "BROKER_COMBINED") card.classList.add("is-summary-source");
       card.style.right = `${window.innerWidth - cardRight}px`;
-      const anchorY = model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY;
-      card.style.top = `${isOpen || openedStrategyId ? placement.cardY : anchorY - 9}px`;
+      card.style.top = `${placement.cardY}px`;
       if (model.kind === "STRATEGY") {
         const selector = document.createElement("button");
         selector.type = "button";
@@ -2858,7 +2968,20 @@
         label.type = "button";
         label.className = "nifty-strategy__label";
         label.dataset.token = model.viewKind === "BROKER_COMBINED" ? "ALL" : model.strategyLabel;
-        label.textContent = `${model.label}${model.projection.mode === "EDGE" ? ` ${model.projection.arrow}` : ""}`;
+        if (!isOpen) {
+          const token = document.createElement("span");
+          token.className = "nifty-strategy__rail-token";
+          token.textContent = `${label.dataset.token} `;
+          const divider = document.createElement("span");
+          divider.className = "nifty-strategy__rail-divider";
+          divider.setAttribute("aria-hidden", "true");
+          const text = document.createElement("span");
+          text.className = "nifty-strategy__rail-text";
+          text.textContent = strategyRailText(model);
+          label.append(token, divider, text);
+        } else {
+          label.textContent = `${model.label}${model.projection.mode === "EDGE" ? ` ${model.projection.arrow}` : ""}`;
+        }
         label.setAttribute("aria-label", strategyChartApi.accessibleLabel({
           ...model,
           mode: model.projection.mode,
@@ -2868,8 +2991,7 @@
           event.stopPropagation?.();
           strategyChartController.label(model.strategyId);
         });
-        if (model.side === "put" && !isOpen) card.append(label, selector);
-        else card.append(selector, label);
+        card.append(selector, label);
       } else {
         const label = document.createElement("span");
         label.className = "nifty-strategy__label";
@@ -2881,7 +3003,7 @@
       if (model.kind === "STRATEGY" && !isOpen) {
         edgeStrategyItems.push({
           id: model.id,
-          y: openedStrategyId ? placement.cardY + 9 : anchorY,
+          y: placement.cardY + POSITION_CONTROL_HEIGHT_PX / 2,
           side: model.side,
           kind: "STRATEGY",
           tone: "strategy",
@@ -2892,7 +3014,11 @@
       }
     });
     const brokerItems = renderBrokerPositionSpine(rootNodeValue, spineModels, toY, rect,
-      activeSpineX, { ...spineGuide, ladderLeft }) || [];
+      activeSpineX, {
+        ...spineGuide,
+        ladderLeft,
+        positionYs: edgeStrategyItems.map((item) => item.y)
+      }) || [];
     const edgeTradeItems = [...(document.getElementById(LABELS_ID)
       ?.querySelectorAll(".nifty-axis-ladder__off-grid") || [])]
       .filter((element) => !element.hidden)
@@ -3872,10 +3998,13 @@
     const insideEdgeStack = event.target?.closest?.(".nifty-edge-stack__group")
       || event.target?.closest?.(".nifty-edge-stack__selector")
       || event.target?.closest?.(".nifty-edge-stack__flyout");
+    const insidePositionGroup = event.target?.closest?.(".nifty-position-spine__cluster")
+      || event.target?.closest?.(".nifty-position-spine__cluster-flyout");
     const insideBrokerCard = event.target?.closest?.(".nifty-position-spine__card");
     const outsideStrategyCard = !event.target?.closest?.(".nifty-strategy__card")
       && !insideBrokerCard
-      && !insideEdgeStack;
+      && !insideEdgeStack
+      && !insidePositionGroup;
     if (event.target?.closest?.(".nifty-manual-plan__label.is-flippable")) {
       if (outsideStrategyCard) collapseOpenedStrategyDetails();
       return;

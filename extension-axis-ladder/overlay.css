@@ -1155,6 +1155,10 @@
   grid-template-columns: 28px 16px;
 }
 
+.nifty-strategy__card.is-collapsed.is-rail-header {
+  grid-template-columns: 16px auto;
+}
+
 .nifty-strategy__card.is-collapsed .nifty-strategy__selector {
   display: block;
   margin: 0;
@@ -1182,10 +1186,78 @@
   font: 800 9px/1.2 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.nifty-strategy__card.is-collapsed.is-rail-header .nifty-strategy__label {
+  display: grid;
+  grid-template-columns: 28px 1px max-content;
+  gap: 5px;
+  width: auto;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-ink);
+  font-size: inherit;
+  text-align: left;
+}
+
+.nifty-strategy__card.is-collapsed.is-rail-header .nifty-strategy__label::before {
+  content: none;
+}
+
+.nifty-strategy__rail-token,
+.nifty-strategy__rail-text {
+  font: 800 9px/1.2 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.nifty-strategy__rail-token {
+  box-sizing: border-box;
+  width: 28px;
+  height: 18px;
+  padding: 2px;
+  border: 1px solid var(--plan-line);
+  border-bottom-width: 3px;
+  border-radius: 3px;
+  background: var(--plan-surface);
+  color: var(--plan-ink);
+  text-align: center;
+}
+
+.nifty-strategy__rail-text {
+  padding: 3px 4px;
+  color: var(--theme-ink);
+}
+
+.nifty-strategy__card.is-call .nifty-strategy__rail-token {
+  border-bottom-color: var(--ladder-buy);
+}
+
+.nifty-strategy__card.is-put .nifty-strategy__rail-token {
+  border-bottom-color: var(--ladder-sell);
+}
+
+.nifty-strategy__rail-divider {
+  align-self: stretch;
+  width: 1px;
+  background: var(--theme-line-2);
+}
+
 .nifty-strategy__card.is-inline-be {
   position: static;
   display: grid;
+  grid-template-columns: 16px 28px;
   transform: none;
+}
+
+.nifty-strategy__card.is-inline-be .nifty-strategy__label {
+  display: block;
+  width: 28px;
+}
+
+.nifty-strategy__card.is-inline-be .nifty-strategy__rail-divider,
+.nifty-strategy__card.is-inline-be .nifty-strategy__rail-text {
+  display: none;
 }
 
 
