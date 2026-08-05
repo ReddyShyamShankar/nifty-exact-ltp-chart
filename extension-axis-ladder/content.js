@@ -167,7 +167,7 @@
     if (![plotLeft, plotRight, width, requestedLadderLeft].every(Number.isFinite)
       || plotRight <= plotLeft || width <= 0) return null;
     const resolvedLadderLeft = Math.max(plotLeft, Math.min(plotRight, requestedLadderLeft));
-    const minimumSpine = plotLeft + POSITION_CONTROL_WIDTH_PX * 2 + POSITION_LANE_GAP_PX * 3;
+    const minimumSpine = plotLeft + POSITION_CONTROL_WIDTH_PX + POSITION_LANE_GAP_PX;
     const spineX = Math.max(minimumSpine, resolvedLadderLeft - POSITION_PUT_GUTTER_PX);
     const call = {
       left: spineX - POSITION_LANE_GAP_PX - POSITION_CONTROL_WIDTH_PX,
@@ -177,16 +177,11 @@
       left: spineX + POSITION_LANE_GAP_PX,
       right: spineX + POSITION_LANE_GAP_PX + POSITION_CONTROL_WIDTH_PX
     };
-    const strategy = {
-      left: call.left - POSITION_LANE_GAP_PX - POSITION_CONTROL_WIDTH_PX,
-      right: call.left - POSITION_LANE_GAP_PX
-    };
     return {
       ladderLeft: resolvedLadderLeft,
       spineX,
       call,
       put,
-      strategy,
       hasSafePutGap: put.right <= resolvedLadderLeft - 3
     };
   }
@@ -200,7 +195,7 @@
     if (!hasPositionControls) return resolved;
     const layout = positionSpineLayout(resolved, rect, viewportWidth);
     if (!layout?.hasSafePutGap) return resolved;
-    return Math.max(plotLeft, layout.strategy.left - POSITION_LANE_GAP_PX);
+    return Math.max(plotLeft, layout.call.left - POSITION_LANE_GAP_PX);
   }
 
   function visibleRowIndexes(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
@@ -353,10 +348,15 @@
     }));
   }
 
-  function positionSideClusters(items, minimumGap = 20) {
-    return ["call", "put"].flatMap((side) => edgeStackClusters((Array.isArray(items) ? items : [])
-      .filter((item) => String(item?.side || "").toLowerCase() === side), minimumGap)
-      .map((cluster) => ({ ...cluster, side })));
+  function positionColumnClusters(items, minimumGap = 20) {
+    return ["call", "put"].flatMap((side) => edgeStackClusters(
+      (Array.isArray(items) ? items : []).filter((item) => item?.side === side),
+      minimumGap
+    ).map((cluster) => ({
+      ...cluster,
+      side,
+      key: `${side}:${cluster.key}`
+    })));
   }
 
   function axisPriceToY(axisPairs) {
@@ -1115,7 +1115,7 @@
     applyRiskStorageChanges,
     axisPriceToY,
     edgeStackClusters,
-    positionSideClusters,
+    positionColumnClusters,
     createLadderController,
     formatRow,
     freezeMembership,
@@ -2448,6 +2448,17 @@
       && Number.isFinite(Number(model.entries[0]?.strike)));
   }
 
+  function strategyColumnSide(model, atm) {
+    const sides = [...new Set((Array.isArray(model?.entries) ? model.entries : [])
+      .map((entry) => entry?.optionType)
+      .filter((optionType) => ["CALL", "PUT"].includes(optionType)))];
+    if (sides.length === 1) return sides[0] === "PUT" ? "put" : "call";
+    const exact = Number(model?.exact);
+    const reference = Number(atm);
+    if (Number.isFinite(exact) && Number.isFinite(reference)) return exact < reference ? "put" : "call";
+    return sides[0] === "PUT" ? "put" : "call";
+  }
+
   function renderBrokerPositionSpine(rootNodeValue, models, toY, rect, spineX, guide = {}) {
     const visible = brokerPositionSpineModels(models).map((model) => {
       const entry = model.entries[0];
@@ -2469,132 +2480,65 @@
     line.setAttribute("aria-hidden", "true");
     rootNodeValue.append(line);
 
-    [
-      ["C", "is-call"],
-      ["P", "is-put"]
-    ].forEach(([text, className]) => {
-      const label = document.createElement("span");
-      label.className = `nifty-position-spine__lane-label ${className}`;
-      label.textContent = text;
-      label.style.left = `${spineX}px`;
-      label.style.top = `${Math.max(0, bounds.top - 15)}px`;
-      rootNodeValue.append(label);
+    [["C", "is-call"], ["P", "is-put"]].forEach(([text, className]) => {
+      const laneLabel = document.createElement("span");
+      laneLabel.className = `nifty-position-spine__lane-label ${className}`;
+      laneLabel.textContent = text;
+      laneLabel.style.left = `${spineX}px`;
+      laneLabel.style.top = `${Math.max(0, bounds.top - 15)}px`;
+      rootNodeValue.append(laneLabel);
     });
 
-    const positionClusters = positionSideClusters(visible
-      .map((item) => ({
-        ...item,
-        id: item.model.strategyId,
-        side: item.entry.optionType === "PUT" ? "put" : "call"
-      })))
-      .filter((cluster) => cluster.items.length > 1)
-      .map((cluster) => ({ ...cluster, key: `broker:${cluster.side}:${cluster.key}` }));
-    const clusteredStrategyIds = new Set(positionClusters.flatMap((cluster) => cluster.items
-      .map((item) => item.model.strategyId)));
-
-    positionClusters.forEach((cluster) => {
-      const clusterNode = document.createElement("span");
-      clusterNode.className = `nifty-position-spine__cluster is-${cluster.side}`;
-      clusterNode.style.top = `${cluster.y - 9}px`;
-      if (cluster.side === "call") clusterNode.style.right = `${Math.max(0, window.innerWidth - spineX + 3)}px`;
-      else clusterNode.style.left = `${spineX + 3}px`;
-
-      const opener = document.createElement("button");
-      opener.type = "button";
-      opener.className = "nifty-position-spine__cluster-select";
-      opener.setAttribute("aria-expanded", String(openedEdgeGroupKey === cluster.key));
-      opener.setAttribute("aria-label", `${openedEdgeGroupKey === cluster.key ? "Close" : "Open"} ${cluster.items.length} grouped ${cluster.side} positions`);
-      opener.addEventListener("click", (event) => {
-        event.stopPropagation?.();
-        openedEdgeGroupKey = openedEdgeGroupKey === cluster.key ? null : cluster.key;
-        void controller?.place();
-      });
-
-      const count = document.createElement("span");
-      count.className = "nifty-position-spine__cluster-count";
-      count.textContent = `+${cluster.items.length}`;
-      ["buy", "sell"].forEach((tone) => {
-        const mark = document.createElement("span");
-        mark.className = `nifty-position-spine__cluster-tone is-${tone}`;
-        mark.setAttribute("aria-hidden", "true");
-        count.append(mark);
-      });
-      if (cluster.side === "call") clusterNode.append(opener, count);
-      else clusterNode.append(count, opener);
-      rootNodeValue.append(clusterNode);
-
-      if (openedEdgeGroupKey !== cluster.key) return;
-      const flyout = document.createElement("span");
-      flyout.className = `nifty-position-spine__cluster-flyout is-${cluster.side}`;
-      flyout.style.top = `${Math.max(Number(rect.top) + 4, cluster.y - cluster.items.length * 12)}px`;
-      flyout.style.right = `${Math.max(0, window.innerWidth - spineX + POSITION_CONTROL_WIDTH_PX + 12)}px`;
-      cluster.items.forEach(({ model, entry }) => {
-        const direction = String(entry.direction || "").toLowerCase();
-        const lots = Math.max(1, Number(entry.lots) || 1);
-        const row = document.createElement("span");
-        row.className = `nifty-position-spine__cluster-row is-${direction}`;
-        const rowSelect = document.createElement("button");
-        rowSelect.type = "button";
-        rowSelect.className = "nifty-position-spine__cluster-row-select";
-        rowSelect.setAttribute("aria-pressed", String(model.selected));
-        rowSelect.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
-        rowSelect.addEventListener("click", (event) => {
-          event.stopPropagation?.();
-          ensureStrategyChartController()?.square(model.strategyId);
-        });
-        const rowOpen = document.createElement("button");
-        rowOpen.type = "button";
-        rowOpen.className = "nifty-position-spine__cluster-row-open";
-        rowOpen.textContent = `${cluster.side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`;
-        rowOpen.addEventListener("click", (event) => {
-          event.stopPropagation?.();
-          ensureStrategyChartController()?.label(model.strategyId);
-        });
-        row.append(rowSelect, rowOpen);
-        flyout.append(row);
-      });
-      rootNodeValue.append(flyout);
-    });
+    const positionItems = [];
 
     visible.forEach(({ model, entry, y }) => {
       const side = entry.optionType === "PUT" ? "put" : "call";
       const direction = String(entry.direction || "").toLowerCase();
       const lots = Math.max(1, Number(entry.lots) || 1);
-      if (!clusteredStrategyIds.has(model.strategyId)) {
-        const compact = document.createElement("span");
-        compact.className = `nifty-position-spine__compact is-${side}`;
-        compact.style.top = `${y - 9}px`;
-        if (side === "call") compact.style.right = `${Math.max(0, window.innerWidth - spineX + 3)}px`;
-        else compact.style.left = `${spineX + 3}px`;
+      const compact = document.createElement("span");
+      compact.className = `nifty-position-spine__compact is-${side}`;
+      compact.style.top = `${y - 9}px`;
+      compact.style.right = side === "call"
+        ? `${Math.max(0, window.innerWidth - spineX + POSITION_LANE_GAP_PX)}px`
+        : `${Math.max(0, window.innerWidth - spineX - POSITION_LANE_GAP_PX - POSITION_CONTROL_WIDTH_PX)}px`;
 
-        const compactSelect = document.createElement("button");
-        compactSelect.type = "button";
-        compactSelect.className = "nifty-position-spine__compact-select";
-        compactSelect.setAttribute("aria-pressed", String(model.selected));
-        compactSelect.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
-        compactSelect.setAttribute("title", "Select exact position for combined preview");
-        compactSelect.addEventListener("click", (event) => {
-          event.stopPropagation?.();
-          ensureStrategyChartController()?.square(model.strategyId);
-        });
+      const compactSelect = document.createElement("button");
+      compactSelect.type = "button";
+      compactSelect.className = "nifty-position-spine__compact-select";
+      compactSelect.setAttribute("aria-pressed", String(model.selected));
+      compactSelect.setAttribute("aria-label", `${model.strategyLabel} ${model.selected ? "selected" : "not selected"} for combined preview`);
+      compactSelect.setAttribute("title", "Select exact position for combined preview");
+      compactSelect.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        ensureStrategyChartController()?.square(model.strategyId);
+      });
 
-        const marker = document.createElement("button");
-        marker.type = "button";
-        marker.className = `nifty-position-spine__marker is-${side} is-${direction}`;
-        marker.classList.toggle("is-open", openedStrategyId === model.strategyId);
-        marker.dataset.strategyId = model.strategyId;
-        marker.textContent = `${side === "call" ? "C" : "P"}${lots}`;
-        marker.setAttribute("aria-expanded", String(openedStrategyId === model.strategyId));
-        marker.setAttribute("aria-label", `${side === "call" ? "Call" : "Put"} ${entry.direction}, ${lots} ${lots === 1 ? "lot" : "lots"}, strike ${Number(entry.strike).toLocaleString("en-IN")}. Open P and L.`);
-        marker.setAttribute("title", `${side === "call" ? "C" : "P"}${lots} · ${entry.direction} · ${Number(entry.strike).toLocaleString("en-IN")}`);
-        marker.addEventListener("click", (event) => {
-          event.stopPropagation?.();
-          ensureStrategyChartController()?.label(model.strategyId);
-        });
-        if (side === "call") compact.append(compactSelect, marker);
-        else compact.append(marker, compactSelect);
-        rootNodeValue.append(compact);
-      }
+      const marker = document.createElement("button");
+      marker.type = "button";
+      marker.className = `nifty-position-spine__marker is-${side} is-${direction}`;
+      marker.classList.toggle("is-open", openedStrategyId === model.strategyId);
+      marker.dataset.strategyId = model.strategyId;
+      marker.textContent = `${side === "call" ? "C" : "P"}${lots}`;
+      marker.setAttribute("aria-expanded", String(openedStrategyId === model.strategyId));
+      marker.setAttribute("aria-label", `${side === "call" ? "Call" : "Put"} ${entry.direction}, ${lots} ${lots === 1 ? "lot" : "lots"}, strike ${Number(entry.strike).toLocaleString("en-IN")}. Open P and L.`);
+      marker.setAttribute("title", `${side === "call" ? "C" : "P"}${lots} · ${entry.direction} · ${Number(entry.strike).toLocaleString("en-IN")}`);
+      marker.addEventListener("click", (event) => {
+        event.stopPropagation?.();
+        ensureStrategyChartController()?.label(model.strategyId);
+      });
+      if (side === "call") compact.append(compactSelect, marker);
+      else compact.append(marker, compactSelect);
+      rootNodeValue.append(compact);
+      positionItems.push({
+        id: model.strategyId,
+        y,
+        side,
+        kind: "BROKER",
+        tone: direction,
+        label: `${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`,
+        strategyId: model.strategyId,
+        element: compact
+      });
 
       if (visibleStrategyRailId === model.strategyId) {
         const projection = strategyChartApi.projectBreakEven(model.exact, {
@@ -2683,52 +2627,64 @@
       card.append(header, pnl, actions);
       rootNodeValue.append(card);
     });
+    return positionItems;
   }
 
-  function renderEdgeStackGroups(rootNodeValue, items, cardRight) {
-    edgeStackClusters(items).filter((cluster) => cluster.items.length > 1).forEach((cluster) => {
-      cluster.items.forEach((item) => { item.element.hidden = true; });
+  function renderEdgeStackGroups(rootNodeValue, items, layout) {
+    if (!layout?.call || !layout?.put) return;
+    positionColumnClusters(items).filter((cluster) => cluster.items.length > 1).forEach((cluster) => {
+      const lane = layout[cluster.side];
+      const sideLabel = cluster.side === "put" ? "Put" : "Call";
+      cluster.items.forEach((item) => {
+        item.element.hidden = true;
+        item.element.classList.add("is-grouped");
+      });
+
+      const clusterNode = document.createElement("span");
+      clusterNode.className = `nifty-position-spine__cluster is-${cluster.side}`;
+      clusterNode.dataset.groupKey = cluster.key;
+      clusterNode.style.right = `${window.innerWidth - lane.right}px`;
+      clusterNode.style.top = `${cluster.y - 9}px`;
+
       const groupSelector = document.createElement("button");
       groupSelector.type = "button";
-      groupSelector.className = "nifty-edge-stack__selector";
+      groupSelector.className = "nifty-position-spine__cluster-select";
       groupSelector.dataset.groupKey = cluster.key;
       groupSelector.setAttribute("aria-expanded", String(openedEdgeGroupKey === cluster.key));
-      groupSelector.setAttribute("aria-label", `${openedEdgeGroupKey === cluster.key ? "Close" : "Open"} ${cluster.items.length} grouped chart items`);
-      groupSelector.style.right = `${window.innerWidth - cardRight + 32}px`;
-      groupSelector.style.top = `${cluster.y - 8}px`;
+      groupSelector.setAttribute("aria-label", `${openedEdgeGroupKey === cluster.key ? "Close" : "Open"} ${cluster.items.length} grouped ${sideLabel} positions`);
       groupSelector.addEventListener("click", (event) => {
         event.stopPropagation?.();
         openedEdgeGroupKey = openedEdgeGroupKey === cluster.key ? null : cluster.key;
         void controller?.place();
       });
-      rootNodeValue.append(groupSelector);
 
       const group = document.createElement("span");
-      group.className = "nifty-edge-stack__group";
+      group.className = "nifty-position-spine__cluster-count";
       group.dataset.groupKey = cluster.key;
       group.textContent = `+${cluster.items.length}`;
-      ["strategy", "sell", "buy"].forEach((tone) => {
+      ["buy", "sell"].forEach((tone) => {
         const mark = document.createElement("span");
-        mark.className = `nifty-edge-stack__tone is-${tone}`;
+        mark.className = `nifty-position-spine__cluster-tone is-${tone}`;
         mark.setAttribute("aria-hidden", "true");
         group.append(mark);
       });
       group.setAttribute("aria-hidden", "true");
-      group.style.right = `${window.innerWidth - cardRight}px`;
-      group.style.top = `${cluster.y - 9}px`;
-      rootNodeValue.append(group);
+      if (cluster.side === "call") clusterNode.append(groupSelector, group);
+      else clusterNode.append(group, groupSelector);
+      rootNodeValue.append(clusterNode);
+
       if (openedEdgeGroupKey !== cluster.key) return;
       const flyout = document.createElement("span");
-      flyout.className = "nifty-edge-stack__flyout";
-      flyout.style.right = `${window.innerWidth - cardRight + 52}px`;
+      flyout.className = `nifty-position-spine__cluster-flyout is-${cluster.side}`;
+      flyout.style.right = `${Math.max(0, window.innerWidth - layout.call.left + 12)}px`;
       flyout.style.top = `${Math.max(8, cluster.y - cluster.items.length * 12)}px`;
       cluster.items.forEach((item) => {
         const row = document.createElement("span");
-        row.className = `nifty-edge-stack__flyout-row is-${item.tone}`;
-        if (item.kind === "STRATEGY") {
+        row.className = `nifty-position-spine__cluster-row is-${item.tone}`;
+        if (["STRATEGY", "BROKER"].includes(item.kind)) {
           const itemSelector = document.createElement("button");
           itemSelector.type = "button";
-          itemSelector.className = "nifty-edge-stack__flyout-selector";
+          itemSelector.className = "nifty-position-spine__cluster-row-select";
           itemSelector.setAttribute("aria-pressed", String(ensureStrategyChartController()?.isSelected(item.strategyId) || false));
           itemSelector.setAttribute("aria-label", `${ensureStrategyChartController()?.isSelected(item.strategyId) ? "Clear" : "Select"} ${item.label} for combined preview`);
           itemSelector.addEventListener("click", (event) => {
@@ -2737,7 +2693,7 @@
           });
           const openItem = document.createElement("button");
           openItem.type = "button";
-          openItem.className = "nifty-edge-stack__flyout-open";
+          openItem.className = "nifty-position-spine__cluster-row-open";
           openItem.textContent = item.label;
           openItem.addEventListener("click", (event) => {
             event.stopPropagation?.();
@@ -2813,30 +2769,47 @@
     const projected = models.map((model, index) => ({
       ...model,
       id: `${model.kind}:${model.strategyId || "combined"}:${index}`,
+      side: strategyColumnSide(model, spineGuide.atm),
       projection: strategyChartApi.projectBreakEven(model.exact, axisMap)
     })).filter((model) => model.projection.mode !== "HIDDEN");
     if (!projected.length && !spineModels.length) {
       clearStrategyRails();
       return false;
     }
-    const cards = strategyChartApi.stackCards(projected.map((model) => ({
-      id: model.id,
-      railY: model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY,
-      height: strategyChartApi.strategyCardHeight(model, openedStrategyId)
-    })), { gap: 6, minY: Number(rect.top), maxY: Number(rect.bottom) });
+    const cards = ["call", "put"].flatMap((side) => strategyChartApi.stackCards(
+      projected.filter((model) => model.side === side).map((model) => ({
+        id: model.id,
+        railY: model.projection.mode === "RAIL" ? model.projection.railY : model.projection.markerY,
+        height: strategyChartApi.strategyCardHeight(model, openedStrategyId)
+      })),
+      { gap: 6, minY: Number(rect.top), maxY: Number(rect.bottom) }
+    ));
     const cardById = new Map(cards.map((card) => [card.id, card]));
     const rootNodeValue = strategyRailsRoot();
     rootNodeValue.replaceChildren();
     renderStrategyPreviewBar(rootNodeValue, preview, selectedIds.length);
     const ladderLeft = Math.max(Number(rect.left), Math.min(Number(rect.right), Number(labelRight) || Number(rect.right)));
     const spineLayout = positionSpineLayout(ladderLeft, rect, window.innerWidth);
-    const cardRight = spineModels.length && spineLayout?.hasSafePutGap
-      ? spineLayout.strategy.right
-      : ladderLeft;
+    const useTypeColumns = spineLayout?.hasSafePutGap;
+    const activeSpineX = useTypeColumns ? spineLayout.spineX : ladderLeft;
+    const typeLayout = useTypeColumns ? spineLayout : {
+      ...spineLayout,
+      spineX: activeSpineX,
+      call: {
+        left: activeSpineX - POSITION_LANE_GAP_PX - POSITION_CONTROL_WIDTH_PX,
+        right: activeSpineX - POSITION_LANE_GAP_PX
+      },
+      put: {
+        left: activeSpineX + POSITION_LANE_GAP_PX,
+        right: activeSpineX + POSITION_LANE_GAP_PX + POSITION_CONTROL_WIDTH_PX
+      }
+    };
     const edgeStrategyItems = [];
     projected.forEach((model) => {
       const placement = cardById.get(model.id);
       if (!placement) return;
+      const lane = typeLayout[model.side];
+      const cardRight = lane.right;
       const rail = document.createElement("div");
       rail.className = model.projection.mode === "RAIL"
         ? "nifty-strategy__rail"
@@ -2859,7 +2832,7 @@
       }
       const card = document.createElement("div");
       const isOpen = model.kind === "STRATEGY" && openedStrategyId === model.strategyId;
-      card.className = `nifty-strategy__card is-${model.kind.toLowerCase()} is-${String(model.viewKind || "standard").toLowerCase()} ${isOpen ? "is-open" : "is-collapsed"}`;
+      card.className = `nifty-strategy__card is-${model.kind.toLowerCase()} is-${String(model.viewKind || "standard").toLowerCase()} is-${model.side} ${isOpen ? "is-open" : "is-collapsed"}`;
       card.dataset.exact = String(model.exact);
       if (model.viewKind === "BROKER_COMBINED") card.classList.add("is-summary-source");
       card.style.right = `${window.innerWidth - cardRight}px`;
@@ -2895,7 +2868,8 @@
           event.stopPropagation?.();
           strategyChartController.label(model.strategyId);
         });
-        card.append(selector, label);
+        if (model.side === "put" && !isOpen) card.append(label, selector);
+        else card.append(selector, label);
       } else {
         const label = document.createElement("span");
         label.className = "nifty-strategy__label";
@@ -2908,6 +2882,7 @@
         edgeStrategyItems.push({
           id: model.id,
           y: openedStrategyId ? placement.cardY + 9 : anchorY,
+          side: model.side,
           kind: "STRATEGY",
           tone: "strategy",
           label: model.label,
@@ -2916,20 +2891,23 @@
         });
       }
     });
-    renderBrokerPositionSpine(rootNodeValue, spineModels, toY, rect,
-      spineLayout?.hasSafePutGap ? spineLayout.spineX : ladderLeft, { ...spineGuide, ladderLeft });
+    const brokerItems = renderBrokerPositionSpine(rootNodeValue, spineModels, toY, rect,
+      activeSpineX, { ...spineGuide, ladderLeft }) || [];
     const edgeTradeItems = [...(document.getElementById(LABELS_ID)
       ?.querySelectorAll(".nifty-axis-ladder__off-grid") || [])]
       .filter((element) => !element.hidden)
       .map((element) => ({
         id: `trade:${element.dataset.direction}:${element.dataset.strike}`,
         y: toY(Number(element.dataset.strike)),
+        side: /^P\d/.test(String(element.textContent || "").trim())
+          ? "put"
+          : /^C\d/.test(String(element.textContent || "").trim()) ? "call" : null,
         kind: "TRADE",
         tone: String(element.dataset.direction || "").toLowerCase(),
         label: element.getAttribute("aria-label") || element.textContent,
         element
       }));
-    renderEdgeStackGroups(rootNodeValue, [...edgeStrategyItems, ...edgeTradeItems], cardRight);
+    renderEdgeStackGroups(rootNodeValue, [...edgeStrategyItems, ...brokerItems, ...edgeTradeItems], typeLayout);
     attachQuickBreakEvenStrategyCards(rootNodeValue);
     return true;
   }
@@ -3723,6 +3701,9 @@
         element.style.setProperty("--nifty-connector-width", `${lane * laneOffset}px`);
         element.style.right = `${baseRight + lane * laneOffset}px`;
         element.style.top = `${row.y}px`;
+        element.style.zIndex = element.classList.contains("has-lot-badges")
+          ? String(100 + Math.round(row.y))
+          : "";
       });
       premiumChartPlacement = { toY, plotRect: rect };
       renderPremiumStrikeMap(premiumHistoryPane?.state?.());

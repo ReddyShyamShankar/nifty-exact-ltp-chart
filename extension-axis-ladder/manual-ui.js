@@ -198,7 +198,7 @@
 
   function rowModel({ liveRow, isAtm, entries = [], activeEntryId = null } = {}) {
     const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.strike === liveRow?.strike);
-    const badges = lotBadges(list.filter((entry) => entry?.source !== "BROKER_POSITION"));
+    const badges = lotBadges(list);
     const oiBadges = openInterestBadges(liveRow);
     const active = list.find((entry) => entry.id === activeEntryId) || null;
     if (!active) return {

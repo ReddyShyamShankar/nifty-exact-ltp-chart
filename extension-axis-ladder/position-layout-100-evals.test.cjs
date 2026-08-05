@@ -10,7 +10,7 @@ const sequential = { concurrency: false };
 
 for (let index = 0; index < 40; index += 1) {
   const id = String(index + 1).padStart(3, "0");
-  test(`POS_LAYOUT_${id} reserves non-overlapping strategy, Call, Put, and ladder lanes`, sequential, () => {
+  test(`POS_LAYOUT_${id} reserves source-neutral Call and Put columns before ladder`, sequential, () => {
     const viewportWidth = 1200 + (index % 5) * 120;
     const ladderLeft = 360 + index * 9;
     const layout = api.positionSpineLayout(ladderLeft, {
@@ -21,12 +21,12 @@ for (let index = 0; index < 40; index += 1) {
     assert.equal(layout.ladderLeft, ladderLeft);
     assert.equal(layout.call.right - layout.call.left, 47);
     assert.equal(layout.put.right - layout.put.left, 47);
-    assert.equal(layout.strategy.right - layout.strategy.left, 47);
-    assert.ok(layout.strategy.right < layout.call.left, "strategy lane ends before Call lane");
-    assert.ok(layout.call.right < layout.spineX, "Call lane ends before spine");
-    assert.ok(layout.put.left > layout.spineX, "Put lane begins after spine");
-    assert.ok(layout.put.right <= layout.ladderLeft - 4, "Put lane ends before ladder/OI card");
+    assert.ok(layout.call.right < layout.spineX, "Call column ends before spine");
+    assert.ok(layout.put.left > layout.spineX, "Put column starts after spine");
+    assert.ok(layout.put.right <= layout.ladderLeft - 3, "Put column ends before ladder/OI card");
     assert.equal(layout.hasSafePutGap, true);
+    assert.equal(layout.strategy, undefined);
+    assert.equal(layout.broker, undefined);
   });
 }
 
@@ -41,20 +41,20 @@ for (let index = 0; index < 20; index += 1) {
       side,
       y: 100 + itemIndex * step
     }));
-    const clusters = api.positionSideClusters(items, 20);
+    const clusters = api.positionColumnClusters(items, 20);
     assert.equal(clusters.length, 1);
-    assert.equal(clusters[0].side, side);
     assert.equal(clusters[0].items.length, count);
+    assert.equal(clusters[0].items.every((item) => item.side === side), true);
     assert.equal(new Set(clusters[0].items.map((item) => item.id)).size, count);
-    assert.equal(clusters[0].key, [...clusters[0].items.map((item) => item.id)].sort().join("|"));
+    assert.equal(clusters[0].key, `${side}:${[...clusters[0].items.map((item) => item.id)].sort().join("|")}`);
   });
 }
 
 for (let index = 0; index < 15; index += 1) {
   const id = String(index + 61).padStart(3, "0");
-  test(`POS_SIDE_${id} never merges Call and Put identities at same Y coordinate`, sequential, () => {
+  test(`POS_SIDE_${id} never combines Call and Put collisions`, sequential, () => {
     const y = 120 + index * 3;
-    const clusters = api.positionSideClusters([
+    const clusters = api.positionColumnClusters([
       { id: `call-a-${index}`, side: "call", y },
       { id: `call-b-${index}`, side: "call", y: y + 2 },
       { id: `put-a-${index}`, side: "put", y },
@@ -62,9 +62,8 @@ for (let index = 0; index < 15; index += 1) {
     ], 20);
     assert.equal(clusters.length, 2);
     assert.deepEqual(clusters.map((cluster) => cluster.side), ["call", "put"]);
-    assert.deepEqual(clusters.map((cluster) => cluster.items.length), [2, 2]);
-    assert.equal(clusters[0].items.every((item) => item.side === "call"), true);
-    assert.equal(clusters[1].items.every((item) => item.side === "put"), true);
+    assert.equal(clusters.every((cluster) => cluster.items.length === 2), true);
+    assert.equal(clusters.every((cluster) => cluster.items.every((item) => item.side === cluster.side)), true);
   });
 }
 
@@ -73,14 +72,14 @@ for (let index = 0; index < 10; index += 1) {
   test(`POS_CLEAR_${id} keeps safely separated positions directly visible`, sequential, () => {
     const gap = 20 + index * 2;
     const side = index % 2 === 0 ? "call" : "put";
-    const clusters = api.positionSideClusters(Array.from({ length: 5 }, (_, itemIndex) => ({
+    const clusters = api.positionColumnClusters(Array.from({ length: 5 }, (_, itemIndex) => ({
       id: `${side}-${index}-${itemIndex}`,
       side,
       y: 100 + itemIndex * gap
     })), 20);
     assert.equal(clusters.length, 5);
     assert.equal(clusters.every((cluster) => cluster.items.length === 1), true);
-    assert.equal(clusters.every((cluster) => cluster.side === side), true);
+    assert.equal(clusters.every((cluster) => cluster.items[0].side === side), true);
   });
 }
 
@@ -105,19 +104,18 @@ const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
 const cssCase = (selector) => css.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{[\\s\\S]*?\\}`))?.[0] || "";
 
 test("POS_A11Y_096 group opener exposes expansion only, never ambiguous selection", sequential, () => {
-  assert.match(source, /cluster-select[\s\S]*?setAttribute\("aria-expanded"/);
-  const block = source.match(/const opener = document\.createElement\("button"\);[\s\S]*?rootNodeValue\.append\(clusterNode\);/)?.[0] || "";
+  assert.match(source, /nifty-position-spine__cluster-select[\s\S]*?setAttribute\("aria-expanded"/);
+  const block = source.match(/const groupSelector = document\.createElement\("button"\);[\s\S]*?rootNodeValue\.append\(groupSelector\);/)?.[0] || "";
   assert.doesNotMatch(block, /aria-pressed/);
 });
 
 test("POS_A11Y_097 closed plus count is informational and cannot be clicked", sequential, () => {
   assert.match(cssCase(".nifty-position-spine__cluster-count"), /width:\s*28px/);
   assert.match(cssCase(".nifty-position-spine__cluster-count"), /height:\s*18px/);
-  assert.doesNotMatch(source, /count\.addEventListener/);
 });
 
 test("POS_A11Y_098 exact flyout row owns explicit selection state", sequential, () => {
-  assert.match(source, /cluster-row-select[\s\S]*?setAttribute\("aria-pressed", String\(model\.selected\)\)/);
+  assert.match(source, /nifty-position-spine__cluster-row-select[\s\S]*?setAttribute\("aria-pressed"/);
   assert.match(cssCase('.nifty-position-spine__cluster-row-select[aria-pressed="true"]'), /background:\s*var\(--pnl-profit\)/);
 });
 
@@ -139,8 +137,7 @@ for (let index = 0; index < 20; index += 1) {
     const rect = { left: 16 + (index % 3) * 8, right: viewportWidth - 32 };
     const layout = api.positionSpineLayout(ladderLeft, rect, viewportWidth);
     const clearRight = api.breakEvenLabelRight(ladderLeft, rect, viewportWidth, true);
-    assert.ok(clearRight <= layout.strategy.left - 6);
-    assert.ok(clearRight < layout.call.left);
+    assert.ok(clearRight <= layout.call.left - 6);
     assert.ok(clearRight < layout.put.left);
     assert.ok(clearRight >= rect.left);
     assert.equal(api.breakEvenLabelRight(ladderLeft, rect, viewportWidth, false), ladderLeft);

@@ -306,6 +306,23 @@ test("manual and broker positions at same strike remain separate badges", () => 
   ]);
 });
 
+test("row model renders broker Call and Put lot badges like manual positions", () => {
+  const model = ui.rowModel({
+    liveRow: row,
+    isAtm: false,
+    entries: [
+      { id: "broker-call", source: "BROKER_POSITION", strike: 24450, optionType: "CALL", direction: "BUY", lots: 1 },
+      { id: "broker-put", source: "BROKER_POSITION", strike: 24450, optionType: "PUT", direction: "SELL", lots: 3 }
+    ],
+    activeEntryId: null
+  });
+
+  assert.deepEqual(model.badges, [
+    { optionType: "CALL", direction: "BUY", source: "BROKER_POSITION", label: "C1", entryId: null },
+    { optionType: "PUT", direction: "SELL", source: "BROKER_POSITION", label: "P3", entryId: null }
+  ]);
+});
+
 test("row model exposes OI badges only for first and second Call or Put rank", () => {
   const model = ui.rowModel({
     liveRow: { ...row, callOi: 1820000, putOi: 2470000, callOiRank: 1, putOiRank: 2 },

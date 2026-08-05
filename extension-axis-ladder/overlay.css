@@ -770,13 +770,8 @@
   pointer-events: none;
 }
 
-.nifty-position-spine__lane-label.is-call {
-  transform: translateX(-10px);
-}
-
-.nifty-position-spine__lane-label.is-put {
-  transform: translateX(4px);
-}
+.nifty-position-spine__lane-label.is-call { transform: translateX(-10px); }
+.nifty-position-spine__lane-label.is-put { transform: translateX(4px); }
 
 .nifty-position-spine__compact {
   position: fixed;
@@ -785,6 +780,14 @@
   align-items: center;
   gap: 3px;
   pointer-events: auto;
+}
+
+.nifty-position-spine__compact[hidden] {
+  display: none;
+}
+
+.nifty-position-spine__compact.is-grouped {
+  display: none;
 }
 
 .nifty-position-spine__cluster {
@@ -1146,6 +1149,10 @@
   grid-template-columns: 16px 28px;
   gap: 4px;
   align-items: center;
+}
+
+.nifty-strategy__card.is-collapsed.is-put {
+  grid-template-columns: 28px 16px;
 }
 
 .nifty-strategy__card.is-collapsed .nifty-strategy__selector {
