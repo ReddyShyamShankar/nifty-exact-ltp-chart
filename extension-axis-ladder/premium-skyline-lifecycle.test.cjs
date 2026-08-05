@@ -29,7 +29,7 @@ test("opening Premium Skyline preserves stable time-axis evidence for the first 
 
 test("outside chart pointerdown closes Premium Skyline with the other transient selections", () => {
   const handler = functionSource("handleDocumentPointerDown");
-  assert.match(handler, /if \(!row\) \{[\s\S]*?closePremiumHistory\(\)/);
+  assert.match(handler, /if \(!row && outsideStrategyCard\) \{[\s\S]*?closePremiumHistory\(\)/);
 });
 
 test("strike chip uses theme-aware selected-strike ink instead of hardwired black contrast ink", () => {

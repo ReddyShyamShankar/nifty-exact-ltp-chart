@@ -1875,7 +1875,7 @@
       },
       onEditor: (context) => {
         closeManualEditorForOtherRow(context?.strike);
-        clearBreakEvenSelection();
+        clearBreakEvenSelection({ repaintStrategyRails: true });
         openManualEditor(context);
       },
       onReset: () => renderManualRows()
@@ -2618,7 +2618,7 @@
         element: compact
       });
 
-      if (visibleStrategyRailId === model.strategyId) {
+      if (breakEvenSelection.current() && visibleStrategyRailId === model.strategyId) {
         const projection = strategyChartApi.projectBreakEven(model.exact, {
           minPrice: Math.min(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
           maxPrice: Math.max(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
@@ -2684,12 +2684,16 @@
       const showRail = document.createElement("button");
       showRail.type = "button";
       showRail.className = "nifty-position-spine__rail-toggle";
-      showRail.disabled = railProjection.mode !== "RAIL";
-      showRail.textContent = railProjection.mode !== "RAIL"
+      const hasActiveStrike = Boolean(breakEvenSelection.current());
+      showRail.disabled = !hasActiveStrike || railProjection.mode !== "RAIL";
+      showRail.textContent = !hasActiveStrike
+        ? "SELECT STRIKE FOR BE"
+        : railProjection.mode !== "RAIL"
         ? "BE OUTSIDE VIEW"
         : visibleStrategyRailId === model.strategyId ? "HIDE BE RAIL" : "SHOW BE RAIL";
       showRail.addEventListener("click", (event) => {
         event.stopPropagation?.();
+        if (!breakEvenSelection.current()) return;
         visibleStrategyRailId = visibleStrategyRailId === model.strategyId ? null : model.strategyId;
         void controller?.place();
       });
@@ -2818,10 +2822,15 @@
     if (!visualPlacementIsCurrent(visualPlacementRevision) || !strategyChartApi || !strategyStoreApi) return false;
     const originals = originalStrategyModels();
     const spineModels = brokerPositionSpineModels(originals);
-    const chartOriginals = originals.filter((model) => !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind));
+    const showStrategyBreakEvens = Boolean(breakEvenSelection.current());
+    const chartOriginals = showStrategyBreakEvens
+      ? originals.filter((model) => !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind))
+      : [];
     const selectedIds = ensureStrategyChartController()?.selected() || [];
-    const { models: combined, preview } = combinedStrategyModels(originals);
-    const previewingCombined = selectedIds.length >= 2 && combined.length > 0;
+    const { models: combined, preview } = showStrategyBreakEvens
+      ? combinedStrategyModels(originals)
+      : { models: [], preview: null };
+    const previewingCombined = showStrategyBreakEvens && selectedIds.length >= 2 && combined.length > 0;
     const showComparedOriginalRails = previewingCombined && strategyChartController.comparing();
     const models = [
       ...chartOriginals.map((model) => ({
@@ -3331,8 +3340,10 @@
     if (!Number.isFinite(selectedStrike)) clearBreakEvenRails();
   }
 
-  function clearBreakEvenSelection() {
+  function clearBreakEvenSelection({ repaintStrategyRails = false } = {}) {
+    const hadSelection = Boolean(breakEvenSelection.current());
     breakEvenSelection.clear();
+    visibleStrategyRailId = null;
     clearBreakEvenRails();
     const node = rootNode();
     node.querySelectorAll(".nifty-axis-ladder__row").forEach((row) => {
@@ -3340,6 +3351,7 @@
       row.setAttribute("aria-pressed", "false");
     });
     clearBreakEvenStatusOverride();
+    if (repaintStrategyRails && hadSelection && controller?.membership()) void controller.place();
   }
 
   function storageWriteFailure(cause) {
@@ -4015,10 +4027,10 @@
       return;
     }
     const row = event.target?.closest?.(".nifty-axis-ladder__row");
-    if (!row) {
+    if (!row && outsideStrategyCard) {
       closePremiumHistory();
-      clearBreakEvenSelection();
       clearManualTransientState({ restorePlanRails: true });
+      clearBreakEvenSelection({ repaintStrategyRails: true });
     }
     if (outsideStrategyCard) collapseOpenedStrategyDetails();
   }
@@ -4027,7 +4039,7 @@
     const strike = Number(snapshot?.strike);
     if (!Number.isFinite(strike)) return;
     if (breakEvenSelection.current()?.strike === strike) {
-      clearBreakEvenSelection();
+      clearBreakEvenSelection({ repaintStrategyRails: true });
       return;
     }
     clearBreakEvenRails();
@@ -4085,8 +4097,8 @@
   function handleDocumentKeyDown(event) {
     if (event.key === "Escape") {
       const editorStrike = manualEditor?.strike;
-      clearBreakEvenSelection();
       clearManualTransientState({ restorePlanRails: true });
+      clearBreakEvenSelection({ repaintStrategyRails: true });
       if (Number.isFinite(editorStrike)) focusManualRow(editorStrike);
       return;
     }
@@ -4250,7 +4262,7 @@
   chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
     if (!["CLEAR_BREAK_EVEN_SELECTION", "CLEAR_STRATEGY_PREVIEW", "RETRY_LABEL_PLACEMENT", "REFRESH_OPTION_NUMBERS", "GET_STRATEGY_PREVIEW_STATE", "OPEN_STRATEGY_ON_CHART"].includes(message?.type)) return false;
     if (message.type === "CLEAR_BREAK_EVEN_SELECTION") {
-      clearBreakEvenSelection();
+      clearBreakEvenSelection({ repaintStrategyRails: true });
       sendResponse({ ok: true });
       return false;
     }

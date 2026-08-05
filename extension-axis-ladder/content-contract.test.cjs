@@ -2207,6 +2207,8 @@ test("collapsed manual strategies preserve one fixed-slot checkbox token and BE 
   const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
   const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries });
   await h.settle();
+  h.select(23750);
+  await h.settle();
 
   const rails = h.strategyRails();
   const cards = rails.querySelectorAll(".nifty-strategy__card")
@@ -3168,11 +3170,114 @@ function chartStrategyBook() {
 }
 
 function chartStrategyHarness(book = chartStrategyBook()) {
-  return createBreakEvenLifecycleHarness({
+  const h = createBreakEvenLifecycleHarness({
     manualEntries: Object.values(book.legs),
     strategyBook: book
   });
+  const settle = h.settle;
+  let activated = false;
+  h.settle = async () => {
+    await settle();
+    if (activated) return;
+    activated = true;
+    h.select(23750);
+    await settle();
+  };
+  return h;
 }
+
+test("saved manual and broker BE rails exist only while one strike is selected", async () => {
+  const at = "2026-07-31T10:02:00.000Z";
+  let book = chartStrategyBook();
+  book = strategyStore.applyCommand(book, {
+    id: "broker-sync-selection-gated-be",
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: "broker:BROKER:NFO:NIFTY:2026-08-25",
+    versionId: "broker-selection-gated-be-v1",
+    snapshotId: "broker-selection-gated-be-snapshot",
+    label: "BROKER · AUG 25",
+    instrumentKey: "BROKER:NFO:NIFTY",
+    underlying: "NIFTY",
+    expiry: "2026-08-25",
+    positions: [{
+      contractId: "NFO:NIFTY:2026-08-25:23900:CE", tradingsymbol: "NIFTY26AUG23900CE",
+      exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 23900,
+      optionType: "CE", signedQuantity: 65, lotSize: 65, averagePrice: 50, lastPrice: 60, pnl: 650
+    }, {
+      contractId: "NFO:NIFTY:2026-08-25:24000:PE", tradingsymbol: "NIFTY26AUG24000PE",
+      exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 24000,
+      optionType: "PE", signedQuantity: -65, lotSize: 65, averagePrice: 70, lastPrice: 60, pnl: 650
+    }]
+  }, at);
+  const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
+  const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries });
+  await h.settle();
+
+  let rails = h.strategyRails();
+  assert.ok(rails, "broker C/P position layer remains available without strike selection");
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => !node.hidden).length, 2);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 0,
+    "no selected strike means no T controls on chart");
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 0,
+    "no selected strike means no saved strategy BE rails");
+  assert.equal(h.rails(), null, "no selected strike means no quick Call/Put BE rails");
+
+  h.select(23750);
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 2,
+    "selected strike reveals saved T controls");
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 2,
+    "selected strike reveals saved strategy BE rails");
+  assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
+    "selected strike reveals quick Call and Put BE rails");
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact").length, 2,
+    "broker Call and Put positions remain represented while BE rails are active");
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => node.classList.contains("is-call")).length, 1);
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => node.classList.contains("is-put")).length, 1);
+
+  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(h.rails(), null);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 0);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 0);
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => !node.hidden).length, 2,
+  "clearing strike removes BE visuals but never broker C/P positions");
+
+  h.select(23750);
+  await h.settle();
+  h.doubleClick(23750);
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(h.rails(), null);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 0,
+    "opening manual trade editor deselects strike and hides all T controls");
+  assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 0,
+    "opening manual trade editor hides all saved break-even rails");
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => !node.hidden).length, 2,
+  "manual editor never removes broker Call and Put positions");
+  h.document.dispatch("keydown", { key: "Escape", target: { closest() { return null; } } });
+  await h.settle();
+
+  h.select(23750);
+  await h.settle();
+  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 2);
+  h.document.dispatch("keydown", { key: "Escape", target: { closest() { return null; } } });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(h.rails(), null);
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 0,
+    "Escape removes T controls with active-strike BE rails");
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => !node.hidden).length, 2,
+  "Escape never removes broker C/P positions");
+});
 
 test("production strategy rails open details, synchronize squares, preview combined roots, compare, and clear on refresh", async () => {
   const h = chartStrategyHarness();
@@ -3217,9 +3322,8 @@ test("production strategy rails open details, synchronize squares, preview combi
     "Compare restores original rails beside combined roots");
 
   await h.refreshOptionNumbers();
-  rails = h.strategyRails();
-  assert.equal(rails.querySelector(".nifty-strategy-preview"), null);
-  assert.equal(rails.querySelectorAll(".nifty-strategy__selector").every((node) => node.getAttribute("aria-pressed") === "false"), true);
+  assert.equal(h.strategyRails(), null,
+    "refresh clears active strike and removes all saved T and break-even rails");
 });
 
 test("shared manual break-even rails stay visible while black card click changes only opened details", async () => {
@@ -3329,6 +3433,8 @@ test("overlapping Call strategy and off-grid Call tokens use restored position g
       y: 300 - index * 10
     }))
   });
+  await h.settle();
+  h.select(24000);
   await h.settle();
 
   let rails = h.strategyRails();
@@ -3457,6 +3563,8 @@ test("broker disconnect hides broker positions while manual strategies remain vi
   }, at);
   const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
   const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries });
+  await h.settle();
+  h.select(23750);
   await h.settle();
   assert.equal(h.strategyRails().querySelectorAll(".nifty-position-spine__marker").length, 1);
 
@@ -3619,6 +3727,8 @@ test("broker spine opens one compact P&L card and shows break-even rail only on 
   }, at);
   const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries: [] });
   await h.settle();
+  h.select(23750);
+  await h.settle();
 
   let rails = h.strategyRails();
   assert.equal(rails.querySelectorAll(".nifty-position-spine__marker").length, 2);
@@ -3642,6 +3752,15 @@ test("broker spine opens one compact P&L card and shows break-even rail only on 
   assert.equal(rails.querySelectorAll(".nifty-position-spine__card").length, 1,
     "broker P&L card stays open after its own rail action");
   assert.equal(rails.querySelector(".nifty-position-spine__rail-toggle").textContent, "HIDE BE RAIL");
+
+  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__be-rail").length, 0,
+    "clearing active strike also removes requested broker break-even rail");
+  assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => !node.hidden).length, 2,
+  "clearing active strike never removes broker Call and Put positions");
 });
 
 test("broker spine compact selectors build combined preview without opening P&L cards", async () => {
@@ -3668,6 +3787,8 @@ test("broker spine compact selectors build combined preview without opening P&L 
     }]
   }, at);
   const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries: [] });
+  await h.settle();
+  h.select(23750);
   await h.settle();
 
   for (const side of ["is-put", "is-call"]) {
@@ -3751,6 +3872,8 @@ test("manual and broker controls share columns by Call and Put type", async () =
   const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
   const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries });
   await h.settle();
+  h.select(23750);
+  await h.settle();
 
   const rails = h.strategyRails();
   const cards = rails.querySelectorAll(".nifty-strategy__card");
@@ -3800,6 +3923,8 @@ test("opposite-side broker control nudges shared rail header without moving exac
     }))
   });
   await h.settle();
+  h.select(23600);
+  await h.settle();
 
   const rails = h.strategyRails();
   const manualPut = rails.querySelectorAll(".nifty-strategy__card")
@@ -3841,6 +3966,8 @@ test("colliding manual and broker Calls collapse through restored Call-only posi
   }, at);
   const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
   const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries });
+  await h.settle();
+  h.select(23750);
   await h.settle();
 
   let rails = h.strategyRails();
@@ -4044,9 +4171,8 @@ test("outside pointer press collapses opened strategy P&L card", async () => {
   h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
   await h.settle();
 
-  rails = h.strategyRails();
-  assert.equal(rails.querySelector(".nifty-strategy__trades"), null);
-  assert.equal(rails.querySelectorAll(".nifty-strategy__label").length, 2);
+  assert.equal(h.strategyRails(), null,
+    "outside press clears active strike and removes opened T card plus all saved break-even rails");
 });
 
 test("expanded Call details and neighboring Put remain in separate horizontal columns", async () => {
@@ -4150,6 +4276,8 @@ test("failed permanent save keeps combined preview and restores destination acti
     strategyBook: chartStrategyBook(),
     strategyMutationError: new Error("Storage unavailable")
   });
+  await h.settle();
+  h.select(23750);
   await h.settle();
 
   for (const selector of h.strategyRails().querySelectorAll(".nifty-strategy__selector")) {
