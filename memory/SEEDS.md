@@ -123,3 +123,76 @@ Options Ladder v0.5.0 manual-first checkpoint: explicit refresh, TradingView sid
 - Does the 0.00 option-LTP state reproduce after a healthy bridge refresh, and should zero upstream quotes fail closed visibly?
 - When should live Zerodha positions graduate from deferred foundation to chart-visible workflow?
 - When should `codex/timeframe-axis-ladder` merge into the primary branch after user testing?
+
+## Checkpoint #006 — 2026-08-01T21:41:31+05:30
+
+### Changed since previous seed
+- Replaced fixed ladder membership with real selected-expiry strikes intersecting TradingView's stable visible axis grid, plus one real in-range ATM reference.
+- Built and live-approved Premium Skyline: Call above selected strike, Put below, exact TradingView time synchronization, shared crosshair, real missing-data gaps, and no production lower pane.
+- Added screen-pixel sample bounds, animation-frame coalescing, canvas reuse, and repeated-crosshair suppression to prevent Page Unresponsive regressions.
+- User approved Option A spatial crosshair labels and committed exact design contract as `54d1493`; implementation remains pending.
+- User plans separate thread for open-interest brainstorming while this thread continues Skyline label build.
+
+## STATE
+Options Ladder runs from `.worktrees/timeframe-axis-ladder/extension-axis-ladder` on `codex/arbdesk-theme-system`. Universal TradingView-axis ladder membership, pinned in-range real ATM, chart-native strategy work, and Premium Skyline are present in dirty active worktree; full extension suite passed after localhost permission. Premium Skyline live visual is approved, but wide crosshair paragraph tooltip still awaits approved Option A spatial-label implementation.
+
+## NEXT_LINE
+Implement Option A in `extension-axis-ladder/content.js`: date chip above crosshair, Call chip above Call sample, Put chip below Put sample, strike chip on baseline, edge-safe collisions, and compact missing-premium state; remove wide paragraph tooltip.
+
+## MEMORY_KEY
+Premium Skyline approved: Call above strike, Put below, exact TradingView time; next change is Option A spatial crosshair chips from committed spec `54d1493`.
+
+## OPEN_QUESTIONS
+- Does Option A pass live edge-collision and light/dark theme UAT after build?
+- What exact decision should open-interest visualization help user make?
+- Should open-interest work use separate branch/worktree before Skyline-label work merges?
+- When should `codex/arbdesk-theme-system` merge into primary branch after user testing?
+
+## Checkpoint #007 — 2026-08-05T00:08:00+05:30
+
+### Changed since previous seed
+- Implemented approved spatial Premium Skyline chips and continued into broker-to-strategy/chart integration.
+- Imported read-only Zerodha positions as combined broker strategy plus individually selectable exact-strike C/P controls.
+- Added strategy dashboard/cards, individual P&L cards, on-demand BE rails, broker connection gating, and reconnect restoration.
+- Reserved separate manual, Call, Put, and ladder lanes; restored closed `+N` collision groups that select nothing until exact row choice.
+- Fixed break-even-label clearance and C1/P1 top-layer ownership with class plus CSS `:has()` fallback.
+- Added 120 focused visual/interaction evals; full bridge and extension suite passes 862/862 sequentially.
+- Committed all changes as `1590670` and pushed `codex/arbdesk-theme-system` to GitHub.
+
+## STATE
+Options Ladder broker strategy integration is committed and pushed on `codex/arbdesk-theme-system` at `1590670`. Automated verification passes 862/862, including 120 focused layout evals for grouped selection, separate Call/Put lanes, break-even clearance, and position-badge layering. Latest P1 top-layer and BE-overlap fixes still need final live Chrome proof after reloading unpacked extension; current loaded TradingView page was confirmed to use older content revision.
+
+## NEXT_LINE
+Reload Options Ladder at `chrome://extensions`, enable ladder, then use Chrome MCP to assert zero rectangle overlaps, P1/C1 computed owner z-index 6, closed `+N` selects nothing, exact flyout selection works, zoom/pan remains aligned, and console has no Options Ladder errors.
+
+## MEMORY_KEY
+Broker strategy overlay checkpoint `1590670`: combined plus individual positions, separate manual/Call/Put/ladder lanes, closed `+N`, BE clearance, top-layer C/P badges; 862 tests pass, live reload verification pending.
+
+## OPEN_QUESTIONS
+- Does latest unpacked build pass live zero-overlap and P1/C1 top-layer checks after reload?
+- Does grouped selector remain unambiguous through zoom, pan, and multiple same-side broker positions?
+- When should `codex/arbdesk-theme-system` merge into primary branch after live UAT?
+
+## Checkpoint #008 — 2026-08-05T23:22:10+05:30
+
+### Changed since previous seed
+- Moved from pushed checkpoint `1590670` with live reload still pending to dirty candidate `fc32ef1e328c` loaded and exercised in real Chrome.
+- Repaired 15 areas covering exact manual/broker identity, shared Call/Put lanes, BE/T lifecycle, grouping, side-panel/Skyline lifecycle, unique concurrent T labels, universal lot sizing, and shared expiry metadata loads.
+- Created 202-workflow inventory, automation coverage map, historical live audit, and current post-repair verification record.
+- Fresh verification passed 986/986 automated checks, 30/30 changed-file syntax checks, patch integrity, zero tracked-file deletions, live bridge health, and exact 24,200 broker-to-manual click cycle.
+- Preserved user data: no real trade was created, edited, removed, merged, split, archived, or submitted.
+
+## STATE
+Options Ladder active candidate lives in `.worktrees/timeframe-axis-ladder` on `codex/arbdesk-theme-system` at `fc32ef1e328c`, with dirty post-checkpoint repairs and audit documents. Latest unpacked build is loaded in Chrome; 986/986 tests pass, 30 changed JavaScript/CJS files parse, `git diff --check` passes, no tracked file is deleted, and local bridge is online with Upstox reachable. Critical 24,200 broker → manual T39 → live-selected BE → Escape-neutral workflow passed live without mutating real trades; full 202-workflow live audit remains incomplete.
+
+## NEXT_LINE
+Continue `docs/testing/2026-08-05-options-ladder-202-e2e-workflows.md` at next unverified non-destructive workflow using Computer Use; after each fix, rerun targeted tests, reload extension, and repeat exact live Chrome workflow before proceeding.
+
+## MEMORY_KEY
+Post-repair 986-green: shared Call/Put lanes, broker → manual T39 → live-selected BE cycle, Escape neutral; full 202 live audit pending.
+
+## OPEN_QUESTIONS
+- Which remaining non-destructive workflow should run next from 202-workflow catalog?
+- Should destructive REMOVE, merge, split, restore, and archive flows run after snapshotting user storage?
+- When should dirty `fc32ef1e328c` candidate be committed and pushed?
+- When should real broker authorization and exact authenticated refresh fan-out be verified?

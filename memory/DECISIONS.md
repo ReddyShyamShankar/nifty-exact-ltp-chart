@@ -114,3 +114,77 @@ Use Upstox as option and candle data source, after proving the account's live ma
 **Why:** ATM is a primary trading reference and must remain recognizable through coarse zoom, but forcing an ATM-centered window would undo universal axis-driven density.
 **Supersedes:** D17 statement that ATM changes styling only and never membership; all other D17 rules remain active.
 **Status:** ACTIVE
+
+## D19 — 2026-08-01T21:41:31+05:30
+**Decision:** Use Premium Skyline as sole production premium-history visualization: Call close history renders above selected-strike baseline, Put close history renders below, and both share TradingView's exact visible time axis and crosshair. Do not mount lower history pane or restore RANGE stems.
+**Why:** User understood premium expansion and contraction immediately when premium magnitude was spatially anchored around selected strike; lower pane and vertical ranges added confusion and page cost.
+**Alternatives considered:**
+- Lower LINES pane — rejected for production because it splits attention from TradingView.
+- RANGE/OHLC stems — rejected because visual density obscured premium trend.
+- Independent premium axis — rejected because goal is synchronized chart-native understanding.
+**Status:** ACTIVE
+
+## D20 — 2026-08-01T21:41:31+05:30
+**Decision:** Replace wide crosshair paragraph tooltip with Option A spatial labels: timestamp above crosshair, Call chip at Call sample, Put chip at Put sample, and strike chip at baseline intersection.
+**Why:** Label position explains meaning without paragraph reading and preserves exact values with lower visual obstruction.
+**Alternatives considered:**
+- Right-edge premium tags — rejected because eye travel disconnects values from samples.
+- Split left/right crosshair labels — rejected because labels can cover more nearby candles.
+- Keep paragraph tooltip — rejected as confusing and visually heavy.
+**Status:** ACTIVE
+
+## D21 — 2026-08-05T00:08:00+05:30
+**Decision:** Treat every broker position as an individually selectable exact-strike chart control while retaining one combined broker strategy summary.
+**Why:** User needs both portfolio-level break-even context and exact strike-level identity/P&L without broker legs disappearing inside one aggregate card.
+**Alternatives considered:**
+- Combined broker card only — rejected because individual strikes and directions become invisible.
+- Individual controls only — rejected because portfolio-level strategy context disappears.
+**Status:** ACTIVE
+
+## D22 — 2026-08-05T00:08:00+05:30
+**Decision:** Place Calls left of position spine, Puts in reserved right lane before ladder, and manual strategies in separate farther-left lane. Collapse same-side collisions into closed `+N`; opening group selects nothing.
+**Why:** Three independent horizontal lanes preserve identity, prevent controls from covering ladder/OI data, and remove ambiguity about which trade is selected.
+**Alternatives considered:**
+- Stack all controls in one column — rejected as congested.
+- Show every colliding token — rejected because controls and checkboxes overlap.
+**Status:** SUPERSEDED-BY: D24
+
+## D23 — 2026-08-05T00:08:00+05:30
+**Decision:** Make live Chrome geometry verification mandatory after extension reload before declaring visual fixes complete.
+**Why:** Unit and DOM-contract tests can pass while TradingView stacking contexts, cached content scripts, zoom, or neighboring rows still produce visible regressions.
+**Alternatives considered:**
+- Automated tests only — rejected after repeated live overlap regressions.
+- Screenshot review only — rejected because computed rectangles and interaction state need deterministic checks.
+**Status:** ACTIVE
+
+## D24 — 2026-08-05T23:22:10+05:30
+**Decision:** Use exactly two source-neutral position lanes: Calls on one side and Puts on other. Manual and broker entries share those lanes; same-side collisions collapse into closed `+N`, and opening group selects nothing until exact identity is chosen.
+**Why:** Source is ownership metadata, not separate chart geography. User must read option side first without manual/broker columns multiplying or colliding.
+**Alternatives considered:**
+- Separate manual lane — rejected because user explicitly requires manual and broker positions clubbed by Call/Put side.
+- One mixed lane — rejected because Call and Put identity becomes ambiguous.
+**Status:** ACTIVE
+
+## D25 — 2026-08-05T23:22:10+05:30
+**Decision:** Repeated clicks on saved strike cycle exact saved faces and then return to live-selected face while quick Call/Put BE rails remain. Escape, outside click, refresh, or expiry change creates true neutral state and removes quick BE plus temporary T controls.
+**Why:** Preserves agreed same-strike BE context while making selected versus neutral states explicit and testable.
+**Alternatives considered:**
+- Final face click clears selection — rejected because it breaks agreed “same-strike click keeps rails” behavior.
+- Keep rails after Escape/outside — rejected because neutral state must contain no BE or temporary T identity.
+**Status:** ACTIVE
+
+## D26 — 2026-08-05T23:22:10+05:30
+**Decision:** Manual badges open exact editable saved entry with SAVE/REMOVE; broker badges open exact read-only position details. Manual face exposes only owning T label, while broker face exposes no unrelated manual T.
+**Why:** Same shared lane needs source-correct action and exact strategy ownership without inventing or leaking T identities.
+**Alternatives considered:**
+- One editor behavior for both sources — rejected because broker imports are read-only.
+- Show every same-strike T — rejected because unrelated ownership misrepresents selected position.
+**Status:** ACTIVE
+
+## D27 — 2026-08-05T23:22:10+05:30
+**Decision:** Gate each repair with targeted tests plus real Chrome workflow replay before moving to next repair, and separate tested-workflow evidence from whole-product claims.
+**Why:** 986 green checks prove covered contracts, not all 202 real-browser journeys or external/destructive workflows.
+**Alternatives considered:**
+- Batch all fixes then inspect once — rejected because regression source becomes unclear.
+- Declare project perfect from automated suite — rejected because prior green suites missed live failures.
+**Status:** ACTIVE

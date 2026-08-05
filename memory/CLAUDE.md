@@ -23,3 +23,6 @@ On session start: silently read `memory/LATEST_SEED.md` and the last 5 entries o
 
 ## Foundational rules
 (Append as the project evolves. Never delete — supersede with SUPERSEDED-BY: #id.)
+- **R1** (2026-08-05): Never report chart UI work complete until latest unpacked extension revision is reloaded and live Chrome DOM geometry confirms it. **Why:** Automated contracts missed visible overlap and stacking regressions that only appeared in TradingView.
+- **R2** (2026-08-05): C/P controls, checkboxes, break-even labels, OI stickers, and ladder rows must never overlap; saved position badges always own top visual layer. Crowded same-side positions collapse to closed `+N`, which selects nothing until an exact flyout row is chosen. **Why:** Position identity and selection must remain unambiguous at every zoom level.
+- **R3** (2026-08-05): Repair one workflow at a time; run targeted automated checks, reload latest unpacked extension, and replay exact user workflow live in Chrome before starting next repair. Never use green unit tests alone to claim UI success or call whole project perfect before full workflow catalog is executed. **Why:** Repeated fixes passed lower-level tests while real click, double-click, layering, and lifecycle behavior remained broken.

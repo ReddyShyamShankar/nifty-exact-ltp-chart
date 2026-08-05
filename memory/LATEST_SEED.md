@@ -1,19 +1,14 @@
-# LATEST SEED — Options Ladder
-
 ## STATE
-
-Options Ladder v0.5.0 is loaded from `.worktrees/timeframe-axis-ladder/extension-axis-ladder` on `codex/arbdesk-theme-system`; prior checkpoint remains preserved separately. D17 universal axis-grid membership remains foundation, and D18 adds one explicit real-ATM reference: nearest available ATM strike stays present only while its exact price lies inside visible chart range. Fixed row count, ATM-centered range selection, and timeframe-specific spacing remain removed; light ATM uses ARB Desk brown and dark ATM uses ARB Desk orange.
+Options Ladder active candidate lives in `.worktrees/timeframe-axis-ladder` on `codex/arbdesk-theme-system` at `fc32ef1e328c`, with dirty post-checkpoint repairs and audit documents. Latest unpacked build is loaded in Chrome; 986/986 tests pass, 30 changed JavaScript/CJS files parse, `git diff --check` passes, no tracked file is deleted, and local bridge is online with Upstox reachable. Critical 24,200 broker → manual T39 → live-selected BE → Escape-neutral workflow passed live without mutating real trades; full 202-workflow live audit remains incomplete.
 
 ## NEXT_LINE
-
-Reload D18 build in Chrome and visually confirm pinned ATM at coarse axis spacing in both light and dark themes.
+Continue `docs/testing/2026-08-05-options-ladder-202-e2e-workflows.md` at next unverified non-destructive workflow using Computer Use; after each fix, rerun targeted tests, reload extension, and repeat exact live Chrome workflow before proceeding.
 
 ## MEMORY_KEY
-
-Universal foundation: real selected-instrument/expiry strikes intersect TradingView's stable visible price grid; one real nearest-available ATM reference is added when inside visible chart range. No fixed row count, no ATM-centered range, and no timeframe-specific spacing. Covered live-price slot uses inferred rounded grid value such as 24,300. NIFTY is test case only.
+Post-repair 986-green: shared Call/Put lanes, broker → manual T39 → live-selected BE cycle, Escape neutral; full 202 live audit pending.
 
 ## OPEN_QUESTIONS
-- Does user approve D17 visual density at fine, medium, and far zoom after live verification?
-- Does the 0.00 option-LTP state reproduce after a healthy bridge refresh, and should zero upstream quotes fail closed visibly?
-- When should live Zerodha positions graduate from deferred foundation to chart-visible workflow?
-- When should `codex/timeframe-axis-ladder` merge into the primary branch after user testing?
+- Which remaining non-destructive workflow should run next from 202-workflow catalog?
+- Should destructive REMOVE, merge, split, restore, and archive flows run after snapshotting user storage?
+- When should dirty `fc32ef1e328c` candidate be committed and pushed?
+- When should real broker authorization and exact authenticated refresh fan-out be verified?

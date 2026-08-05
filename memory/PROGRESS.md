@@ -108,3 +108,73 @@ Built universal TradingView-axis ladder membership
 - ATM moves to new real strike during live spot refresh; old non-grid ATM reference is removed.
 - Preserved theme-specific styling: ARB Desk brown in light mode, orange in dark mode.
 - Added focused membership, controller, live-recenter, and outside-range regression coverage.
+
+## #17 — 2026-08-01T21:41:31+05:30 — feat
+Built Premium Skyline directly on TradingView
+
+Replaced old RANGE stems and production lower history pane with one passive Skyline canvas: Call premium history above selected strike, Put history below, exact TradingView time synchronization, and shared crosshair values. Missing premium candles remain real gaps; square strike-touch markers stay available. Focused contracts, full extension suite, syntax checks, and `git diff --check` pass; user approved live visual.
+
+## #18 — 2026-08-01T21:41:31+05:30 — note
+Approved spatial crosshair labels before implementation
+
+User rejected wide paragraph tooltip and selected Option A: timestamp at top of crosshair, Call chip at Call point, Put chip at Put point, and strike chip on baseline. Collision, missing-data, theme-token, performance, and lifecycle behavior are locked in committed spec `54d1493`; product-code build remains next action.
+
+## #19 — 2026-08-05T00:08:00+05:30 — feat
+Connected broker positions to strategy and chart surfaces
+
+Read-only Zerodha positions now normalize into broker strategy snapshots, populate extension strategy cards, and render individual Call/Put controls at exact chart strikes. Combined broker strategy and individual-position P&L remain separately inspectable; disconnect hides broker chart visuals while stored evidence remains recoverable.
+
+## #20 — 2026-08-05T00:08:00+05:30 — feat
+Built compact collision-safe chart controls
+
+Broker Calls occupy left lane and Puts occupy reserved right lane before ladder cards. Same-side collisions collapse to informational `+N`; adjacent square opens exact identities without selecting anything, and each flyout row owns explicit selection and P&L actions.
+
+## #21 — 2026-08-05T00:08:00+05:30 — fix
+Hardened break-even and badge layering
+
+Quick break-even labels stop before strategy and broker control lanes. Rows owning saved C/P badges receive top stacking layer plus CSS `:has()` fallback, preventing neighboring ladder rows from covering C1/P1 stickers.
+
+## #22 — 2026-08-05T00:08:00+05:30 — test
+Expanded sequential regression coverage
+
+Added 120 focused layout, grouping, side-isolation, spine-bound, accessibility, and break-even-clearance evals. Full bridge plus extension suite passes 862/862 sequentially; syntax and diff checks pass.
+
+## #23 — 2026-08-05T00:08:00+05:30 — note
+Committed and pushed broker strategy integration
+
+Commit `1590670` (`feat: integrate broker strategy overlays`) contains all 25 local changes and tracked Playwright evidence. Branch `codex/arbdesk-theme-system` is clean and pushed to `origin`; final live verification still needs latest extension reload.
+
+## #024 — 2026-08-05T23:22:10+05:30 — fix
+Restored manual and broker interaction identity
+
+Saved manual badges and matching double-clicks now open exact editable entries with SAVE/REMOVE, while broker badges open exact read-only position details. Manual and broker controls are clubbed into shared Call and Put lanes; same-side collisions remain closed `+N` groups with explicit identity selection.
+
+## #025 — 2026-08-05T23:22:10+05:30 — fix
+Restored break-even selection and exact T ownership
+
+Broker faces no longer leak unrelated manual T labels; manual faces expose only exact owning T. Saved-row clicks retain quick Call/Put BE through broker, manual, and live-selected faces, while Escape/outside/refresh/expiry reliably clears selection, BE rails, and temporary T controls.
+
+## #026 — 2026-08-05T23:22:10+05:30 — fix
+Hardened chart UI and Premium Skyline lifecycles
+
+Repaired side-panel/group dismissal, stale Skyline canvas cleanup, and history lifecycle behavior. Skyline now shows valid history when available and a contained retryable error at 250% browser zoom when unavailable, without overflowing chart plot.
+
+## #027 — 2026-08-05T23:22:10+05:30 — fix
+Serialized identities and shared metadata loads
+
+Service worker now allocates T labels inside serialized strategy mutation queue, preventing duplicate labels from stale concurrent saves. Bridge shares concurrent expiry-metadata loads and clears failed in-flight state for retry; non-NIFTY instruments no longer inherit NIFTY's 65-unit fallback.
+
+## #028 — 2026-08-05T23:22:10+05:30 — test
+Completed post-repair automated and live Chrome verification
+
+Fresh extension-plus-bridge run passed 986/986; 30 changed JavaScript/CJS files passed syntax checks, `git diff --check` passed, and no tracked file is deleted. Local bridge reported online with Upstox reachable; no real trade was created, edited, removed, merged, split, or submitted.
+
+## #029 — 2026-08-05T23:22:10+05:30 — test
+Proved exact broker-to-manual saved-row cycle live
+
+At 24,200, first click showed broker Put with two quick BEs and no T; second showed manual Sell Put with exact T39 plus `CALL BE 24,735` and `PUT BE 24,101`; next returned live-selected face with BE retained; Escape returned neutral with no BE or T.
+
+## #030 — 2026-08-05T23:22:10+05:30 — note
+Recorded current candidate and remaining proof boundary
+
+Added `docs/testing/2026-08-05-post-repair-verification.md` beside 202-workflow inventory and historical live audit. Active worktree is dirty on `codex/arbdesk-theme-system` at `fc32ef1e328c`; complete 202-workflow live execution, authenticated broker fan-out, and snapshot-backed destructive workflows remain pending.
