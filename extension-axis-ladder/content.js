@@ -2827,6 +2827,7 @@
       ? originals.filter((model) => !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind))
       : [];
     const selectedIds = ensureStrategyChartController()?.selected() || [];
+    const selectedIdSet = new Set(selectedIds);
     const { models: combined, preview } = showStrategyBreakEvens
       ? combinedStrategyModels(originals)
       : { models: [], preview: null };
@@ -2836,8 +2837,8 @@
       ...chartOriginals.map((model) => ({
         ...model,
         hideRail: previewingCombined
-          ? !showComparedOriginalRails
-          : false
+          ? !(showComparedOriginalRails && selectedIdSet.has(model.strategyId))
+          : !selectedIdSet.has(model.strategyId)
       })),
       ...combined
     ];
@@ -2981,13 +2982,16 @@
           const token = document.createElement("span");
           token.className = "nifty-strategy__rail-token";
           token.textContent = `${label.dataset.token} `;
-          const divider = document.createElement("span");
-          divider.className = "nifty-strategy__rail-divider";
-          divider.setAttribute("aria-hidden", "true");
-          const text = document.createElement("span");
-          text.className = "nifty-strategy__rail-text";
-          text.textContent = strategyRailText(model);
-          label.append(token, divider, text);
+          label.append(token);
+          if (!model.hideRail) {
+            const divider = document.createElement("span");
+            divider.className = "nifty-strategy__rail-divider";
+            divider.setAttribute("aria-hidden", "true");
+            const text = document.createElement("span");
+            text.className = "nifty-strategy__rail-text";
+            text.textContent = strategyRailText(model);
+            label.append(divider, text);
+          }
         } else {
           label.textContent = `${model.label}${model.projection.mode === "EDGE" ? ` ${model.projection.arrow}` : ""}`;
         }
