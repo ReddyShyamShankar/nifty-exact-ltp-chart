@@ -24,8 +24,9 @@
 | `WF-SHL-010` | PASS | Light switched to dark across compact popup and side panel, survived popup close/reopen, then switched back to light and survived another reopen. Chart ladder remained LIVE. |
 | `WF-LAD-001` | PASS | Explicitly selected `2026-08-11 · 5 DTE`; one `REFRESH ALL` loaded 20 visible rows with 20 unique strikes and no duplicates. |
 | `WF-LAD-002` | PASS | All 20 visible rows retained `Call premium | Put premium | strike` order with zero mismatches. |
+| `WF-LAD-003` | PASS | Live chart rendered 20 unique strikes at one uniform ladder depth in one right-side column, exceeding former 13-row limit without duplicates. |
 
-Current candidate tally: **10 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **11 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -80,6 +81,15 @@ Current candidate tally: **10 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - No product repair was required; live workflow matched expected behavior.
 - Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
 
+## `WF-LAD-003` live evidence
+
+- Live exact-expiry set rendered 20 visible rows, exceeding former 13-row limit.
+- All 20 strikes were unique, zero duplicates, with uniform accessibility-tree depth under one ladder container.
+- Screenshot confirms one right-side chart column aligned to native price-axis levels.
+- Targeted no-limit layout contract passed with a 25-row fixture.
+- No product repair was required; live workflow matched expected behavior.
+- Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -99,7 +109,8 @@ Current candidate tally: **10 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-001-expiry-selected-before-refresh.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-001-exact-expiry-loaded-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-002-call-put-strike-order-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-003-single-column-20-rows-PASS.png`
 
 ## Next workflow
 
-Run `WF-LAD-003` single-column completeness workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-LAD-004` dense-axis zoom workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
