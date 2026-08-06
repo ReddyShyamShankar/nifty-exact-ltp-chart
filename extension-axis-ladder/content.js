@@ -1324,6 +1324,7 @@
 
   let settings = { ...DEFAULTS };
   let controller = null;
+  let restartChainSnapshot = null;
   let timeframeTimer = null;
   let axisPlacementTimer = null;
   let viewportResizeTimer = null;
@@ -4083,7 +4084,13 @@
     const result = await chrome.runtime.sendMessage({ type: "FETCH_NIFTY_CHAIN", expiry });
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (!result?.ok) throw new Error(result?.error || "Option chain unavailable.");
-    return result.chain;
+    const chain = result.chain || {};
+    return {
+      ...chain,
+      version: 1,
+      updatedAt: typeof chain.updatedAt === "string" ? chain.updatedAt : new Date().toISOString(),
+      expiry
+    };
   }
 
   function placeRows(rows, membership, toY, visualPlacementRevision) {
@@ -4518,7 +4525,7 @@
       renderRows,
       activeStrikes: activeTradeStrikes,
       riskView: settings.sellerSafetyChartView || settings.sellerSafetyView,
-      chainSnapshot: settings.sellerSafetyChain,
+      chainSnapshot: restartChainSnapshot || settings.sellerSafetyChain,
       chainSnapshotsByExpiry: settings.sellerSafetyChainsByExpiry,
       setStatus: showStatus
     });
@@ -4544,6 +4551,7 @@
   }
 
   function stop() {
+    restartChainSnapshot = controller?.chain() || restartChainSnapshot;
     setPremiumTimeSync(document, false);
     premiumHistoryPane?.destroy?.();
     premiumHistoryPane = null;

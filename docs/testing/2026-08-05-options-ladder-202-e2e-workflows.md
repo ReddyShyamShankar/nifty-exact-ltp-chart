@@ -1,6 +1,6 @@
 # Options Ladder — 202 End-to-End User Workflows
 
-**Status:** Authoritative scenario inventory; execution not started
+**Status:** Authoritative scenario inventory; current-candidate execution in progress — see `2026-08-06-options-ladder-202-execution-log.md`
 **Created:** 2026-08-05
 **Rule:** These are complete user journeys, not unit assertions. Run every ID independently against both baselines and classify result as `SAME`, `INTENDED CHANGE`, or `REGRESSION`.
 

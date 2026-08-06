@@ -2829,6 +2829,7 @@ function createBreakEvenLifecycleHarness({
   spot = 23767.45,
   chainLotSize = 65,
   omitChainLotSize = false,
+  omitStoredChain = false,
   strategyBook = null,
   strategySupport = strategyBook !== null,
   initialAxisPairs = null,
@@ -3213,8 +3214,10 @@ function createBreakEvenLifecycleHarness({
               enabled: true,
               expiry: snapshot.expiry,
               manualPlans: initialManualPlans,
-              sellerSafetyChain: snapshot,
-              sellerSafetyChainsByExpiry: { [snapshot.expiry]: snapshot },
+              ...(omitStoredChain ? {} : {
+                sellerSafetyChain: snapshot,
+                sellerSafetyChainsByExpiry: { [snapshot.expiry]: snapshot }
+              }),
               ...(strategySupport ? { strategyBook: storedStrategyBook } : {})
             });
           },
@@ -3485,6 +3488,25 @@ function createBreakEvenLifecycleHarness({
   };
 
 }
+
+test("show-ladder off/on restores manually refreshed rows without another chain request", async () => {
+  const h = createBreakEvenLifecycleHarness({ omitStoredChain: true });
+  await h.settle();
+  assert.equal(Boolean(h.row()), false);
+
+  await h.refreshOptionNumbers();
+  assert.ok(h.row(), "manual refresh renders exact-axis rows");
+  const fetchesAfterRefresh = h.fetchCalls();
+
+  h.storage({ enabled: { oldValue: true, newValue: false } });
+  await h.settle();
+  assert.equal(Boolean(h.row()), false, "off removes chart ladder");
+
+  h.storage({ enabled: { oldValue: false, newValue: true } });
+  await h.settle();
+  assert.ok(h.row(), "on restores rows from last safe in-memory chain");
+  assert.equal(h.fetchCalls(), fetchesAfterRefresh, "toggle restore never performs an automatic chain request");
+});
 
 function chartStrategyBook() {
   const at = "2026-07-31T10:00:00.000Z";

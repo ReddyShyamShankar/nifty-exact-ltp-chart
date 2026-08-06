@@ -43,7 +43,7 @@
         await chromeApi.action.enable(tabId);
       } else {
         await chromeApi.sidePanel.setOptions({ tabId, enabled: false });
-        await chromeApi.action.disable(tabId);
+        await chromeApi.action.enable(tabId);
       }
     }
 
@@ -56,6 +56,8 @@
       const previousTabId = Number(activeTabs[String(numericWindowId)]);
       if (Number.isInteger(previousTabId) && previousTabId > 0 && previousTabId !== numericTabId) {
         try { await chromeApi.sidePanel.close({ tabId: previousTabId }); }
+        catch (error) { if (!isExpectedCloseError(error)) reportOnce(error); }
+        try { await chromeApi.sidePanel.close({ windowId: numericWindowId }); }
         catch (error) { if (!isExpectedCloseError(error)) reportOnce(error); }
       }
       activeTabs[String(numericWindowId)] = numericTabId;

@@ -69,7 +69,7 @@ test("accepts only exact HTTPS TradingView hosts", () => {
   ]) assert.equal(sidePanel.isTradingViewUrl(value), false);
 });
 
-test("configures panel and action only on an exact TradingView tab", async () => {
+test("configures panel only on TradingView while keeping popup action available on every tab", async () => {
   const chromeApi = fakeChrome();
   const controller = sidePanel.createController(chromeApi);
   await controller.configureTab({ id: 7, url: "https://www.tradingview.com/chart/one" });
@@ -78,19 +78,35 @@ test("configures panel and action only on an exact TradingView tab", async () =>
     ["options", { tabId: 7, path: "popup.html", enabled: true }],
     ["enable", 7],
     ["options", { tabId: 8, enabled: false }],
-    ["disable", 8]
+    ["enable", 8]
   ]);
 });
 
-test("tab activation closes previous panel and persists new active tab", async () => {
+test("tab activation closes tab-specific and global panel contexts before persisting new active tab", async () => {
   const chromeApi = fakeChrome([{ id: 12, windowId: 3, url: "https://www.tradingview.com/chart/two" }]);
   chromeApi.session.niftySidePanelActiveTabs = { "3": 11 };
   const controller = sidePanel.createController(chromeApi);
   await controller.handleActivated({ tabId: 12, windowId: 3 });
-  assert.deepEqual(chromeApi.calls.slice(0, 3), [
+  assert.deepEqual(chromeApi.calls.slice(0, 4), [
     ["close", { tabId: 11 }],
+    ["close", { windowId: 3 }],
     ["session", { niftySidePanelActiveTabs: { "3": 12 } }],
     ["options", { tabId: 12, path: "popup.html", enabled: true }]
+  ]);
+});
+
+test("tab activation closes a global panel when tab-specific close reports no active panel", async () => {
+  const chromeApi = fakeChrome([{ id: 12, windowId: 3, url: "https://example.com/" }]);
+  chromeApi.session.niftySidePanelActiveTabs = { "3": 11 };
+  chromeApi.sidePanel.close = async (value) => {
+    chromeApi.calls.push(["close", value]);
+    if (value.tabId) throw new Error("No active side panel");
+  };
+  const controller = sidePanel.createController(chromeApi);
+  await controller.handleActivated({ tabId: 12, windowId: 3 });
+  assert.deepEqual(chromeApi.calls.slice(0, 2), [
+    ["close", { tabId: 11 }],
+    ["close", { windowId: 3 }]
   ]);
 });
 
@@ -140,7 +156,7 @@ test("created and URL-updated listeners configure only supplied tabs", async () 
     ["options", { tabId: 20, path: "popup.html", enabled: true }],
     ["enable", 20],
     ["options", { tabId: 22, enabled: false }],
-    ["disable", 22]
+    ["enable", 22]
   ]);
 });
 
