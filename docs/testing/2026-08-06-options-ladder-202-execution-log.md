@@ -21,8 +21,9 @@
 | `WF-SHL-007` | PARTIAL | Lookalike host stayed locked out live; exact HTTPS host predicate passes automated checks. HTTP navigation could not retain an unsafe URL for complete live proof. |
 | `WF-SHL-008` | PASS AFTER REPAIR | Initial live run failed because panel remained visible on New Tab. Latest unpacked revision was reloaded; switching to New Tab closed panel, returning to TradingView did not reopen it, and ladder remained `LIVE`. |
 | `WF-SHL-009` | PASS AFTER REPAIR | Valid 22-row LIVE baseline hid to 0 rows, then restored to 26 LIVE rows without another manual refresh. Stored trades were not changed. |
+| `WF-SHL-010` | PASS | Light switched to dark across compact popup and side panel, survived popup close/reopen, then switched back to light and survived another reopen. Chart ladder remained LIVE. |
 
-Current candidate tally: **7 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **8 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -50,6 +51,15 @@ Current candidate tally: **7 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAI
 - Regression test: manually refreshed rows survive OFF/ON with unchanged chain-request count.
 - Full extension-plus-bridge suite after repair: `988/988` passed with temporary localhost permission.
 
+## `WF-SHL-010` live evidence
+
+- Light baseline confirmed in compact popup.
+- Dark mode matched in compact popup and side panel, and persisted after closing and reopening compact popup.
+- Light mode restored from side panel, then persisted after side-panel close and compact-popup reopen.
+- Chart ladder stayed `LIVE` through both theme transitions.
+- No product repair was required; live workflow matched expected behavior.
+- Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -60,7 +70,13 @@ Current candidate tally: **7 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAI
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-008-tab-switch-panel-closes-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-009-invalid-stale-extension-context.png` (discarded setup run; extension context was stale)
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-009-ladder-restored-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-SHL-010-popup-light-before.png`
+- `evidence/2026-08-06-202-workflow-run/WF-SHL-010-popup-dark-after.png`
+- `evidence/2026-08-06-202-workflow-run/WF-SHL-010-chart-dark.png`
+- `evidence/2026-08-06-202-workflow-run/WF-SHL-010-side-panel-dark.png`
+- `evidence/2026-08-06-202-workflow-run/WF-SHL-010-side-panel-light.png`
+- `evidence/2026-08-06-202-workflow-run/WF-SHL-010-chart-light-restored.png`
 
 ## Next workflow
 
-Run `WF-SHL-010` dark/light theme persistence. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-LAD-001` first ladder-row workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
