@@ -22,8 +22,9 @@
 | `WF-SHL-008` | PASS AFTER REPAIR | Initial live run failed because panel remained visible on New Tab. Latest unpacked revision was reloaded; switching to New Tab closed panel, returning to TradingView did not reopen it, and ladder remained `LIVE`. |
 | `WF-SHL-009` | PASS AFTER REPAIR | Valid 22-row LIVE baseline hid to 0 rows, then restored to 26 LIVE rows without another manual refresh. Stored trades were not changed. |
 | `WF-SHL-010` | PASS | Light switched to dark across compact popup and side panel, survived popup close/reopen, then switched back to light and survived another reopen. Chart ladder remained LIVE. |
+| `WF-LAD-001` | PASS | Explicitly selected `2026-08-11 · 5 DTE`; one `REFRESH ALL` loaded 20 visible rows with 20 unique strikes and no duplicates. |
 
-Current candidate tally: **8 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **9 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -60,6 +61,16 @@ Current candidate tally: **8 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAI
 - No product repair was required; live workflow matched expected behavior.
 - Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
 
+## `WF-LAD-001` live evidence
+
+- Baseline expiry was `2026-08-25 · 19 DTE`; explicitly selected `2026-08-11 · 5 DTE`.
+- Before refresh, side panel showed `MANUAL REFRESH REQUIRED` and `EXPIRY CHANGED · PRESS REFRESH ALL`.
+- One `REFRESH ALL` returned chart to `LIVE` and kept selected expiry `2026-08-11 · 5 DTE`.
+- Result contained 20 visible ladder rows, 20 unique strikes, and zero duplicate strikes.
+- Targeted request-count guard passed: exactly one `/api/seller-refresh` request and zero follow-up `/api/nifty-chain` requests.
+- No product repair was required; live workflow matched expected behavior.
+- Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -76,7 +87,9 @@ Current candidate tally: **8 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAI
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-010-side-panel-dark.png`
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-010-side-panel-light.png`
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-010-chart-light-restored.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-001-expiry-selected-before-refresh.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-001-exact-expiry-loaded-PASS.png`
 
 ## Next workflow
 
-Run `WF-LAD-001` first ladder-row workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-LAD-002` row-order workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
