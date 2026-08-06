@@ -25,8 +25,11 @@
 | `WF-LAD-001` | PASS | Explicitly selected `2026-08-11 · 5 DTE`; one `REFRESH ALL` loaded 20 visible rows with 20 unique strikes and no duplicates. |
 | `WF-LAD-002` | PASS | All 20 visible rows retained `Call premium | Put premium | strike` order with zero mismatches. |
 | `WF-LAD-003` | PASS | Live chart rendered 20 unique strikes at one uniform ladder depth in one right-side column, exceeding former 13-row limit without duplicates. |
+| `WF-LAD-004` | PASS | Native price-axis zoom increased visible rows from 20 to 24 and reduced minimum real strike step from 100 to 50 while ladder stayed `LIVE`. |
+| `WF-LAD-005` | PASS | Native price-axis zoom-out reduced visible rows from 24 to 17 and increased minimum real strike step from 50 to 200 while ladder stayed `LIVE`. |
+| `WF-LAD-006` | PASS | Live-price badge covered native 24,600 label; ladder restored real 24,600 row between visible 24,400 and 24,800 cadence. |
 
-Current candidate tally: **11 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **14 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -90,6 +93,15 @@ Current candidate tally: **11 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - No product repair was required; live workflow matched expected behavior.
 - Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
 
+## `WF-LAD-004` through `WF-LAD-006` live evidence
+
+- `WF-LAD-004`: native right-axis zoom changed 20 rows at 100-point minimum cadence into 24 rows at 50-point minimum cadence; no manual refresh occurred and ladder remained `LIVE`.
+- `WF-LAD-005`: reverse native-axis zoom changed 24 rows at 50-point minimum cadence into 17 rows at 200-point minimum cadence; no fixed row count and no invented contract was observed.
+- `WF-LAD-006`: with live NIFTY at 24,660.45 covering native grid text, real 24,600 ladder row remained present between 24,400 and 24,800.
+- All three mapped automated contracts passed.
+- No product repair was required; live workflows matched expected behavior.
+- Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -110,7 +122,12 @@ Current candidate tally: **11 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-001-exact-expiry-loaded-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-002-call-put-strike-order-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-003-single-column-20-rows-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-004-axis-before-zoom.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-004-dense-axis-more-rows-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-005-axis-before-zoom-out.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-005-sparse-axis-fewer-rows-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-006-live-marker-grid-slot-restored-PASS.png`
 
 ## Next workflow
 
-Run `WF-LAD-004` dense-axis zoom workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-LAD-007` in-range ATM pin workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
