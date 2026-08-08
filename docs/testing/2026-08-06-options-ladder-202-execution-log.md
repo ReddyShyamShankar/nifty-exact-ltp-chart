@@ -15,10 +15,10 @@
 | `WF-SHL-001` | PASS | Options Ladder toolbar action opened compact popup on TradingView. |
 | `WF-SHL-002` | PASS | Popup showed `READY TO REFRESH`, `REFRESH LADDER`, and `OPEN CONTROLS`. |
 | `WF-SHL-003` | PASS | Refresh completed as `REFRESHED JUST NOW`; chart stayed `LIVE` and option quotes changed. |
-| `WF-SHL-004` | DEFERRED | Requires controlled bridge/network failure injection. |
+| `WF-SHL-004` | PASS (CONTROLLED AUTOMATION) | Injected refresh rejection stayed in popup and exposed readable failure without partial data. |
 | `WF-SHL-005` | PASS | `OPEN CONTROLS` closed compact popup and opened Options Ladder side panel for active TradingView tab. |
 | `WF-SHL-006` | PASS AFTER REPAIR | Unsupported New Tab opens popup with disabled `REFRESH LADDER` and `OPEN CONTROLS`, plus `OPEN A TRADINGVIEW CHART`. |
-| `WF-SHL-007` | PARTIAL | Lookalike host stayed locked out live; exact HTTPS host predicate passes automated checks. HTTP navigation could not retain an unsafe URL for complete live proof. |
+| `WF-SHL-007` | PASS (LIVE + CONTROLLED AUTOMATION) | Lookalike host stayed locked out live; exact host matrix rejected HTTP and unsupported hosts and accepted only exact HTTPS TradingView hosts. |
 | `WF-SHL-008` | PASS AFTER REPAIR | Initial live run failed because panel remained visible on New Tab. Latest unpacked revision was reloaded; switching to New Tab closed panel, returning to TradingView did not reopen it, and ladder remained `LIVE`. |
 | `WF-SHL-009` | PASS AFTER REPAIR | Valid 22-row LIVE baseline hid to 0 rows, then restored to 26 LIVE rows without another manual refresh. Stored trades were not changed. |
 | `WF-SHL-010` | PASS | Light switched to dark across compact popup and side panel, survived popup close/reopen, then switched back to light and survived another reopen. Chart ladder remained LIVE. |
@@ -122,8 +122,30 @@
 | `WF-POS-016` | PASS (CONTROLLED AUTOMATION) | Quick BE text stopped before every position-control lane. |
 | `WF-POS-017` | PASS (CONTROLLED AUTOMATION) | OI rank badges stayed in separate top band without position-badge collision. |
 | `WF-POS-018` | PASS (CONTROLLED AUTOMATION) | Position spine stayed bounded by first and last visible strikes. |
+| `WF-STR-001`–`WF-STR-024` | PASS (CONTROLLED AUTOMATION) | 23 mapped strategy contracts covered details, synchronized selection, exact preview roots, Compare/Clear, compatibility guards, save/merge/split/restore/archive/expiry, and exact-context restore. |
+| `WF-SELL-001`–`WF-SELL-015` | PASS (CONTROLLED AUTOMATION) | 14 mapped seller contracts covered naming, allocations, CSV review/dedupe, ownership, coverage gaps, acceptance gates, and atomic publication. Blank-name regression writes nothing and reports `ENTER A STRATEGY NAME FIRST`. |
+| `WF-LIFE-001`–`WF-LIFE-014` | PASS (CONTROLLED AUTOMATION) | 15 mapped lifecycle contracts covered refresh ordering, cache behavior, expiry/timeframe/zoom/pan, reload migration, single listeners, navigation cleanup, and zero-request panel lifecycle. |
+| `WF-SKY-001`–`WF-SKY-010` | PASS (CONTROLLED AUTOMATION) | 50 mapped Skyline checks covered exact opening action, event separation, visual selection, Call/Put geometry, real gaps, crosshair truth, request dedupe/cache, and terminal cleanup. |
+| `WF-FAIL-001`–`WF-FAIL-017` | PASS (CONTROLLED AUTOMATION) | 18 mapped safety checks covered invalid expiry/origin/session/provider failures, evidence survival, review gates, lot proof, malformed storage, expiry mismatch, axis/context/storage failure, idempotency, unknown charges, badge isolation, and read-only broker surface. |
+| `WF-A11Y-001`–`WF-A11Y-012` | PASS (CONTROLLED AUTOMATION) | 13 mapped accessibility/visual checks covered keyboard parity and focus return, editor reachability, accessible row/entry/badge/rail state, group semantics, synchronized pressed state, contrast, and dense-layout integrity. |
 
-Current candidate tally: **108 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **202 PASS · 0 PARTIAL · 0 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+
+## Strategy, seller, and lifecycle controlled evidence
+
+- Strategy/version group: `23/23` mapped tests passed, covering all 24 workflows; one mixed instrument/expiry guard covers two workflows.
+- Seller group: `14/14` mapped tests passed, covering all 15 workflows; CSV split/remainder contract covers multiple workflows. Localhost integration initially hit sandbox `listen EPERM 127.0.0.1`, then passed unchanged with permitted localhost access.
+- Lifecycle group: `15/15` mapped tests passed, covering all 14 workflows; pagehide and same-label SPA cleanup are separate regressions for one workflow.
+- All mutations used isolated in-memory fixtures. No broker authentication, account data, order route, or permanent live strategy mutation occurred.
+
+## Skyline, fail-closed, accessibility, and shell recovery evidence
+
+- Skyline group: `50/50` mapped checks passed, covering all 10 workflows.
+- Fail-closed group: `18/18` mapped checks passed, covering all 17 workflows.
+- Accessibility/visual group: `13/13` mapped checks passed, covering all 12 workflows; shared parity/focus tests cover paired workflows.
+- Previously deferred shell network failure passed deterministic rejection injection. Previously partial host safety passed exact URL matrix plus live lookalike-host rejection.
+- Entire 202-workflow pack now has a recorded result; no partial, deferred, or unresolved failure remains.
+- Final extension-plus-bridge regression suite: `991/991` passed with temporary localhost permission.
 
 ## `WF-SHL-008` repair evidence
 

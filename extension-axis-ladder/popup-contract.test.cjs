@@ -1053,6 +1053,20 @@ test("allocated pending review survives popup close and still withholds publicat
   assert.equal(reopened.nodes.get("current-lower").textContent, "—");
 });
 
+test("blank seller strategy name is rejected with a clear instruction and no write", async () => {
+  const harness = popupHarness();
+  await settle();
+  const writesBefore = harness.writes.length;
+
+  harness.nodes.get("strategy-name").value = "   ";
+  await harness.listeners.get("create-strategy:click")();
+
+  assert.equal(harness.storage.sellerSafetyLedger, null);
+  assert.equal(harness.storage.selectedStrategyId, "");
+  assert.equal(harness.writes.length, writesBefore);
+  assert.equal(harness.nodes.get("placement-status").textContent, "ENTER A STRATEGY NAME FIRST");
+});
+
 test("explicit strategy, whole-lot allocation, CSV import, and acceptance publish one reviewed snapshot", async () => {
   const harness = popupHarness({}, { Date: fixedDate("2026-08-01T09:30:00+05:30") });
   await settle();

@@ -17,8 +17,8 @@
 | Bucket | Count |
 |---|---:|
 | FULL | 0 |
-| PARTIAL | 196 |
-| LIVE-ONLY | 3 |
+| PARTIAL | 198 |
+| LIVE-ONLY | 1 |
 | BLOCKED-EXTERNAL | 3 |
 | **Total** | **202** |
 
@@ -27,8 +27,6 @@ No workflow qualifies as `FULL`: repository contains no versioned full-browser e
 ### Workflows with no automated evidence
 
 - `WF-MAN-EDIT-007` — unique saved manual entry double-click should open SAVE/REMOVE. Live session already observed failure.
-- `WF-POS-014` — outside-click dismissal of an open position-group flyout has no dedicated assertion.
-- `WF-SELL-002` — blank strategy-name rejection has no dedicated assertion.
 
 ### External proof blockers
 
@@ -215,7 +213,7 @@ No workflow qualifies as `FULL`: repository contains no versioned full-browser e
 | Workflow | Bucket | Exact automated evidence |
 |---|---|---|
 | WF-SELL-001 | PARTIAL | `extension-axis-ladder/popup-contract.test.cjs` — “explicit strategy, whole-lot allocation, CSV import, and acceptance publish one reviewed snapshot” |
-| WF-SELL-002 | LIVE-ONLY | No dedicated automated test for blank strategy-name rejection and visible instruction. |
+| WF-SELL-002 | PARTIAL | `extension-axis-ladder/popup-contract.test.cjs` — “blank seller strategy name is rejected with a clear instruction and no write” |
 | WF-SELL-003 | PARTIAL | `extension-axis-ladder/seller-ledger.test.cjs` — “position changes preserve accepted allocations and require exact signed whole lots” |
 | WF-SELL-004 | PARTIAL | `extension-axis-ladder/seller-evidence-hardening.test.cjs` — “CSV evidence stages unowned, supports quantity splits, and leaves explicit remainder unassigned” |
 | WF-SELL-005 | PARTIAL | `extension-axis-ladder/seller-ledger.test.cjs` — “exact expiry and identity validation reject cross-expiry and legacy allocations” |
@@ -292,8 +290,8 @@ No workflow qualifies as `FULL`: repository contains no versioned full-browser e
 |---|---|---|
 | WF-A11Y-001 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “Enter and Space cycle saved faces newest-first while Escape returns live” |
 | WF-A11Y-002 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “Enter and Space cycle saved faces newest-first while Escape returns live” |
-| WF-A11Y-003 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “Shift+Enter opens exact-row editor and Escape cancels it with row focus restored” |
-| WF-A11Y-004 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “Shift+Enter opens exact-row editor and Escape cancels it with row focus restored” |
+| WF-A11Y-003 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “Shift+Enter focuses first editor action and Escape restores exact-row focus” |
+| WF-A11Y-004 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “Shift+Enter focuses first editor action and Escape restores exact-row focus” |
 | WF-A11Y-005 | PARTIAL | `extension-axis-ladder/manual-ui.test.cjs` — “editor wires direct actions, lot stepper, premium, save, remove, and close” |
 | WF-A11Y-006 | PARTIAL | `extension-axis-ladder/manual-ui.test.cjs` — “row model shows one face and exact compact copy” |
 | WF-A11Y-007 | PARTIAL | `extension-axis-ladder/manual-ui.test.cjs` — “entry accessible name reports exact position in newest-first cycle” |
@@ -305,11 +303,8 @@ No workflow qualifies as `FULL`: repository contains no versioned full-browser e
 
 ## Audit conclusion
 
-Automated suite supplies broad component evidence, but **0/202 complete journeys are automated**. Highest-risk gaps:
+Automated suite supplies broad component evidence, but **0/202 complete journeys are automated**. Remaining evidence gaps:
 
-1. `WF-MAN-EDIT-007`: no test and already failed live.
-2. `WF-BRK-009`: existing automated assertion encodes potentially conflicting ordinary-cell double-click behavior.
-3. `WF-POS-014`: no test for outside-click dismissal of an open position-group flyout.
-4. `WF-SELL-002`: no test for blank-name rejection.
-5. `WF-BRK-001..003`: mocked contracts cannot replace real Zerodha authorization and coordinated live refresh.
-6. Every geometry/overlap workflow still requires live TradingView screenshots and measured DOM rectangles before release.
+1. `WF-MAN-EDIT-007` passed live replay, but still has no dedicated automated journey.
+2. `WF-BRK-001..003` controlled contracts cannot replace real Zerodha authorization and coordinated live refresh.
+3. Geometry/overlap workflows still need live TradingView screenshots and measured DOM rectangles for release evidence.
