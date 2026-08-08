@@ -38,8 +38,23 @@
 | `WF-LAD-014` | PASS | Side-panel resize retained 26 unique rows, exact ATM, and exact-axis placement while ladder stayed `LIVE`. |
 | `WF-LAD-015` | PASS AFTER REPAIR | Live far-expiry data exposed missing quotes as zero sentinels. Repair maps non-positive market quotes to unavailable; live replay showed `—` and `PARTIAL`, never false zero or false `LIVE`. |
 | `WF-LAD-016` | PASS | Historical unsafe axis hid every unplaced row and showed `Visible axis contracts are unavailable.`; no top-left fallback row appeared. |
+| `WF-QBE-001` | PASS | Clean reload and refresh showed no quick, manual, or broker break-even rail before exact strike selection. |
+| `WF-QBE-002` | PASS | One clean 25,000 strike click produced exactly one Call rail and one Put rail. |
+| `WF-QBE-003` | PASS | Call break-even used displayed 800.50 premium: 25,000 + 800.50 rounded to 25,801. |
+| `WF-QBE-004` | PASS | Put break-even used displayed 598.85 premium: 25,000 − 598.85 rounded to 24,401. |
+| `WF-QBE-005` | PENDING FIXTURE | Mapped automated saved-position guard passes; live replay waits for manual workflow to create controlled C/P badge fixture. |
+| `WF-QBE-006` | PASS | Clicking selected 25,000 again cleared selection and both rails. |
+| `WF-QBE-007` | PASS | Selecting 24,000 then 25,000 replaced old rails with only new exact 25,000 rails. |
+| `WF-QBE-008` | PENDING FIXTURE | Mapped automated ownership guard passes; live replay waits for controlled saved strategy fixture. |
+| `WF-QBE-009` | PENDING FIXTURE | Mapped automated same-strike isolation guard passes; live replay waits for controlled saved/broker fixture. |
+| `WF-QBE-010` | PASS | Chart outside click cleared selected row and all quick rails. |
+| `WF-QBE-011` | PASS | Escape cleared selected row and all quick rails. |
+| `WF-QBE-012` | PASS | Manual refresh cleared selected row and rails before quote request completed. |
+| `WF-QBE-013` | PASS AFTER REPAIR | Initial price-scale drag cleared selection. Drag-aware outside-click repair retained exact selected snapshot and both rails through live zoom remap. |
+| `WF-QBE-014` | PASS | Selecting 24,000 with missing Call showed `OPTION PRICE UNAVAILABLE`; no Call or Put fake rail rendered. |
+| `WF-QBE-015` | PASS | Narrowed price range pinned off-screen Call break-even truthfully at plot edge while in-range Put rail stayed exact and controls remained unobscured. |
 
-Current candidate tally: **24 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **36 PASS · 1 PARTIAL · 1 DEFERRED · 3 PENDING FIXTURE · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -158,6 +173,29 @@ Current candidate tally: **24 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - No row appeared at top-left or any fallback coordinate.
 - Render-transaction guard and missing-quote contract passed together `2/2`.
 
+## `WF-QBE-001` through `WF-QBE-012` live evidence
+
+- Clean exact-expiry baseline contained zero BE, T, or broker rail matches before selection.
+- One 25,000 click created exactly `CALL BE 25,801` and `PUT BE 24,401`, matching displayed Call 800.50 and Put 598.85 premiums.
+- Second click toggled selection off; switching 24,000 to 25,000 replaced old rails without duplication.
+- Outside click, Escape, and manual refresh each cleared quick selection and rails.
+- `WF-QBE-005`, `WF-QBE-008`, and `WF-QBE-009` retain passing mapped automated evidence but need controlled saved-position fixtures; live replay is scheduled after manual workflow creation.
+
+## `WF-QBE-013` repair evidence
+
+- Live failure: dragging TradingView price scale cleared selected 25,000 row and both quick break-even rails.
+- Root cause: document-wide outside-pointer handler treated chart scale gesture as ordinary outside dismissal; TradingView also emitted trailing click after drag.
+- Rollback checkpoint: pushed `codex/checkpoint-before-qbe-zoom-fix` at `6cf6866`.
+- RED regression models pointerdown, 20-pixel pointer movement, trailing click, axis update, and remap while exact strike remains visible.
+- Minimal repair: outside dismissal now commits on click; pointer movement above four pixels classifies gesture as drag and suppresses trailing dismissal click. Manual transient pointerdown behavior remains unchanged.
+- Content integration suite passed; full extension-plus-bridge suite passed `990/990` with temporary localhost permission.
+- Latest unpacked revision was loaded into a clean TradingView tab. Live price-scale drag retained selected 25,000 row plus exact `CALL BE 25,801` and `PUT BE 24,401` rails after remap.
+
+## `WF-QBE-014` and `WF-QBE-015` live evidence
+
+- `WF-QBE-014`: far-expiry 24,000 row had `Call —, Put 933.85`; click retained visible selection, showed `OPTION PRICE UNAVAILABLE`, and rendered zero fake BE rails.
+- `WF-QBE-015`: narrowing price scale moved Call 25,801 outside plot; truthful Call edge label pinned to lower plot edge while Put 24,401 remained at exact in-range coordinate and never covered Call/Put controls.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -201,7 +239,16 @@ Current candidate tally: **24 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-015-missing-call-rendered-zero-FAIL.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-015-missing-quotes-render-dash-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-016-unsafe-axis-hides-unplaced-rows-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-001-no-selection-no-rails-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-002-004-selected-strike-correct-rails-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-006-007-toggle-and-replace-rails-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-010-outside-click-clears-selection-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-012-refresh-clears-selection-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-013-selection-cleared-on-zoom-FAIL.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-013-selected-snapshot-remaps-on-zoom-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-014-missing-side-no-fake-rail-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-015-truthful-edge-marker-PASS.png`
 
 ## Next workflow
 
-Run `WF-QBE-001` through `WF-QBE-015` strike-selection and break-even workflows. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-MAN-ADD-001` through `WF-MAN-ADD-017`, then replay `WF-QBE-005`, `WF-QBE-008`, and `WF-QBE-009` against controlled saved-position fixtures. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.

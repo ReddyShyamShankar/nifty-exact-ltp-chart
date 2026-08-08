@@ -1347,6 +1347,7 @@
   let retryTimers = [];
   let currentLabel = null;
   let currentUrl = String(root.location?.href || "");
+  let outsidePointerGesture = null;
   let runtimeObserver = null;
   let normalStatus = "LIVE";
   let breakEvenStatusOverride = null;
@@ -4369,6 +4370,13 @@
   }
 
   function handleDocumentPointerDown(event) {
+    const pointerX = Number(event.clientX);
+    const pointerY = Number(event.clientY);
+    outsidePointerGesture = {
+      x: Number.isFinite(pointerX) ? pointerX : null,
+      y: Number.isFinite(pointerY) ? pointerY : null,
+      dragged: false
+    };
     if (event.target?.closest?.(`#${PREMIUM_HISTORY_STATUS_ID}`)) return;
     const insideEdgeStack = event.target?.closest?.(".nifty-edge-stack__group")
       || event.target?.closest?.(".nifty-edge-stack__selector")
@@ -4403,9 +4411,43 @@
     if (!row && outsideStrategyCard) {
       closePremiumHistory();
       clearManualTransientState({ restorePlanRails: true });
-      clearBreakEvenSelection({ repaintStrategyRails: true });
     }
     if (outsideStrategyCard) collapseOpenedStrategyDetails();
+  }
+
+  function handleDocumentPointerMove(event) {
+    if (!outsidePointerGesture || outsidePointerGesture.dragged) return;
+    const pointerX = Number(event.clientX);
+    const pointerY = Number(event.clientY);
+    if (!Number.isFinite(pointerX)
+      || !Number.isFinite(pointerY)
+      || !Number.isFinite(outsidePointerGesture.x)
+      || !Number.isFinite(outsidePointerGesture.y)) return;
+    outsidePointerGesture.dragged = Math.hypot(
+      pointerX - outsidePointerGesture.x,
+      pointerY - outsidePointerGesture.y
+    ) > 4;
+  }
+
+  function handleDocumentClick(event) {
+    const dragged = outsidePointerGesture?.dragged === true;
+    outsidePointerGesture = null;
+    if (dragged) return;
+    if (event.target?.closest?.(`#${PREMIUM_HISTORY_STATUS_ID}`)) return;
+    const ladderBrokerBadge = event.target?.closest?.(".nifty-axis-ladder__badge");
+    const insideExtensionControl = event.target?.closest?.(".nifty-axis-ladder__row")
+      || event.target?.closest?.(".nifty-strategy__card")
+      || event.target?.closest?.(".nifty-position-spine__card")
+      || event.target?.closest?.(".nifty-edge-stack__group")
+      || event.target?.closest?.(".nifty-edge-stack__selector")
+      || event.target?.closest?.(".nifty-edge-stack__flyout")
+      || event.target?.closest?.(".nifty-position-spine__cluster")
+      || event.target?.closest?.(".nifty-position-spine__cluster-flyout")
+      || event.target?.closest?.(".nifty-position-spine__compact")
+      || event.target?.closest?.(".nifty-position-spine__marker")
+      || event.target?.closest?.(".nifty-position-spine__compact-select")
+      || ladderBrokerBadge?.dataset?.source === "BROKER_POSITION";
+    if (!insideExtensionControl) clearBreakEvenSelection({ repaintStrategyRails: true });
   }
 
   function handleQuickSelection(snapshot) {
@@ -4548,6 +4590,8 @@
       subtree: true
     });
     document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+    document.addEventListener("pointermove", handleDocumentPointerMove, true);
+    document.addEventListener("click", handleDocumentClick, true);
     rootNode().addEventListener("click", handleLadderClick);
     rootNode().addEventListener("dblclick", handleLadderDoubleClick);
     document.addEventListener("keydown", handleDocumentKeyDown);
@@ -4573,6 +4617,9 @@
     clearManualTransientState();
     clearManualPlanRails();
     document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
+    document.removeEventListener("pointermove", handleDocumentPointerMove, true);
+    document.removeEventListener("click", handleDocumentClick, true);
+    outsidePointerGesture = null;
     document.getElementById(LABELS_ID)?.removeEventListener("click", handleLadderClick);
     document.getElementById(LABELS_ID)?.removeEventListener("dblclick", handleLadderDoubleClick);
     document.removeEventListener("keydown", handleDocumentKeyDown);

@@ -3712,7 +3712,7 @@ test("selected strike shows quick BEs while each saved T checkbox owns its BE ra
   assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
     "checking one T never duplicates quick Call and Put rails");
 
-  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  h.document.dispatch("click", { target: { closest() { return null; } } });
   await h.settle();
   rails = h.strategyRails();
   assert.equal(h.rails(), null);
@@ -4514,7 +4514,7 @@ test("broker spine opens one compact P&L card and shows break-even rail only on 
     "broker P&L card stays open after its own rail action");
   assert.equal(rails.querySelector(".nifty-position-spine__rail-toggle").textContent, "HIDE BE RAIL");
 
-  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  h.document.dispatch("click", { target: { closest() { return null; } } });
   await h.settle();
   rails = h.strategyRails();
   assert.equal(rails.querySelectorAll(".nifty-position-spine__be-rail").length, 0,
@@ -5249,7 +5249,7 @@ test("live broker strategy storage update adds exact Call marker and matching la
   assert.match(marker.getAttribute("aria-label"), /Call BUY, 2 lots, strike 23,800/);
 });
 
-test("outside pointer press collapses opened strategy P&L card", async () => {
+test("outside click collapses opened strategy P&L card", async () => {
   const h = chartStrategyHarness();
   await h.settle();
 
@@ -5258,7 +5258,7 @@ test("outside pointer press collapses opened strategy P&L card", async () => {
   await h.settle();
   assert.ok(h.strategyRails().querySelector(".nifty-strategy__trades"), "strategy details start expanded");
 
-  h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  h.document.dispatch("click", { target: { closest() { return null; } } });
   await h.settle();
 
   assert.equal(h.strategyRails(), null,
@@ -7068,7 +7068,7 @@ test("selected rows clear through outside input, Escape, dedicated refresh clear
   await harness.settle();
 
   let row = harness.select();
-  harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  harness.document.dispatch("click", { target: { closest() { return null; } } });
   assert.equal(row.classList.contains("is-selected"), false);
   assert.equal(row.getAttribute("aria-pressed"), "false");
 
@@ -7175,6 +7175,30 @@ test("zoom removing selected strike clears quick break-evens and hidden selectio
   assert.equal(harness.status(), "LIVE");
 });
 
+test("price-axis drag keeps selected strike and remaps its quick break-evens", async () => {
+  const harness = createBreakEvenLifecycleHarness();
+  await harness.settle();
+  const row = harness.select(23750);
+  await harness.settle();
+
+  const chartTarget = { closest() { return null; } };
+  harness.document.dispatch("pointerdown", { target: chartTarget, clientX: 100, clientY: 100 });
+  harness.document.dispatch("pointermove", { target: chartTarget, clientX: 100, clientY: 120 });
+  harness.document.dispatch("click", { target: chartTarget, clientX: 100, clientY: 120 });
+  harness.setAxisPairs([
+    { price: 23900, y: 100 },
+    { price: 23850, y: 120 },
+    { price: 23800, y: 140 },
+    { price: 23750, y: 160 },
+    { price: 23700, y: 180 }
+  ]);
+  await harness.retryPlacement();
+
+  assert.equal(row.getAttribute("aria-pressed"), "true");
+  assert.equal(harness.row(23750).getAttribute("aria-pressed"), "true");
+  assert.equal(harness.rails().children.length, 2);
+});
+
 test("zoom removal clears saved face identity before strike returns", async () => {
   const book = chartStrategyBookWithSameStrikeBroker();
   const harness = createBreakEvenLifecycleHarness({
@@ -7253,7 +7277,7 @@ test("unavailable status overrides later placement while normal status updates u
   await harness.retryPlacement();
   assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
 
-  harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  harness.document.dispatch("click", { target: { closest() { return null; } } });
   assert.equal(harness.status(), "Native axis map is unavailable.");
 });
 
@@ -7333,7 +7357,7 @@ test("clearing an unavailable selection restores the normal status", async () =>
   const row = harness.select(23750);
   assert.equal(harness.status(), "OPTION PRICE UNAVAILABLE");
 
-  harness.document.dispatch("pointerdown", { target: { closest() { return null; } } });
+  harness.document.dispatch("click", { target: { closest() { return null; } } });
   assert.equal(row.classList.contains("is-selected"), false);
   assert.equal(harness.rails(), null);
   assert.equal(harness.status(), normalStatus);
