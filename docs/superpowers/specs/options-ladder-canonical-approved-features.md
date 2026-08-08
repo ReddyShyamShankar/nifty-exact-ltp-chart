@@ -19,9 +19,9 @@ Example:
 
 `[checkbox] T43`
 
-### When the associated saved strike/position is clicked
+### When the associated strike is clicked
 
-When the user clicks the saved strike/position associated with the strategy:
+When the user clicks the strike associated with the strategy:
 
 - Keep the checkbox + strategy tag.
 - Add the strategy breakeven price beside it.
