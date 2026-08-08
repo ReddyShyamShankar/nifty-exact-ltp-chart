@@ -304,7 +304,8 @@ test("renders only genuine finite quotes and never coerces missing values to zer
   for (const invalid of [null, undefined, "", "   ", true, false, Infinity, -Infinity, NaN, "Infinity"]) {
     assert.equal(api.formatRow({ strike: 26000, call: invalid, put: invalid }), "C — | P — | 26,000");
   }
-  assert.equal(api.formatRow({ strike: 26000, call: "12.5", put: 0 }), "C 12.50 | P 0.00 | 26,000");
+  assert.equal(api.formatRow({ strike: 26000, call: "12.5", put: 0 }), "C 12.50 | P — | 26,000");
+  assert.equal(api.formatRow({ strike: 26000, call: "0", put: "12.5" }), "C — | P 12.50 | 26,000");
 });
 
 test("native canvas tick map tolerates two pixels of text raster rounding", () => {

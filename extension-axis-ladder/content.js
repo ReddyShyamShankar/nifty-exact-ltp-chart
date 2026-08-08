@@ -68,12 +68,14 @@
     if (typeof value === "boolean" || value === null || value === undefined) return null;
     if (typeof value === "string" && value.trim() === "") return null;
     const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : null;
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
   }
 
   function openInterest(value) {
-    const numeric = quote(value);
-    return numeric !== null && numeric >= 0 ? numeric : null;
+    if (typeof value === "boolean" || value === null || value === undefined) return null;
+    if (typeof value === "string" && value.trim() === "") return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
   }
 
   function rankOpenInterestRows(rows) {

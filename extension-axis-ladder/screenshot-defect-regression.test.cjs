@@ -290,9 +290,9 @@ test("runtime: unsafe axis projection fails closed", () => {
   }), { mode: "HIDDEN", exact: 24000, reason: "UNSAFE_AXIS" });
 });
 
-test("runtime: nonfinite quote values never become silent zero", () => {
+test("runtime: unavailable and non-positive market quotes never become silent zero", () => {
   assert.equal(content.formatRow({ strike: 24300, call: NaN, put: undefined }), "C — | P — | 24,300");
-  assert.equal(content.formatRow({ strike: 24300, call: 0, put: 0 }), "C 0.00 | P 0.00 | 24,300");
+  assert.equal(content.formatRow({ strike: 24300, call: 0, put: 0 }), "C — | P — | 24,300");
 });
 
 test("runtime: axis zoom rebuild can reuse cached chain without membership cap", async () => {
