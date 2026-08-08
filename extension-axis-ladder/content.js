@@ -2601,6 +2601,7 @@
           return model ? {
             id,
             instrumentKey: model.entries[0]?.instrumentKey,
+            underlying: model.entries[0]?.underlying,
             expiry: model.entries[0]?.expiry,
             entries: model.entries
           } : null;
@@ -2613,7 +2614,7 @@
         controller?.membership()?.rows || [],
         previewOptions
       );
-    if (preview.status !== "OK") return { models: [], preview };
+    if (!Array.isArray(preview.breakEvens) || !preview.breakEvens.length) return { models: [], preview };
     return {
       preview,
       models: strategyPreviewApi.displayLevels(preview, "COMBINED BE").map((level) => ({
@@ -2740,6 +2741,81 @@
     });
     bar.append(summary, compare, save, clear);
     rootNodeValue.append(bar);
+  }
+
+  function combinedMoney(value) {
+    if (value === Infinity) return "+∞";
+    if (value === -Infinity) return "-∞";
+    if (!Number.isFinite(Number(value))) return "—";
+    const numeric = Number(value);
+    const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+    return `${sign}₹${Math.abs(numeric).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  }
+
+  function combinedMarginBasket(selectedIds) {
+    if (!marginEvidenceApi || selectedIds.length < 2 || selectedIds.some((id) => id.includes("::leg::"))) return null;
+    const sortedIds = [...new Set(selectedIds)].sort();
+    const legs = sortedIds.flatMap((id) => strategyStoreApi.legsForStrategy(settings.strategyBook, id));
+    return marginEvidenceApi.resolveBasket(
+      settings.brokerMarginEvidence,
+      `selection:${sortedIds.join("+")}`,
+      legs
+    );
+  }
+
+  function appendCombinedMetric(container, labelText, valueText, tone = "") {
+    const metric = document.createElement("span");
+    metric.className = `nifty-strategy-combined-summary__metric${tone ? ` is-${tone}` : ""}`;
+    const label = document.createElement("span");
+    label.textContent = labelText;
+    const value = document.createElement("strong");
+    value.textContent = valueText;
+    metric.append(label, value);
+    container.append(metric);
+  }
+
+  function renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect) {
+    if (selectedIds.length < 2) return;
+    const panel = document.createElement("section");
+    panel.className = "nifty-strategy-combined-summary";
+    const missingQuoteCount = Array.isArray(preview?.missingQuotes) ? preview.missingQuotes.length : 0;
+    const missingLotCount = Array.isArray(preview?.missingLotSizes) ? preview.missingLotSizes.length : 0;
+    const evidenceStatus = [preview?.status || "INCOMPLETE",
+      missingQuoteCount ? `${missingQuoteCount} missing live quote${missingQuoteCount === 1 ? "" : "s"}` : "",
+      missingLotCount ? `${missingLotCount} missing lot size${missingLotCount === 1 ? "" : "s"}` : ""
+    ].filter(Boolean).join(", ");
+    panel.setAttribute("aria-label", `Combined selected strategy summary, ${evidenceStatus}`);
+    panel.setAttribute("aria-live", "polite");
+    panel.style.left = `${Math.max(8, Number(rect?.left) + 12)}px`;
+    panel.style.top = `${Math.max(8, Number(rect?.top) + 12)}px`;
+    const labels = selectedIds.map((id) => strategyStoreApi.strategyById(settings.strategyBook, id)?.label || id);
+    const title = document.createElement("strong");
+    title.className = "nifty-strategy-combined-summary__title";
+    title.textContent = `COMBINED · ${labels.join(" + ")}`;
+    panel.append(title);
+
+    const metrics = document.createElement("span");
+    metrics.className = "nifty-strategy-combined-summary__metrics";
+    const breakEvens = Array.isArray(preview?.breakEvens) ? preview.breakEvens : [];
+    if (breakEvens.length === 1) {
+      appendCombinedMetric(metrics, "BE", Math.round(breakEvens[0]).toLocaleString("en-IN"));
+    } else if (breakEvens.length === 2) {
+      appendCombinedMetric(metrics, "BE LOW", Math.round(breakEvens[0]).toLocaleString("en-IN"));
+      appendCombinedMetric(metrics, "BE HIGH", Math.round(breakEvens[1]).toLocaleString("en-IN"));
+    } else if (breakEvens.length > 2) {
+      breakEvens.forEach((value, index) => appendCombinedMetric(
+        metrics, `BE ${index + 1}`, Math.round(value).toLocaleString("en-IN")
+      ));
+    } else {
+      appendCombinedMetric(metrics, "BE", "—");
+    }
+    appendCombinedMetric(metrics, "MAX PROFIT", combinedMoney(preview?.maxProfit), "profit");
+    appendCombinedMetric(metrics, "MAX LOSS", combinedMoney(preview?.maxLoss), "loss");
+    appendCombinedMetric(metrics, "WIN RATE", Number.isFinite(preview?.winRate) ? `${preview.winRate.toFixed(1)}%` : "—");
+    const basket = combinedMarginBasket(selectedIds);
+    appendCombinedMetric(metrics, "MARGIN REQUIRED", marginEvidenceApi?.formatMoney?.(basket?.total) || "—", "margin");
+    panel.append(metrics);
+    rootNodeValue.append(panel);
   }
 
   function appendStrategyDetails(card, model) {
@@ -3241,10 +3317,11 @@
     const chartOriginals = showStrategyBreakEvens
       ? manualOriginals.filter((model) => manualFaceOwnerIds.has(model.strategyId))
       : [];
-    const { models: combined, preview } = showStrategyBreakEvens && strategySelectionActive
+    const hasCombinedSelection = selectedIds.length >= 2;
+    const { models: combined, preview } = hasCombinedSelection
       ? combinedStrategyModels(originals)
       : { models: [], preview: null };
-    const previewingCombined = showStrategyBreakEvens && selectedIds.length >= 2 && combined.length > 0;
+    const previewingCombined = hasCombinedSelection && combined.length > 0;
     const showComparedOriginalRails = previewingCombined && strategyChartController.comparing();
     const models = [
       ...chartOriginals.map((model) => ({
@@ -3321,6 +3398,7 @@
     const cardById = new Map(cards.map((card) => [card.id, card]));
     const rootNodeValue = strategyRailsRoot();
     rootNodeValue.replaceChildren();
+    renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect);
     renderStrategyPreviewBar(rootNodeValue, preview, selectedIds.length);
     const ladderLeft = Math.max(Number(rect.left), Math.min(Number(rect.right), Number(labelRight) || Number(rect.right)));
     const spineLayout = positionSpineLayout(ladderLeft, rect, window.innerWidth);

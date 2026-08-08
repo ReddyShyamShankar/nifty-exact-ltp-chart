@@ -33,11 +33,12 @@ test("extension card and toolbar preserve original Options Ladder logo", () => {
 
 test("manual strategy and premium-history modules load before content in dependency order", () => {
   const scripts = manifest.content_scripts.find((entry) => entry.js.includes("content.js")).js;
-  assert.deepEqual(scripts.slice(-14), [
+  assert.deepEqual(scripts.slice(-15), [
     "manual-plan.js",
     "manual-payoff.js",
     "manual-interaction.js",
     "manual-ui.js",
+    "seller-risk.js",
     "strategy-store.js",
     "strategy-preview.js",
     "strategy-chart.js",

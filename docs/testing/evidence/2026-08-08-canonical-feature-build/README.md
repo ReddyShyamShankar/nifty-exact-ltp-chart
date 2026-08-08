@@ -18,3 +18,10 @@ Validation path: reload unpacked extension, reload TradingView, run explicit pop
 - `feature-3-margin-detail-no-duplicates.png`: live Chrome after saved-strike click and T44 click. Existing card contains individual-leg `MARGIN —` plus combined `MARGIN REQUIRED —`; disconnected broker fails closed. Expanded card contains every row, persistent T44 control is temporarily hidden while card is open, and quick BE labels retain visible clearance.
 - `feature-3-broker-funds-three-fields.png`: live Chrome side panel shows exactly `AVAILABLE MARGIN`, `USED MARGIN`, and `AVAILABLE CASH`. Disconnected Zerodha displays `—` for all three without estimates.
 - Contract evidence verifies original saved premiums/legs/quantities, exact NFO instrument resolution, broker hedge-aware `final.total`, selected-strategy combined basket requests, stale fingerprint rejection, manual-refresh-only calls, and absence of every order-placement route.
+
+## Feature 4 — combined on-chart strategy summary
+
+- `feature-4-combined-summary-no-duplicates.png`: live Chrome after selecting T48 + T51 directly from persistent chart checkboxes with no strike click. One compact summary shows real saved-basket `BE LOW 23,355`, `BE HIGH 25,045`, `MAX PROFIT +₹9,409`, and `MAX LOSS -∞`.
+- `WIN RATE —` remains fail-closed because no current side-console win-rate evidence exists. `MARGIN REQUIRED —` remains fail-closed because Zerodha is disconnected. One missing live quote marks current P&L preview `INCOMPLETE` without hiding saved payoff evidence.
+- Human-eye inspection found no clipping, overlapping card/ladder rows, duplicate strategy tokens, or duplicate summary. Live DOM count confirms one summary, two exact combined BE cards/rails, one visible T48 token, and one visible T51 token.
+- Deselecting from two strategies to one removes summary immediately; explicit popup refresh remains only quote-refresh boundary.

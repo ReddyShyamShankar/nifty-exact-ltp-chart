@@ -7,6 +7,9 @@
   const manualPayoff = typeof module !== "undefined" && module.exports
     ? require("./manual-payoff.js")
     : root.NiftyManualPayoff;
+  const sellerRisk = typeof module !== "undefined" && module.exports
+    ? require("./seller-risk.js")
+    : root.NiftySellerRisk;
 
   function createSelection() {
     return { selectedIds: [], compare: false };
@@ -41,6 +44,9 @@
       entries: [],
       breakEvens: [],
       currentPnl: null,
+      maxProfit: null,
+      maxLoss: null,
+      winRate: null,
       knownCharges: 0,
       chargesComplete: false,
       disclosure: null,
@@ -61,17 +67,14 @@
     const ids = [...new Set(selected.map((item) => item.id).filter(Boolean))];
     if (ids.length < 2) return emptyResult("SELECT_MORE", ids);
     const first = selected[0];
-    if (!first || selected.some((item) => item.instrumentKey !== first.instrumentKey
-      || item.expiry !== first.expiry || !Array.isArray(item.entries))) {
+    const groupUnderlying = (item) => item?.underlying || item?.entries?.[0]?.underlying || "";
+    const firstUnderlying = groupUnderlying(first);
+    if (!first || selected.some((item) => item.expiry !== first.expiry
+      || !Array.isArray(item.entries)
+      || (firstUnderlying && groupUnderlying(item)
+        ? groupUnderlying(item) !== firstUnderlying
+        : item.instrumentKey !== first.instrumentKey))) {
       return emptyResult("INCOMPATIBLE", ids);
-    }
-
-    const quoteUpdatedAt = Date.parse(options.quoteUpdatedAt || "");
-    const now = Date.parse(options.now || new Date().toISOString());
-    const maxQuoteAgeMs = Number(options.maxQuoteAgeMs);
-    if (Number.isFinite(quoteUpdatedAt) && Number.isFinite(now) && Number.isFinite(maxQuoteAgeMs)
-      && maxQuoteAgeMs >= 0 && now - quoteUpdatedAt > maxQuoteAgeMs) {
-      return emptyResult("INCOMPLETE", ids, { disclosure: "LIVE QUOTES STALE · REFRESH REQUIRED" });
     }
 
     const entries = [...new Map(selected.flatMap((item) => item.entries)
@@ -95,7 +98,7 @@
     const knownCharges = entries.reduce((sum, entry) => sum + chargeTotal(entry), 0);
     const chargesComplete = entries.every((entry) => entry.chargesComplete === true);
     const disclosure = chargesComplete ? null : "EXCLUDING UNKNOWN CHARGES";
-    if (missingQuotes.length || missingLotSizes.length) {
+    if (missingLotSizes.length) {
       return emptyResult("INCOMPLETE", ids, {
         entries,
         knownCharges,
@@ -106,36 +109,61 @@
       });
     }
 
-    const pnls = entries.map((entry) => manualPayoff.positionPnl(entry, liveRows.get(entry.id)));
-    if (pnls.some((value) => value === null)) {
+    const breakEvenResult = manualPayoff.breakEvens(entries, knownCharges);
+    const riskMap = sellerRisk?.currentRiskMap?.({
+      legs: entries.map((entry) => ({
+        id: entry.id,
+        strike: entry.strike,
+        optionType: entry.optionType === "CALL" ? "CE" : "PE",
+        signedLots: entry.direction === "BUY" ? entry.lots : -entry.lots,
+        lotSize: manualPayoff.lotSizeForEntry(entry),
+        entryPrice: entry.premium
+      })),
+      charges: knownCharges
+    });
+    const savedEvidence = {
+      entries,
+      breakEvens: breakEvenResult.status === "invalid" ? [] : breakEvenResult.points,
+      maxProfit: riskMap?.status === "INVALID_INPUT" ? null : riskMap?.maxProfit ?? null,
+      maxLoss: riskMap?.status === "INVALID_INPUT" ? null : riskMap?.maxLoss ?? null,
+      winRate: null,
+      knownCharges,
+      chargesComplete,
+      disclosure,
+      missingQuotes,
+      missingLotSizes
+    };
+    if (breakEvenResult.status === "invalid") return emptyResult("INCOMPLETE", ids, savedEvidence);
+
+    const quoteUpdatedAt = Date.parse(options.quoteUpdatedAt || "");
+    const now = Date.parse(options.now || new Date().toISOString());
+    const maxQuoteAgeMs = Number(options.maxQuoteAgeMs);
+    if (Number.isFinite(quoteUpdatedAt) && Number.isFinite(now) && Number.isFinite(maxQuoteAgeMs)
+      && maxQuoteAgeMs >= 0 && now - quoteUpdatedAt > maxQuoteAgeMs) {
       return emptyResult("INCOMPLETE", ids, {
-        entries,
-        knownCharges,
-        chargesComplete,
-        disclosure,
-        missingQuotes,
-        missingLotSizes
+        ...savedEvidence,
+        currentPnl: null,
+        disclosure: "LIVE QUOTES STALE · REFRESH REQUIRED"
       });
     }
-    const breakEvenResult = manualPayoff.breakEvens(entries, knownCharges);
-    if (breakEvenResult.status === "invalid") {
-      return emptyResult("INCOMPLETE", ids, {
-        entries,
-        knownCharges,
-        chargesComplete,
-        disclosure,
-        missingQuotes,
-        missingLotSizes
-      });
+    if (missingQuotes.length) return emptyResult("INCOMPLETE", ids, savedEvidence);
+
+    const pnls = entries.map((entry) => manualPayoff.positionPnl(entry, liveRows.get(entry.id)));
+    if (pnls.some((value) => value === null)) {
+      return emptyResult("INCOMPLETE", ids, savedEvidence);
     }
     return {
       status: "OK",
       selectedIds: ids,
       instrumentKey: first.instrumentKey,
+      underlying: firstUnderlying,
       expiry: first.expiry,
       entries,
       breakEvens: breakEvenResult.points,
       currentPnl: pnls.reduce((sum, value) => sum + value, 0) - knownCharges,
+      maxProfit: savedEvidence.maxProfit,
+      maxLoss: savedEvidence.maxLoss,
+      winRate: null,
       knownCharges,
       chargesComplete,
       disclosure,
@@ -154,6 +182,7 @@
     return buildPreviewFromGroups(strategies.map((strategy) => ({
       id: strategy.id,
       instrumentKey: strategy.instrumentKey,
+      underlying: strategy.underlying,
       expiry: strategy.expiry,
       entries: strategyStore.legsForStrategy(book, strategy.id)
     })), quoteRows, options);

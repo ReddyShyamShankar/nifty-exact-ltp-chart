@@ -1587,6 +1587,44 @@
   pointer-events: auto;
 }
 
+.nifty-strategy-combined-summary {
+  position: fixed;
+  z-index: 4;
+  box-sizing: border-box;
+  width: 280px;
+  padding: 10px;
+  border: 1px solid var(--plan-line);
+  border-radius: 4px;
+  background: var(--plan-surface);
+  color: var(--plan-ink);
+  font: 700 11px/1.35 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+}
+
+.nifty-strategy-combined-summary__title {
+  display: block;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--plan-line);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.nifty-strategy-combined-summary__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  padding-top: 9px;
+}
+
+.nifty-strategy-combined-summary__metric { min-width: 0; }
+.nifty-strategy-combined-summary__metric > span,
+.nifty-strategy-combined-summary__metric > strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nifty-strategy-combined-summary__metric > span { color: var(--theme-ink-dim); font-size: 9px; letter-spacing: .04em; }
+.nifty-strategy-combined-summary__metric > strong { margin-top: 2px; font-size: 12px; }
+.nifty-strategy-combined-summary__metric.is-profit > strong { color: var(--pnl-profit); }
+.nifty-strategy-combined-summary__metric.is-loss > strong { color: var(--pnl-loss); }
+.nifty-strategy-combined-summary__metric.is-margin > strong { color: var(--theme-warn); }
+
 .nifty-strategy-preview button,
 .nifty-strategy-owner button {
   padding: 3px 6px;

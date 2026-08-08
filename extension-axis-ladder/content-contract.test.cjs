@@ -3655,6 +3655,29 @@ test("manual-only strategies keep shared position spine and T labels visible wit
     .map((node) => node.textContent).sort(), ["T1", "T2"]);
 });
 
+test("two persistent T checkboxes render combined evidence without a strike click", async () => {
+  const book = chartStrategyBook();
+  const h = createBreakEvenLifecycleHarness({
+    strategyBook: book,
+    manualEntries: Object.values(book.legs)
+  });
+  await h.settle();
+
+  assert.equal(h.rails(), null, "workflow starts with no saved strike selected");
+  for (const selector of h.strategyRails().querySelectorAll(".nifty-position-spine__compact-select")) {
+    selector.dispatch("click", { detail: 0, stopPropagation() {} });
+    await h.settle();
+  }
+
+  const rails = h.strategyRails();
+  const summary = rails.querySelector(".nifty-strategy-combined-summary");
+  assert.ok(summary, "2+ persistent T selections automatically render chart summary");
+  assert.match(summary.textContent, /COMBINED · T1 \+ T2/);
+  assert.match(summary.textContent, /BE LOW23,600/);
+  assert.match(summary.textContent, /BE HIGH24,000/);
+  assert.equal(h.rails(), null, "combined selection never invents a saved-strike click");
+});
+
 async function selectEveryReachableStrategy(h) {
   for (let guard = 0; guard < 8; guard += 1) {
     const selector = h.strategyRails()?.querySelectorAll(".nifty-strategy__selector")
@@ -4140,6 +4163,13 @@ test("production strategy rails open details, synchronize squares, preview combi
     "COMBINED BE 23,600", "COMBINED BE 24,000",
     "T1 BE 23,900", "T2 BE 23,700 | Margin —"
   ]);
+  const combinedSummary = rails.querySelector(".nifty-strategy-combined-summary");
+  assert.ok(combinedSummary, "2+ selected strategies automatically render compact on-chart basket summary");
+  for (const label of ["COMBINED · T1 + T2", "BE LOW", "BE HIGH", "MAX PROFIT", "MAX LOSS", "WIN RATE", "MARGIN REQUIRED"]) {
+    assert.match(combinedSummary.textContent, new RegExp(label.replace(/[+]/g, "\\+")));
+  }
+  assert.match(combinedSummary.textContent, /WIN RATE—/, "missing side-console win-rate evidence is never invented");
+  assert.match(combinedSummary.textContent, /MARGIN REQUIRED—/, "missing broker basket margin fails closed");
   assert.ok(rails.querySelector(".nifty-strategy-preview"));
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
     .filter((node) => node.classList.contains("is-original")).length, 0);

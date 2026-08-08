@@ -86,6 +86,9 @@ test("known charges shift combined break-evens and current P&L", () => {
   assert.equal(result.knownCharges, 4);
   assert.equal(result.chargesComplete, true);
   assert.equal(result.disclosure, null);
+  assert.equal(result.maxProfit, 16);
+  assert.equal(result.maxLoss, -Infinity);
+  assert.equal(result.winRate, null, "win rate stays unavailable until side-console evidence exists");
 });
 
 test("preview uses each 25/50 contract size and subtracts charges as rupees", () => {
@@ -166,11 +169,21 @@ test("mixed instrument or expiry selection is rejected", () => {
   assert.deepEqual(result.breakEvens, []);
 });
 
+test("same underlying and expiry combine across legacy manual and broker instrument keys", () => {
+  const book = twoStrategyBook({ instrumentKey: "BROKER:NFO:NIFTY", underlying: "NIFTY" });
+  const result = preview.buildPreview(book, ["s1", "s2"], [{ strike: 100, call: 8, put: 8 }]);
+  assert.equal(result.status, "OK");
+  assert.equal(result.underlying, "NIFTY");
+  assert.deepEqual(result.breakEvens, [84, 116]);
+});
+
 test("missing live quote preserves selection but blocks economics", () => {
   const result = preview.buildPreview(twoStrategyBook(), ["s1", "s2"], [{ strike: 100, call: 8, put: 0 }], { lotSize: 1 });
   assert.equal(result.status, "INCOMPLETE");
-  assert.deepEqual(result.breakEvens, []);
+  assert.deepEqual(result.breakEvens, [84, 116], "saved-entry break-evens remain available without a live quote");
   assert.equal(result.currentPnl, null);
+  assert.equal(result.maxProfit, 16);
+  assert.equal(result.maxLoss, -Infinity);
   assert.deepEqual(result.missingQuotes, [{ legId: "put", strike: 100, optionType: "PUT" }]);
 });
 
@@ -189,7 +202,9 @@ test("stale live quote timestamp preserves selection but blocks combined economi
   assert.equal(result.status, "INCOMPLETE");
   assert.deepEqual(result.selectedIds, ["s1", "s2"]);
   assert.equal(result.disclosure, "LIVE QUOTES STALE · REFRESH REQUIRED");
-  assert.deepEqual(result.breakEvens, []);
+  assert.deepEqual(result.breakEvens, [84, 116], "manual refresh boundary blocks live P&L, not saved payoff evidence");
+  assert.equal(result.maxProfit, 16);
+  assert.equal(result.maxLoss, -Infinity);
 });
 
 test("unknown charges are disclosed, never guessed", () => {
