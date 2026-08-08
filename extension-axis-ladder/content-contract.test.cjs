@@ -105,8 +105,9 @@ test("Put labels use danger red while strike keeps warning orange", () => {
   assert.match(contentSource, /layout\.strike, labels\.strike, colors\.accent/);
 });
 
-test("OI rank badges use a separate top band and cannot collide with position badges", () => {
+test("OI rank badges use a separate top band and hide when that band collides with another row", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const wrapper = css.match(/\.nifty-axis-ladder__oi-badges\s*\{[\s\S]*?\}/)?.[0] || "";
   const call = css.match(/\.nifty-axis-ladder__oi-badge\.is-call\s*\{[\s\S]*?\}/)?.[0] || "";
   const put = css.match(/\.nifty-axis-ladder__oi-badge\.is-put\s*\{[\s\S]*?\}/)?.[0] || "";
@@ -119,8 +120,13 @@ test("OI rank badges use a separate top band and cannot collide with position ba
   assert.match(wrapper, /left:\s*auto/);
   assert.match(wrapper, /display:\s*flex/);
   assert.match(wrapper, /pointer-events:\s*none/);
+  assert.match(css, /\.nifty-axis-ladder__oi-badges\[hidden\]\s*\{\s*display:\s*none/,
+    "hidden OI groups must stop painting even though the base rule uses flex");
   assert.match(call, /background:\s*var\(--theme-accent\)/);
   assert.match(put, /background:\s*var\(--theme-danger\)/);
+  assert.match(source, /const visibleRowRects = elements/);
+  assert.match(source, /oiBadges\.hidden = visibleRowRects\.some/,
+    "dense TradingView geometry hides OI evidence instead of covering a neighboring premium row");
 });
 
 test("rows owning C/P position badges render above neighboring ladder rows", () => {
@@ -2193,7 +2199,7 @@ test("new content has no collision spreading or Pine input synchronization path"
   assert.match(source, /chain:\s*controller\.chain\(\)/);
 });
 
-test("manual plan disclosure keeps previous black cards with full-row profit and loss color in both themes", () => {
+test("manual plan disclosure follows chart theme with full-row profit and loss color", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const light = css.match(/#nifty-axis-ladder\[data-theme="light"\]\s*\{([^}]+)\}/)?.[1] || "";
@@ -2209,8 +2215,10 @@ test("manual plan disclosure keeps previous black cards with full-row profit and
   assert.match(css, /--pnl-loss-soft:\s*rgba\(248, 113, 113, 0\.10\)/);
   assert.match(css, /--plan-surface:\s*#111113/);
   assert.match(css, /--plan-ink:\s*#f4f4f5/);
-  assert.doesNotMatch(light, /--pnl-(?:profit|loss)/);
-  assert.doesNotMatch(light, /--plan-(?:surface|ink)/);
+  assert.match(light, /--pnl-profit:\s*#066647/);
+  assert.match(light, /--pnl-loss:\s*#dc2626/);
+  assert.match(light, /--plan-surface:\s*#ffffff/);
+  assert.match(light, /--plan-ink:\s*#18181b/);
   assert.match(css, /--ladder-surface:\s*var\(--theme-panel\)/);
   assert.match(css, /--ladder-atm:\s*var\(--theme-warn\)/);
   assert.match(css, /--ladder-buy:\s*var\(--theme-accent\)/);
@@ -2419,11 +2427,12 @@ test("matching saved strategy keeps separate token and never rewrites quick brea
     .filter((node) => node.classList.contains("is-strategy")).length, 1);
 });
 
-test("light warning surfaces use white text while ATM lot badge stays black with white text", () => {
+test("light selected rows use dark text on translucent warning while ATM lot badge stays high contrast", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const light = css.match(/#nifty-axis-ladder\[data-theme="light"\]\s*\{([^}]+)\}/)?.[1] || "";
   assert.match(light, /--ladder-atm-ink:\s*#ffffff/);
-  assert.match(light, /--ladder-selected-ink:\s*#ffffff/);
+  assert.match(light, /--ladder-selected:\s*var\(--theme-warn-soft\)/);
+  assert.match(light, /--ladder-selected-ink:\s*#18181b/);
   assert.match(css, /--ladder-atm-badge:\s*#111113/);
   assert.match(css, /--ladder-atm-badge-ink:\s*#f4f4f5/);
 });
@@ -2704,6 +2713,18 @@ test("strategy chart CSS uses existing tokens and square selector in both themes
   assert.match(strategyCss, /\.nifty-strategy__trade\.is-profit[\s\S]*?var\(--pnl-profit\)/);
   assert.match(strategyCss, /\.nifty-strategy__trade\.is-loss[\s\S]*?var\(--pnl-loss\)/);
   assert.doesNotMatch(strategyCss, /#[0-9a-f]{3,8}\b/i);
+});
+
+test("light chart theme gives strategy evidence light surfaces and non-obscuring selected rows", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  const light = css.match(/#nifty-axis-ladder\[data-theme="light"\]\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+  assert.match(light, /--plan-surface:\s*#ffffff/);
+  assert.match(light, /--plan-ink:\s*#18181b/);
+  assert.match(light, /--plan-line:\s*#d4d4d8/);
+  assert.match(light, /--ladder-selected:\s*var\(--theme-warn-soft\)/);
+  assert.match(light, /--ladder-selected-ink:\s*#18181b/);
+  assert.match(css, /\.nifty-strategy__card\.is-combined\.is-collapsed \.nifty-strategy__label\s*\{[\s\S]*?width:\s*auto[\s\S]*?font:\s*800 9px/);
+  assert.match(css, /\.nifty-strategy-preview button:disabled\s*\{[\s\S]*?cursor:\s*not-allowed[\s\S]*?opacity:\s*0\.55/);
 });
 
 test("preview actions read as white outlined buttons and combined label keeps white text", () => {
@@ -4174,9 +4195,14 @@ test("production strategy rails open details, synchronize squares, preview combi
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
     .filter((node) => node.classList.contains("is-original")).length, 0);
 
-  rails.querySelector(".nifty-strategy-preview__compare").dispatch("click", { stopPropagation() {} });
+  const compare = rails.querySelector(".nifty-strategy-preview__compare");
+  h.document.dispatch("pointerdown", { target: compare });
+  h.document.dispatch("click", { target: compare });
+  compare.dispatch("click", { stopPropagation() {} });
   await h.settle();
   rails = h.strategyRails();
+  assert.ok(rails.querySelector(".nifty-strategy-preview"),
+    "real pointer sequence on Compare cannot clear selected strategy basket");
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
     .filter((node) => node.classList.contains("is-original")).length, 2,
     "Compare restores original rails beside combined roots");
@@ -4783,6 +4809,9 @@ test("broker card CLOSE preserves an independent open plus group and exact strat
     .querySelector(".nifty-position-spine__cluster-row-select")
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
+  h.strategyRails().querySelector(".nifty-position-spine__cluster-select")
+    .dispatch("click", { stopPropagation() {} });
+  await h.settle();
   h.strategyRails().querySelector(".nifty-position-spine__rail-toggle")
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
@@ -5135,8 +5164,12 @@ test("colliding manual and broker Calls collapse through restored Call-only posi
 
   rails = h.strategyRails();
   selector = rails.querySelector(".nifty-position-spine__cluster-select");
-  assert.equal(selector.getAttribute("aria-expanded"), "true",
-    "selecting exact T identity keeps grouped choices open");
+  assert.equal(selector.getAttribute("aria-expanded"), "false",
+    "selecting exact T identity closes grouped choices so they cannot cover chart evidence");
+  assert.equal(rails.querySelector(".nifty-position-spine__cluster-flyout"), null);
+  selector.dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
   const selectedFlyout = rails.querySelector(".nifty-position-spine__cluster-flyout");
   const selectedManual = selectedFlyout.querySelectorAll(".nifty-position-spine__cluster-row")
     .find((row) => row.textContent.startsWith("T1 "));

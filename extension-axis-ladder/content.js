@@ -3269,6 +3269,8 @@
           itemSelector.setAttribute("aria-label", `${ensureStrategyChartController()?.isSelected(item.strategyId) ? "Clear" : "Select"} ${item.label} for combined preview`);
           itemSelector.addEventListener("click", (event) => {
             event.stopPropagation?.();
+            openedEdgeGroupKey = null;
+            removeOpenedPositionGroupDom();
             ensureStrategyChartController()?.square(item.strategyId);
           });
           const openItem = document.createElement("button");
@@ -4339,7 +4341,10 @@
     const priorVisibility = node.style.visibility;
     node.hidden = false;
     node.style.visibility = "hidden";
-    elements.forEach(({ element }) => { element.hidden = false; });
+    elements.forEach(({ element }) => {
+      element.hidden = false;
+      element.querySelector?.(".nifty-axis-ladder__oi-badges")?.removeAttribute?.("hidden");
+    });
     try {
       const dimensions = elements.map(({ element }) => {
         const bounds = element.getBoundingClientRect();
@@ -4377,6 +4382,18 @@
         element.style.zIndex = element.classList.contains("has-lot-badges")
           ? String(100 + Math.round(row.y))
           : "";
+      });
+      const visibleRowRects = elements
+        .filter(({ element }) => !element.hidden)
+        .map(({ element }) => ({ element, rect: element.getBoundingClientRect() }));
+      visibleRowRects.forEach(({ element }) => {
+        const oiBadges = element.querySelector?.(".nifty-axis-ladder__oi-badges");
+        if (!oiBadges) return;
+        oiBadges.hidden = false;
+        const badgeRect = oiBadges.getBoundingClientRect();
+        oiBadges.hidden = visibleRowRects.some(({ element: other, rect }) => other !== element
+          && badgeRect.left < rect.right && badgeRect.right > rect.left
+          && badgeRect.top < rect.bottom && badgeRect.bottom > rect.top);
       });
       premiumChartPlacement = { toY, plotRect: rect };
       const premiumState = premiumHistoryPane?.state?.();
@@ -4588,6 +4605,7 @@
       || event.target?.closest?.(".nifty-edge-stack__flyout");
     const insidePositionGroup = event.target?.closest?.(".nifty-position-spine__cluster")
       || event.target?.closest?.(".nifty-position-spine__cluster-flyout");
+    const insideStrategyPreview = event.target?.closest?.(".nifty-strategy-preview");
     const insideBrokerCard = event.target?.closest?.(".nifty-position-spine__card");
     const ladderBrokerBadge = event.target?.closest?.(".nifty-axis-ladder__badge");
     const insideBrokerControl = event.target?.closest?.(".nifty-position-spine__compact")
@@ -4602,7 +4620,8 @@
       && !insideBrokerCard
       && !insideBrokerControl
       && !insideEdgeStack
-      && !insidePositionGroup;
+      && !insidePositionGroup
+      && !insideStrategyPreview;
     if (event.target?.closest?.(".nifty-manual-plan__label.is-flippable")) {
       if (outsideStrategyCard) collapseOpenedStrategyDetails();
       return;
@@ -4651,6 +4670,7 @@
       || event.target?.closest?.(".nifty-position-spine__compact")
       || event.target?.closest?.(".nifty-position-spine__marker")
       || event.target?.closest?.(".nifty-position-spine__compact-select")
+      || event.target?.closest?.(".nifty-strategy-preview")
       || ladderBrokerBadge?.dataset?.source === "BROKER_POSITION";
     if (!insideExtensionControl) clearBreakEvenSelection({ repaintStrategyRails: true });
   }

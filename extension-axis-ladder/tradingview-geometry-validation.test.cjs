@@ -53,6 +53,9 @@ test("TVG-006 strategy rail and ladder-row separation", () => {
 test("TVG-007 OI badge and position badge separation", () => {
   assert.match(css, /\.nifty-axis-ladder__badges\s*\{[\s\S]*?top:\s*-13px/);
   assert.match(css, /\.nifty-axis-ladder__oi-badges\s*\{[\s\S]*?top:\s*-31px/);
+  assert.match(css, /\.nifty-axis-ladder__oi-badges\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(source, /const visibleRowRects = elements/);
+  assert.match(source, /oiBadges\.hidden = visibleRowRects\.some/);
 });
 
 test("TVG-008 break-even text and position-lane separation", () => {

@@ -69,10 +69,18 @@
   --theme-danger-soft: rgba(220, 38, 38, 0.08);
   --theme-warn: #b45309;
   --theme-warn-soft: rgba(180, 83, 9, 0.10);
+  --pnl-profit: #066647;
+  --pnl-profit-soft: rgba(5, 150, 105, 0.10);
+  --pnl-loss: #dc2626;
+  --pnl-loss-soft: rgba(220, 38, 38, 0.08);
+  --plan-surface: #ffffff;
+  --plan-line: #d4d4d8;
+  --plan-ink: #18181b;
   --ladder-atm-ink: #ffffff;
   --ladder-buy-ink: #ffffff;
   --ladder-sell-ink: #ffffff;
-  --ladder-selected-ink: #ffffff;
+  --ladder-selected: var(--theme-warn-soft);
+  --ladder-selected-ink: #18181b;
   --ladder-history-selected: #18181b;
   --ladder-history-selected-ink: #f4f4f5;
 }
@@ -505,7 +513,7 @@
   height: 18px;
   padding: 3px 2px;
   border-radius: 3px;
-  color: #ffffff;
+  color: var(--ladder-buy-ink);
   font: 800 9px/1.2 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -562,6 +570,10 @@
   max-width: calc(100% - 8px);
   gap: 2px;
   pointer-events: none;
+}
+
+.nifty-axis-ladder__oi-badges[hidden] {
+  display: none;
 }
 
 .nifty-axis-ladder__oi-badge {
@@ -962,6 +974,16 @@
   background: var(--pnl-profit);
 }
 
+.nifty-position-spine__cluster-row-select[aria-pressed="true"]::after,
+.nifty-position-spine__compact-select[aria-pressed="true"]::after,
+.nifty-strategy__selector[aria-pressed="true"]::after {
+  display: block;
+  color: var(--ladder-buy-ink);
+  content: "✓";
+  font: 800 9px/1 "Geist Mono", ui-monospace, monospace;
+  text-align: center;
+}
+
 .nifty-position-spine__cluster-row-open {
   flex: 1;
   padding: 0;
@@ -1223,6 +1245,25 @@
   border-color: var(--theme-warn);
   color: var(--plan-ink);
   cursor: default;
+}
+
+.nifty-strategy__card.is-combined.is-collapsed {
+  display: block;
+}
+
+.nifty-strategy__card.is-combined.is-collapsed .nifty-strategy__label {
+  width: auto;
+  min-height: 18px;
+  padding: 3px 6px;
+  overflow: visible;
+  border: 1px solid var(--theme-warn);
+  background: var(--plan-surface);
+  color: var(--plan-ink);
+  font: 800 9px/1.2 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.nifty-strategy__card.is-combined.is-collapsed .nifty-strategy__label::before {
+  content: none;
 }
 
 .nifty-strategy__card.is-collapsed {
@@ -1639,6 +1680,13 @@
 .nifty-strategy-preview button:focus-visible {
   outline: 2px solid var(--plan-ink);
   outline-offset: 1px;
+}
+
+.nifty-strategy-preview button:disabled {
+  border-color: var(--theme-line-2);
+  color: var(--theme-ink-mute);
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .nifty-strategy-preview__compare[aria-pressed="true"] {

@@ -446,7 +446,8 @@ test("design system: profit stays green and loss stays red in both modes", () =>
   assert.match(css, /--pnl-loss:\s*#f87171/);
   assert.match(css, /data-theme="light"[\s\S]*?--theme-accent:\s*#066647/);
   assert.match(css, /data-theme="light"[\s\S]*?--theme-danger:\s*#dc2626/);
-  assert.doesNotMatch(lightTheme, /--pnl-(?:profit|loss):/);
+  assert.match(lightTheme, /--pnl-profit:\s*#066647/);
+  assert.match(lightTheme, /--pnl-loss:\s*#dc2626/);
   assert.match(profitRule, /color:\s*var\(--pnl-profit\)/);
   assert.doesNotMatch(profitRule, /var\(--pnl-loss\)/);
   assert.match(lossRule, /color:\s*var\(--pnl-loss\)/);
