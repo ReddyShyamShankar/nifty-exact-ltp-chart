@@ -1,40 +1,172 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NIFTY Options</title>
+    <title>Options Ladder</title>
+    <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
-        <div class="brand"><span class="mark" aria-hidden="true"></span><span>NIFTY OPTIONS</span><span class="brand-sub mono">/ chart</span></div>
-        <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show on chart"><i></i></button>
+        <div class="topbar-head">
+          <div class="side-brand">
+            <img id="popup-mark" src="icons/nifty-mark.svg" alt="" width="18" height="18" />
+            <span>OPTIONS LADDER</span>
+          </div>
+          <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme" aria-pressed="false" title="Switch to light theme">
+            <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+            <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          </button>
+        </div>
+        <nav class="panel-tabs" role="tablist" aria-label="Options ladder views">
+          <button class="panel-tab mono is-active" id="panel-tab-ladder" type="button" role="tab" aria-selected="true" aria-controls="ladder-view">LADDER</button>
+          <button class="panel-tab mono" id="panel-tab-strategies" type="button" role="tab" aria-selected="false" aria-controls="strategies-view">STRATEGIES</button>
+        </nav>
+        <div class="quick-toggle">
+          <div><strong>Show ladder on chart</strong><span class="mono">TV axis contracts</span></div>
+          <button class="toggle" id="enabled" type="button" role="switch" aria-checked="false" aria-label="Show ladder on chart"><i></i></button>
+        </div>
+        <button class="header-refresh mono" id="refresh-all" type="button">
+          <span class="refresh-glyph" aria-hidden="true"></span><span id="refresh-label">REFRESH ALL</span>
+        </button>
       </header>
 
-      <section class="block intro">
-        <div class="block-head"><span class="kicker">TradingView overlay</span><span class="status-pill" id="status">OFF</span></div>
-        <p id="summary">Enable on a supported NIFTY chart. ATM recenters at the exact midpoint on the 2-second refresh.</p>
-        <div class="auto-contract mono">AUTO · 13 STRIKES · EXACT AXIS</div>
-        <p class="auto-note">Widest complete interval. Zoom and pan move positions only.</p>
-        <button class="retry-button" id="retry-placement" type="button">RETRY PLACEMENT</button>
-        <div class="placement-status" id="placement-status" role="status"></div>
+      <section class="strategies-view" id="strategies-view" role="tabpanel" aria-labelledby="panel-tab-strategies" hidden>
+        <div class="strategies-view__head">
+          <div>
+            <span class="strategies-view__eyebrow mono">MY STRATEGIES</span>
+            <strong>Strategy cards</strong>
+          </div>
+          <button class="dashboard-primary mono" id="new-strategy" type="button">＋ NEW STRATEGY</button>
+        </div>
+        <div class="strategy-dashboard" id="strategy-dashboard" aria-live="polite"></div>
       </section>
 
-      <section class="block">
-        <div class="block-head"><span class="kicker">Expiry</span><span class="hint" id="expiry-hint">Loading dates…</span></div>
-        <label class="field"><span>CONTRACT EXPIRY <em>exact NIFTY date</em></span><select id="expiry"><option value="current_month">Current monthly</option></select></label>
+      <div id="ladder-view" role="tabpanel" aria-labelledby="panel-tab-ladder">
+
+      <section class="contract-bar" aria-label="Broker and contract">
+        <div class="broker-state">
+          <strong class="mono" id="broker-line">ZERODHA CHECKING…</strong>
+          <button class="connect-link mono" id="connect-zerodha" type="button" hidden>CONNECT ZERODHA</button>
+        </div>
+        <label class="expiry-control">
+          <select id="expiry" aria-label="Contract expiry"><option value="current_month">Current monthly</option></select>
+          <span class="mono" id="expiry-hint">LOADING…</span>
+        </label>
       </section>
 
-      <section class="block chain-block">
-        <div class="block-head"><span class="kicker">Full option chain</span><span class="hint" id="spot">—</span></div>
-        <div class="chain-head mono"><span>CALL</span><span>STRIKE</span><span>PUT</span></div>
-        <div class="chain" id="chain"><div class="empty">Choose an expiry. Full chain loads here.</div></div>
+      <section class="broker-funds" aria-label="Broker funds">
+        <div><span class="mono">AVAILABLE MARGIN</span><strong class="mono" id="fund-available-margin">—</strong></div>
+        <div><span class="mono">USED MARGIN</span><strong class="mono" id="fund-used-margin">—</strong></div>
+        <div><span class="mono">AVAILABLE CASH</span><strong class="mono" id="fund-available-cash">—</strong></div>
       </section>
 
-      <footer class="foot mono">UPSTOX LTP · INFORMATION ONLY</footer>
+      <section class="strategy-bar" id="strategy-bar" aria-label="Accepted strategy view" hidden>
+        <label class="field-label" for="selected-strategy">Selected strategy</label>
+        <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
+      </section>
+
+      <section class="strategy-manager" id="strategy-manager" aria-label="Strategy versions">
+        <div class="section-heading mono">STRATEGY VERSIONS</div>
+        <div class="strategy-preview-summary mono" id="strategy-preview-summary">NO CHART PREVIEW SELECTED</div>
+        <label class="field-label" for="strategy-book-select">Active strategy</label>
+        <select id="strategy-book-select" aria-label="Active versioned strategy"><option value="">No active strategy</option></select>
+        <div class="strategy-manager__actions">
+          <button class="secondary-button mono" id="strategy-save" type="button">SAVE PREVIEW</button>
+          <button class="secondary-button mono" id="strategy-split" type="button">SPLIT SELECTED LEGS</button>
+          <button class="secondary-button mono" id="strategy-archive" type="button">ARCHIVE</button>
+        </div>
+        <div class="strategy-save-decision" id="strategy-save-decision" hidden>
+          <label class="field-label" for="strategy-save-destination">Save as</label>
+          <select id="strategy-save-destination" aria-label="Permanent save destination"></select>
+          <button class="accept-button mono" id="strategy-save-confirm" type="button">CONFIRM SAVE</button>
+        </div>
+        <div class="strategy-manager__subhead mono">CURRENT LEGS</div>
+        <div class="strategy-manager__list" id="strategy-current-legs"></div>
+        <div class="strategy-manager__subhead mono">VERSION HISTORY</div>
+        <div class="strategy-manager__list" id="strategy-versions"></div>
+        <div class="strategy-manager__subhead mono">LEDGER HISTORY</div>
+        <div class="strategy-manager__list" id="strategy-ledger-history"></div>
+      </section>
+
+      <section class="risk-summary" id="risk-summary" aria-live="polite">
+        <div class="priority-line mono" id="priority-label">CURRENT RISK</div>
+        <div class="risk-grid breakeven-grid">
+          <div><span class="metric-label">CURRENT RISK · LOWER BE</span><strong class="mono" id="current-lower">—</strong></div>
+          <div><span class="metric-label">CURRENT RISK · UPPER BE</span><strong class="mono" id="current-upper">—</strong></div>
+          <div><span class="metric-label">WHOLE TRADE · LOWER BE</span><strong class="mono" id="whole-lower">—</strong></div>
+          <div><span class="metric-label">WHOLE TRADE · UPPER BE</span><strong class="mono" id="whole-upper">—</strong></div>
+        </div>
+        <div class="whole-status mono" id="whole-status">WITHHELD</div>
+        <div class="risk-grid money-grid">
+          <div><span class="metric-label">LIVE P&amp;L</span><strong class="mono" id="live-pnl">—</strong></div>
+          <div><span class="metric-label">MAX PROFIT</span><strong class="mono" id="max-profit">—</strong></div>
+          <div><span class="metric-label">MAX LOSS</span><strong class="mono" id="max-loss">—</strong></div>
+        </div>
+        <div class="fact-block">
+          <span class="metric-label">WHY IT MOVED</span>
+          <div class="fact-list" id="why-moved"><span>Accept a reviewed snapshot to establish movement facts.</span></div>
+        </div>
+        <div class="warning mono" id="warning">NO ACCEPTED STRATEGY ALLOCATION.</div>
+      </section>
+
+      <section class="review-panel" id="review-panel" hidden>
+        <div class="section-heading mono">REVIEW POSITION &amp; TRADE EVIDENCE</div>
+        <label class="field-label" for="strategy-name">Create one-expiry strategy</label>
+        <div class="inline-form">
+          <input id="strategy-name" type="text" maxlength="48" autocomplete="off" placeholder="Strategy name" />
+          <button class="secondary-button mono" id="create-strategy" type="button">CREATE</button>
+        </div>
+        <div class="allocation-list" id="allocation-list"></div>
+        <button class="secondary-button wide mono" id="allocate-lots" type="button">ALLOCATE LOTS</button>
+        <div class="trade-review-list" id="trade-review-list"></div>
+        <button class="secondary-button wide mono" id="assign-trades" type="button" hidden>ASSIGN REVIEWED TRADES</button>
+        <label class="file-field" for="tradebook-csv">
+          <span>ZERODHA TRADEBOOK CSV</span>
+          <input id="tradebook-csv" type="file" accept=".csv,text/csv" />
+        </label>
+        <div class="import-summary mono" id="import-summary">NO CSV IMPORTED</div>
+        <div class="coverage-grid">
+          <label class="field-label" for="coverage-from">Reviewed coverage from<input id="coverage-from" type="date" /></label>
+          <label class="field-label" for="coverage-to">Reviewed coverage to<input id="coverage-to" type="date" /></label>
+        </div>
+        <button class="secondary-button wide mono" id="confirm-coverage" type="button">CONFIRM COVERAGE BOUNDS</button>
+        <button class="accept-button mono" id="accept-snapshot" type="button">ACCEPT REVIEWED SNAPSHOT</button>
+      </section>
+
+      <button class="detail-toggle mono" id="legs-toggle" type="button" aria-expanded="false" aria-controls="legs-panel">
+        <span>POSITION LEGS</span><span aria-hidden="true">›</span>
+      </button>
+      <section class="detail-panel" id="legs-panel" hidden><div id="legs-list"></div></section>
+
+      <button class="detail-toggle mono" id="timeline-toggle" type="button" aria-expanded="false" aria-controls="timeline-panel">
+        <span>WHOLE-TRADE TIMELINE</span><span aria-hidden="true">›</span>
+      </button>
+      <section class="detail-panel" id="timeline-panel" hidden><div id="timeline-list"></div></section>
+
+      <div class="placement-status mono" id="placement-status" role="status">READY · MANUAL REFRESH ONLY</div>
+
+      <button class="advanced-toggle mono" id="advanced-toggle" type="button" aria-expanded="false" aria-controls="advanced-panel">
+        <span>ADVANCED · PLACEMENT &amp; HEALTH</span><span aria-hidden="true">›</span>
+      </button>
+      <section class="advanced-panel" id="advanced-panel" hidden>
+        <button class="secondary-button wide mono" id="retry-placement" type="button">RETRY PLACEMENT</button>
+      </section>
+      </div>
+
+      <footer class="foot mono">READ-ONLY BROKER DATA · INFORMATION ONLY</footer>
     </main>
+    <script src="theme.js"></script>
+    <script src="seller-view-identity.js"></script>
+    <script src="seller-risk.js"></script>
+    <script src="seller-ledger.js"></script>
+    <script src="tradebook-csv.js"></script>
+    <script src="popup-view.js"></script>
+    <script src="strategy-store.js"></script>
+    <script src="strategy-panel.js"></script>
+    <script src="margin-evidence.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

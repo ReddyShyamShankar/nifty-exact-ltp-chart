@@ -1,10 +1,10 @@
 {
   "name": "nifty-options-data-bridge",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test chain-cache.test.js ../extension/expiry-utils.test.cjs ../extension/ladder-utils.test.cjs"
+    "test": "node --test ../extension-axis-ladder/*.test.cjs ./*.test.js"
   }
 }

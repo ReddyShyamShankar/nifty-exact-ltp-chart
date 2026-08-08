@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "NIFTY Axis LTP Ladder",
-  "version": "0.3.8",
-  "description": "Thirteen timeframe-aware NIFTY option LTP rows locked to TradingView price coordinates.",
-  "permissions": ["storage", "activeTab", "debugger"],
+  "minimum_chrome_version": "141",
+  "name": "Options Ladder",
+  "version": "0.6.0",
+  "description": "NIFTY seller safety workflow with reviewed risk maps and exact-axis option ladder.",
+  "permissions": ["storage", "activeTab", "sidePanel"],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
     "https://tradingview.com/*",
@@ -12,10 +13,23 @@
   "background": {
     "service_worker": "background.js"
   },
-  "action": {
-    "default_title": "NIFTY Options",
-    "default_popup": "popup.html"
+  "icons": {
+    "16": "icons/nifty-mark-16.png",
+    "32": "icons/nifty-mark-32.png",
+    "48": "icons/nifty-mark-48.png",
+    "128": "icons/nifty-mark-128.png"
   },
+  "action": {
+    "default_title": "Options Ladder",
+    "default_popup": "action-popup.html",
+    "default_icon": {
+      "16": "icons/nifty-mark-16.png",
+      "32": "icons/nifty-mark-32.png",
+      "48": "icons/nifty-mark-48.png",
+      "128": "icons/nifty-mark-128.png"
+    }
+  },
+  "side_panel": { "default_path": "popup.html" },
   "commands": {
     "_execute_action": {
       "suggested_key": {
@@ -27,13 +41,13 @@
   "content_scripts": [
     {
       "matches": ["https://tradingview.com/*", "https://www.tradingview.com/*"],
-      "js": ["axis-observer.js"],
+      "js": ["axis-observer.js", "time-axis-observer.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
       "matches": ["https://tradingview.com/*", "https://www.tradingview.com/*"],
-      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "content.js"],
+      "js": ["expiry-utils.js", "ladder-utils.js", "overlay-utils.js", "timeframe-ladder.js", "risk-overlay.js", "seller-view-identity.js", "breakeven-rails.js", "tradingview-live-badge.js", "manual-plan.js", "manual-payoff.js", "manual-interaction.js", "manual-ui.js", "seller-risk.js", "strategy-store.js", "strategy-preview.js", "strategy-chart.js", "strategy-panel.js", "margin-evidence.js", "estimated-iv.js", "premium-history-model.js", "premium-chart-trials.js", "premium-history-pane.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }

@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE="NIFTY Options Upstox Analytics Token"
+ZERODHA_API_KEY_SERVICE="NIFTY Options Zerodha API Key"
+ZERODHA_API_SECRET_SERVICE="NIFTY Options Zerodha API Secret"
+ZERODHA_ACCESS_TOKEN_SERVICE="NIFTY Options Zerodha Daily Access Token"
 ACCOUNT="$(id -un)"
 COMMAND="${1:-status}"
 
@@ -20,6 +23,26 @@ configure_token() {
   echo "Token saved in macOS Keychain."
 }
 
+configure_zerodha() {
+  local api_key api_secret
+  printf 'Zerodha API key (hidden): '
+  IFS= read -r -s api_key
+  printf '\n'
+  printf 'Zerodha API secret (hidden): '
+  IFS= read -r -s api_secret
+  printf '\n'
+  if [[ -z "$api_key" || -z "$api_secret" ]]; then
+    unset api_key api_secret
+    echo "Zerodha API key and secret are both required." >&2
+    return 1
+  fi
+  /usr/bin/security add-generic-password -U -a "$ACCOUNT" -s "$ZERODHA_API_KEY_SERVICE" -w "$api_key" >/dev/null
+  /usr/bin/security add-generic-password -U -a "$ACCOUNT" -s "$ZERODHA_API_SECRET_SERVICE" -w "$api_secret" >/dev/null
+  /usr/bin/security delete-generic-password -a "$ACCOUNT" -s "$ZERODHA_ACCESS_TOKEN_SERVICE" >/dev/null 2>&1 || true
+  unset api_key api_secret
+  echo "Zerodha credentials saved in separate macOS Keychain services. Daily access token cleared."
+}
+
 case "$COMMAND" in
   setup)
     configure_token
@@ -30,11 +53,23 @@ case "$COMMAND" in
     configure_token
     node "$ROOT_DIR/data-bridge/bridge-manager.cjs" start
     ;;
+  zerodha-setup)
+    configure_zerodha
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" install
+    ;;
+  extension-origin)
+    if [[ $# -ne 2 ]]; then
+      echo "Usage: bin/nifty-bridge extension-origin chrome-extension://<32-lowercase-id>" >&2
+      exit 2
+    fi
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" origin "$2"
+    node "$ROOT_DIR/data-bridge/bridge-manager.cjs" install
+    ;;
   install|start|status)
     node "$ROOT_DIR/data-bridge/bridge-manager.cjs" "$COMMAND"
     ;;
   *)
-    echo "Usage: bin/nifty-bridge <setup|token|install|start|status>" >&2
+    echo "Usage: bin/nifty-bridge <setup|token|zerodha-setup|extension-origin chrome-extension://ID|install|start|status>" >&2
     exit 2
     ;;
 esac

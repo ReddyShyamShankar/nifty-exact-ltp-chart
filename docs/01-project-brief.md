@@ -1,5 +1,7 @@
 # Project Brief
 
+> **Universal product rule:** Build from instrument metadata, selected expiry, available option contracts, and TradingView axis evidence so same foundation can support any optionable pair, instrument, or index worldwide. NIFTY is current validation market, not core product rule.
+
 ## Problem
 
 Options information is split across chart, option chain, broker positions, and payoff graph. This creates cognitive load even when chart reading is already strong.
@@ -19,14 +21,14 @@ While looking at one TradingView chart, user should understand:
 
 Chart is primary interface. Tables and panels support chart reading; they do not replace it.
 
-## Initial market context
+## Current validation context
 
-- Underlying: NIFTY only for first release.
-- Expiry: monthly only for first release.
+- Current validation instrument: NIFTY.
+- Current validation expiry: monthly.
 - Pricing: last traded price only for first release.
 - Instrument style: index options.
 - User examples: calls, puts, straddles, spreads, short and long legs, expiry-specific positions. Strategy support comes later.
-- Currency and lot size: configurable; do not hard-code from screenshots.
+- Instrument identity, currency, contract step, lot size, and expiry conventions come from market evidence; never hard-code them from screenshots.
 
 ## Out of scope for first version
 
@@ -35,7 +37,7 @@ Chart is primary interface. Tables and panels support chart reading; they do not
 - Trade recommendations.
 - Guaranteed real-time valuation.
 - Full option-chain heatmap across every strike and expiry.
-- US-market support. Revisit after NIFTY foundation works.
+- Additional live market adapters beyond current NIFTY validation.
 
 ## Success test
 

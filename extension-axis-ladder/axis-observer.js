@@ -163,14 +163,45 @@
         if (!cluster || Math.abs(Number(candidate.x) - Number(cluster.at(-1).x)) > 8) xClusters.push([candidate]);
         else cluster.push(candidate);
       }
-      if (xClusters.some((cluster) => dominantLinearCandidates(cluster).length >= 3)) return bursts[index];
+      const models = xClusters.map((cluster) => {
+        const grid = dominantLinearCandidates(cluster);
+        if (grid.length < 3) return null;
+        const first = grid[0];
+        const last = grid.at(-1);
+        const pixelSpan = Number(last.y) - Number(first.y);
+        const priceSpan = Number(last.price) - Number(first.price);
+        if (!pixelSpan || !priceSpan) return null;
+        return {
+          first,
+          pricePerPixel: priceSpan / pixelSpan,
+          x: grid.reduce((total, candidate) => total + Number(candidate.x), 0) / grid.length
+        };
+      }).filter(Boolean);
+      if (!models.length) continue;
+      const compatibleEarlier = bursts.slice(0, index).flat().filter((candidate) => models.some((model) => {
+        if (Math.abs(Number(candidate.x) - model.x) > 8) return false;
+        if (String(candidate.sourceLabel || "") !== String(model.first.sourceLabel || "")) return false;
+        const rect = candidate?.canvasRect;
+        const modelRect = model.first?.canvasRect;
+        if (rect && modelRect && ["left", "top", "right", "bottom"]
+          .some((key) => Math.abs(Number(rect[key]) - Number(modelRect[key])) > 1)) return false;
+        const expected = Number(model.first.price)
+          + (Number(candidate.y) - Number(model.first.y)) * model.pricePerPixel;
+        const allowedError = Math.max(0.01, Math.abs(model.pricePerPixel) * 1.5);
+        return Math.abs(Number(candidate.price) - expected) <= allowedError;
+      }));
+      return [...compatibleEarlier, ...bursts[index]];
     }
     return candidates || [];
   }
 
   function observationEnvelope(candidates, previous = null, at = Date.now()) {
     const labeled = (candidates || []).filter((candidate) => /^Chart for\b/.test(String(candidate?.sourceLabel || "")));
-    const latestBurst = latestAxisPaintBurst(labeled);
+    const sourceLabels = [...new Set(labeled.map((candidate) => candidate.sourceLabel))];
+    const mergePrevious = sourceLabels.length === 1
+      && sourceLabels[0] === previous?.sourceLabel
+      && Array.isArray(previous?.candidates);
+    const latestBurst = latestAxisPaintBurst(mergePrevious ? [...previous.candidates, ...labeled] : labeled);
     const unique = new Map();
     for (const candidate of latestBurst) {
       const rect = candidate?.canvasRect;

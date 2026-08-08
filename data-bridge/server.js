@@ -1,7 +1,16 @@
 import http from "node:http";
 import { spawnSync } from "node:child_process";
 import { userInfo } from "node:os";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import originConfig from "./origin-config.cjs";
 import { createAsyncCache } from "./chain-cache.js";
+import { createHistoryCache } from "./history-cache.js";
+import { createOptionHistoryLoader } from "./option-history.js";
+import { createZerodhaClient } from "./zerodha-client.js";
+import { buildBasketOrders, normalizeBasketMargin, normalizeBrokerFunds, parseNfoInstruments } from "./zerodha-margin.js";
+import { createZerodhaSessionStore, ZERODHA_CALLBACK_FAILURE_MESSAGE } from "./zerodha-session.js";
+import { normalizeNiftyPositions, normalizeNiftyTrades } from "./zerodha-normalize.js";
 
 const PORT = Number(process.env.NIFTY_BRIDGE_PORT || 8787);
 const UPSTOX_CHAIN_URL = "https://api.upstox.com/v2/option/chain";
@@ -16,6 +25,47 @@ let expiryCache = null;
 let candleCache = null;
 let keychainToken = null;
 const chainCache = createAsyncCache({ ttlMs: CHAIN_CACHE_MS });
+const optionHistoryCache = createHistoryCache();
+
+function zerodhaServices() {
+  return {
+    apiKey: process.env.NIFTY_ZERODHA_API_KEYCHAIN_SERVICE || "NIFTY Options Zerodha API Key",
+    apiSecret: process.env.NIFTY_ZERODHA_API_SECRET_KEYCHAIN_SERVICE || "NIFTY Options Zerodha API Secret",
+    accessToken: process.env.NIFTY_ZERODHA_ACCESS_TOKEN_KEYCHAIN_SERVICE || "NIFTY Options Zerodha Daily Access Token"
+  };
+}
+
+function readKeychainSecret(service) {
+  if (process.platform !== "darwin") return null;
+  const result = spawnSync("/usr/bin/security", [
+    "find-generic-password", "-a", userInfo().username, "-s", service, "-w"
+  ], { encoding: "utf8", timeout: 3000 });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
+function writeKeychainSecret(service, secret) {
+  if (process.platform !== "darwin") throw new Error("macOS Keychain is required for Zerodha credentials.");
+  const result = spawnSync("/usr/bin/security", [
+    "add-generic-password", "-U", "-a", userInfo().username, "-s", service, "-w", secret
+  ], { encoding: "utf8", timeout: 3000 });
+  if (result.status !== 0) throw new Error("Could not save Zerodha credential in macOS Keychain.");
+}
+
+function deleteKeychainSecret(service) {
+  if (process.platform !== "darwin") return;
+  spawnSync("/usr/bin/security", [
+    "delete-generic-password", "-a", userInfo().username, "-s", service
+  ], { encoding: "utf8", timeout: 3000 });
+}
+
+function defaultZerodhaSessionStore() {
+  return createZerodhaSessionStore({
+    readSecret: readKeychainSecret,
+    writeSecret: writeKeychainSecret,
+    deleteSecret: deleteKeychainSecret,
+    services: zerodhaServices()
+  });
+}
 
 function tokenExpiry(token) {
   try {
@@ -73,16 +123,44 @@ async function upstoxGet(url) {
   return body;
 }
 
-function respond(response, status, payload) {
-  response.writeHead(status, {
-    "Access-Control-Allow-Origin": "*",
+function respondJson(response, status, payload, corsOrigin) {
+  const headers = {
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8"
-  });
+  };
+  if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
+  if (corsOrigin) headers.Vary = "Origin";
+  response.writeHead(status, headers);
   response.end(JSON.stringify(payload));
 }
 
-function formatChain(chain) {
+function validatedExtensionOrigin(value) {
+  return originConfig.validateExtensionOrigin(value);
+}
+
+function isExtensionAccountRequest(headers, allowedOrigin) {
+  if (headers.origin === allowedOrigin) return true;
+  return !headers.origin &&
+    headers["sec-fetch-site"] === "none" &&
+    headers["sec-fetch-mode"] === "cors" &&
+    headers["sec-fetch-dest"] === "empty";
+}
+
+function openInterest(value) {
+  if (typeof value === "boolean" || value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function exactPositiveIntegerLotSize(value, label = "Upstox lot size") {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be an exact positive integer.`);
+  }
+  return value;
+}
+
+export function formatChain(chain) {
   const spot = chain.find((item) => Number.isFinite(item.underlying_spot_price))?.underlying_spot_price;
   if (!Number.isFinite(spot)) throw new Error("Upstox response did not contain NIFTY spot price.");
 
@@ -95,7 +173,11 @@ function formatChain(chain) {
       .map((item) => ({
         strike: item.strike_price,
         call: item.call_options?.market_data?.ltp ?? null,
-        put: item.put_options?.market_data?.ltp ?? null
+        put: item.put_options?.market_data?.ltp ?? null,
+        callOi: openInterest(item.call_options?.market_data?.oi),
+        putOi: openInterest(item.put_options?.market_data?.oi),
+        callInstrumentKey: item.call_options?.instrument_key ?? null,
+        putInstrumentKey: item.put_options?.instrument_key ?? null
       }))
   };
 }
@@ -133,6 +215,26 @@ function niftyChain(expiry) {
   return chainCache.get(expiry, () => loadNiftyChain(expiry));
 }
 
+export function summarizeNiftyExpiries(contracts, today) {
+  const markers = new Map();
+  for (const contract of Array.isArray(contracts) ? contracts : []) {
+    if (!exactIsoDate(contract?.expiry) || contract.expiry < today) continue;
+    const lotSize = exactPositiveIntegerLotSize(contract.lot_size, `Upstox lot size for ${contract.expiry}`);
+    if (!markers.has(contract.expiry)) markers.set(contract.expiry, { weekly: new Set(), lotSize });
+    const metadata = markers.get(contract.expiry);
+    if (metadata.lotSize !== lotSize) {
+      throw new Error(`Upstox contract metadata contains conflicting lot sizes for ${contract.expiry}.`);
+    }
+    if (typeof contract.weekly === "boolean") metadata.weekly.add(contract.weekly);
+  }
+  return Array.from(markers, ([expiry, metadata]) => ({
+    expiry,
+    daysToExpiry: Math.ceil((new Date(`${expiry}T00:00:00Z`) - new Date(`${today}T00:00:00Z`)) / 86400000),
+    weekly: metadata.weekly.size === 1 ? metadata.weekly.values().next().value : null,
+    lotSize: metadata.lotSize
+  })).sort((left, right) => left.expiry.localeCompare(right.expiry));
+}
+
 async function niftyExpiries() {
   if (expiryCache && Date.now() - expiryCache.updatedAt < EXPIRY_CACHE_MS) return expiryCache.payload;
 
@@ -144,13 +246,19 @@ async function niftyExpiries() {
   const payload = {
     source: "Upstox",
     updatedAt: new Date().toISOString(),
-    expiries: [...new Set((body.data || []).map((item) => item.expiry))]
-      .filter((expiry) => expiry >= today)
-      .sort()
-      .map((expiry) => ({ expiry, daysToExpiry: Math.ceil((new Date(`${expiry}T00:00:00Z`) - new Date(`${today}T00:00:00Z`)) / 86400000) }))
+    expiries: summarizeNiftyExpiries(body.data, today)
   };
   expiryCache = { updatedAt: Date.now(), payload };
   return payload;
+}
+
+export function findFreshExpiryMetadata(cache, expiry, nowMs = Date.now()) {
+  if (!cache || !Number.isFinite(cache.updatedAt) || nowMs - cache.updatedAt >= EXPIRY_CACHE_MS) return null;
+  return cache.payload?.expiries?.find((entry) => entry.expiry === expiry) || null;
+}
+
+function cachedExpiryMetadata(expiry) {
+  return findFreshExpiryMetadata(expiryCache, expiry);
 }
 
 function tokenOrThrow() {
@@ -186,71 +294,393 @@ async function niftyCandles(days = 120) {
   return payload;
 }
 
-http.createServer(async (request, response) => {
-  const url = new URL(request.url, `http://${request.headers.host}`);
-  if (request.method !== "GET") {
-    respond(response, 404, { error: "Not found" });
+export function splitHistoricalRange(interval, from, to) {
+  const dayMs = 86400000;
+  const maxDays = interval?.unit === "minutes" && Number(interval?.amount) <= 15
+    ? 28
+    : interval?.unit === "hours" || interval?.unit === "minutes"
+      ? 89
+      : null;
+  if (!maxDays) return [{ from, to }];
+  const start = Date.parse(`${from}T00:00:00.000Z`);
+  let cursor = Date.parse(`${to}T00:00:00.000Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(cursor) || start > cursor) return [];
+  const chunks = [];
+  while (cursor >= start) {
+    const chunkStart = Math.max(start, cursor - (maxDays - 1) * dayMs);
+    chunks.push({
+      from: new Date(chunkStart).toISOString().slice(0, 10),
+      to: new Date(cursor).toISOString().slice(0, 10)
+    });
+    cursor = chunkStart - dayMs;
+  }
+  return chunks.reverse();
+}
+
+async function fetchHistoricalCandles({ instrumentKey, interval, from, to }) {
+  const rows = [];
+  for (const chunk of splitHistoricalRange(interval, from, to)) {
+    const url = `${UPSTOX_CANDLES_URL}/${encodeURIComponent(instrumentKey)}/${interval.unit}/${interval.amount}/${chunk.to}/${chunk.from}`;
+    const body = await upstoxGet(url);
+    rows.push(...(body.data?.candles || []));
+  }
+  return rows;
+}
+
+const loadProviderOptionHistory = createOptionHistoryLoader({
+  fetchCandles: fetchHistoricalCandles,
+  cache: optionHistoryCache
+});
+
+async function loadNiftyOptionHistory(request, chainLoader = niftyChain) {
+  const chain = await chainLoader(request.expiry);
+  if (!chain || chain.expiry !== request.expiry) {
+    throw Object.assign(new Error("Option chain expiry did not match requested history expiry."), {
+      status: 502,
+      kind: "expiry_mismatch"
+    });
+  }
+  const row = chain.rows?.find((candidate) => Number(candidate?.strike) === request.strike);
+  if (!row?.callInstrumentKey || !row?.putInstrumentKey) {
+    throw Object.assign(new Error("CONTRACT HISTORY UNAVAILABLE"), {
+      status: 404,
+      kind: "contract_unavailable"
+    });
+  }
+  return loadProviderOptionHistory({
+    ...request,
+    provider: "upstox",
+    underlyingKey: NIFTY_KEY,
+    callInstrumentKey: row.callInstrumentKey,
+    putInstrumentKey: row.putInstrumentKey
+  });
+}
+
+function exactIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function readJsonBody(request, maxBytes = 256 * 1024) {
+  return new Promise((resolveBody, reject) => {
+    const chunks = [];
+    let size = 0;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(Object.assign(new Error("Margin request is too large."), { status: 413, kind: "invalid_request" }));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => {
+      try { resolveBody(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+      catch { reject(Object.assign(new Error("Margin request must be valid JSON."), { status: 400, kind: "invalid_request" })); }
+    });
+    request.on("error", reject);
+  });
+}
+
+function exactMarginRequests(value) {
+  const requests = value?.requests;
+  if (!Array.isArray(requests) || requests.length > 100) {
+    throw Object.assign(new Error("Margin request requires 0 to 100 baskets."), { status: 400, kind: "invalid_request" });
+  }
+  return requests.map((request) => {
+    if (!request || typeof request.key !== "string" || !request.key
+      || typeof request.fingerprint !== "string" || !request.fingerprint
+      || !Array.isArray(request.legs) || !request.legs.length || request.legs.length > 100) {
+      throw Object.assign(new Error("Each margin basket requires a key, fingerprint, and 1 to 100 saved legs."), {
+        status: 400, kind: "invalid_request"
+      });
+    }
+    return request;
+  });
+}
+
+export function createRequestHandler({
+  sessionStore = defaultZerodhaSessionStore(),
+  zerodhaClientFactory = createZerodhaClient,
+  chainLoader = niftyChain,
+  optionHistoryLoader = null,
+  expiryLoader = niftyExpiries,
+  expiryMetadata = cachedExpiryMetadata,
+  normalizePositions = normalizeNiftyPositions,
+  normalizeTrades = normalizeNiftyTrades,
+  extensionOrigin = originConfig.loadExtensionOrigin(),
+  now = () => new Date()
+} = {}) {
+  const allowedOrigin = validatedExtensionOrigin(extensionOrigin);
+  const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/zerodha/margins", "/api/seller-refresh", "/api/option-history"]);
+  let expiryLoadInFlight = null;
+
+  function loadExpiryMetadataOnce() {
+    if (!expiryLoadInFlight) {
+      expiryLoadInFlight = Promise.resolve()
+        .then(() => expiryLoader())
+        .finally(() => { expiryLoadInFlight = null; });
+    }
+    return expiryLoadInFlight;
+  }
+
+  async function resolveChainMetadata(chain) {
+    const resolvedExpiry = chain?.expiry;
+    if (!chain || typeof chain !== "object" || Array.isArray(chain) || !exactIsoDate(resolvedExpiry)) {
+      throw Object.assign(new Error("Upstox chain did not resolve an exact expiry."), {
+        status: 502,
+        kind: "expiry_mismatch"
+      });
+    }
+
+    let metadata = expiryMetadata(resolvedExpiry);
+    if (!metadata) {
+      await loadExpiryMetadataOnce();
+      metadata = expiryMetadata(resolvedExpiry);
+    }
+    if (metadata?.expiry !== undefined && metadata.expiry !== resolvedExpiry) {
+      throw Object.assign(new Error("Upstox expiry metadata did not match the resolved chain expiry."), {
+        status: 502,
+        kind: "expiry_mismatch"
+      });
+    }
+
+    const lotSize = exactPositiveIntegerLotSize(
+      metadata?.lotSize,
+      `Upstox lot size metadata for ${resolvedExpiry}`
+    );
+    if (Object.hasOwn(chain, "lotSize")) {
+      const chainLotSize = exactPositiveIntegerLotSize(
+        chain.lotSize,
+        `Upstox chain lot size for ${resolvedExpiry}`
+      );
+      if (chainLotSize !== lotSize) {
+        throw new Error(`Upstox chain contains a conflicting lot size for ${resolvedExpiry}.`);
+      }
+    }
+
+    return {
+      chain: { ...chain, lotSize },
+      metadata,
+      lotSize
+    };
+  }
+
+  return async function requestHandler(request, response) {
+  const respondPublic = (status, payload) => respondJson(response, status, payload, allowedOrigin);
+  const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
+  const accountPath = accountPaths.has(url.pathname);
+  if (accountPath && !isExtensionAccountRequest(request.headers, allowedOrigin)) {
+    respondJson(response, 403, { error: "Forbidden origin." }, null);
+    return;
+  }
+  const isMarginPost = request.method === "POST" && url.pathname === "/api/zerodha/margins";
+  if (request.method !== "GET" && !isMarginPost) {
+    if (accountPath) respondJson(response, 404, { error: "Not found" }, allowedOrigin);
+    else respondPublic(404, { error: "Not found" });
     return;
   }
   if (url.pathname === "/") {
     const token = resolveToken();
-    respond(response, 200, {
+    respondPublic(200, {
       service: "NIFTY data bridge",
       status: "running",
       token: { configured: Boolean(token.token), source: token.source, expiresAt: token.expiresAt },
-      endpoints: ["/api/health", "/api/nifty-chain", "/api/nifty-expiries", "/api/nifty-candles"]
+      endpoints: [
+        "/api/health", "/api/nifty-chain", "/api/nifty-expiries", "/api/nifty-candles", "/api/option-history",
+        "/api/zerodha/status", "/api/zerodha/login-url", "/api/zerodha/callback", "/api/seller-refresh"
+      ]
     });
+    return;
+  }
+  if (url.pathname === "/api/zerodha/status") {
+    try {
+      respondJson(response, 200, await sessionStore.status(), allowedOrigin);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
+    }
+    return;
+  }
+  if (url.pathname === "/api/zerodha/login-url") {
+    try {
+      respondJson(response, 200, { loginUrl: await sessionStore.loginUrl() }, allowedOrigin);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
+    }
+    return;
+  }
+  if (url.pathname === "/api/zerodha/callback") {
+    const requestToken = url.searchParams.get("request_token");
+    if (!requestToken) {
+      respondJson(response, 400, { error: "Zerodha callback did not include a request token.", kind: "invalid_request" }, null);
+      return;
+    }
+    try {
+      respondJson(response, 200, await sessionStore.exchangeRequestToken(requestToken), null);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: ZERODHA_CALLBACK_FAILURE_MESSAGE, kind: error.kind || "upstream" }, null);
+    }
+    return;
+  }
+  if (url.pathname === "/api/zerodha/margins") {
+    try {
+      const marginRequests = exactMarginRequests(await readJsonBody(request));
+      const credentials = await sessionStore.credentials();
+      const client = zerodhaClientFactory(credentials);
+      const [fundPayload, instrumentCsv] = await Promise.all([client.getFunds(), client.getInstrumentsNfo()]);
+      const instruments = parseNfoInstruments(instrumentCsv);
+      const baskets = [];
+      for (const marginRequest of marginRequests) {
+        const resolved = buildBasketOrders(marginRequest.legs, instruments);
+        const payload = await client.calculateBasketMargins(resolved.map((item) => item.order));
+        baskets.push({
+          key: marginRequest.key,
+          fingerprint: marginRequest.fingerprint,
+          ...normalizeBasketMargin(payload, resolved.map((item) => item.entryId))
+        });
+      }
+      respondJson(response, 200, {
+        updatedAt: new Date(now()).toISOString(),
+        funds: normalizeBrokerFunds(fundPayload),
+        baskets
+      }, allowedOrigin);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
+    }
+    return;
+  }
+  if (url.pathname === "/api/seller-refresh") {
+    const expiry = url.searchParams.get("expiry") || "";
+    if (!exactIsoDate(expiry)) {
+      respondJson(response, 400, { error: "Expiry must be an exact YYYY-MM-DD date." }, allowedOrigin);
+      return;
+    }
+    try {
+      const credentials = await sessionStore.credentials();
+      const client = zerodhaClientFactory(credentials);
+      const [positionsPayload, tradesPayload, chain] = await Promise.all([
+        client.getPositions(),
+        client.getTrades(),
+        chainLoader(expiry)
+      ]);
+      if (!chain || chain.expiry !== expiry) {
+        const error = new Error("Upstox chain expiry did not match requested expiry.");
+        error.status = 502;
+        error.kind = "expiry_mismatch";
+        throw error;
+      }
+      const resolved = await resolveChainMetadata(chain);
+      const metadata = resolved.metadata;
+      const expiryKind = metadata?.weekly === false ? "monthly" : metadata?.weekly === true ? "weekly" : "unknown";
+      respondJson(response, 200, {
+        updatedAt: new Date(now()).toISOString(),
+        positions: normalizePositions(positionsPayload, expiry, { expiryKind, lotSize: resolved.lotSize }),
+        trades: normalizeTrades(tradesPayload, expiry, { expiryKind, lotSize: resolved.lotSize }),
+        chain: resolved.chain
+      }, allowedOrigin);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
+    }
+    return;
+  }
+  if (url.pathname === "/api/option-history") {
+    const expiry = url.searchParams.get("expiry") || "";
+    const strike = Number(url.searchParams.get("strike"));
+    const interval = url.searchParams.get("interval") || "";
+    const from = url.searchParams.get("from") || "";
+    const to = url.searchParams.get("to") || "";
+    const supportedIntervals = new Set(["1m", "5m", "15m", "1h", "4h", "1D", "1W", "1M"]);
+    if (!exactIsoDate(expiry) || !Number.isFinite(strike) || strike <= 0
+      || !supportedIntervals.has(interval) || !exactIsoDate(from) || !exactIsoDate(to) || from > to) {
+      respondJson(response, 400, { error: "History requires exact expiry, strike, interval, from, and to." }, allowedOrigin);
+      return;
+    }
+    try {
+      const load = optionHistoryLoader || ((request) => loadNiftyOptionHistory(request, chainLoader));
+      respondJson(response, 200, await load({ expiry, strike, interval, from, to }), allowedOrigin);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
+    }
     return;
   }
   if (url.pathname === "/api/health") {
     const token = resolveToken();
     if (!token.token) {
-      respond(response, 503, { status: "error", kind: "token_missing", error: "Upstox Analytics Token is not configured." });
+      respondPublic(503, { status: "error", kind: "token_missing", error: "Upstox Analytics Token is not configured." });
       return;
     }
     if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) {
-      respond(response, 401, { status: "error", kind: "auth", error: "The saved Upstox Analytics Token has expired.", token: { source: token.source, expiresAt: token.expiresAt } });
+      respondPublic(401, { status: "error", kind: "auth", error: "The saved Upstox Analytics Token has expired.", token: { source: token.source, expiresAt: token.expiresAt } });
       return;
     }
     try {
       if (url.searchParams.get("live") === "1") await niftyExpiries();
-      respond(response, 200, { status: "ok", bridge: "online", upstox: url.searchParams.get("live") === "1" ? "reachable" : "not_checked", token: { source: token.source, expiresAt: token.expiresAt } });
+      respondPublic(200, { status: "ok", bridge: "online", upstox: url.searchParams.get("live") === "1" ? "reachable" : "not_checked", token: { source: token.source, expiresAt: token.expiresAt } });
     } catch (error) {
-      respond(response, error.status || 502, { status: "error", kind: error.kind || "upstream", error: error.message, token: { source: token.source, expiresAt: token.expiresAt } });
+      respondPublic(error.status || 502, { status: "error", kind: error.kind || "upstream", error: error.message, token: { source: token.source, expiresAt: token.expiresAt } });
     }
     return;
   }
   if (url.pathname === "/api/nifty-expiries") {
     try {
-      respond(response, 200, await niftyExpiries());
+      respondPublic(200, await niftyExpiries());
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondPublic(error.status || 502, { error: error.message, kind: error.kind || "upstream" });
     }
     return;
   }
   if (url.pathname === "/api/nifty-candles") {
     const days = Math.max(30, Math.min(365, Number(url.searchParams.get("days")) || 120));
     try {
-      respond(response, 200, await niftyCandles(days));
+      respondPublic(200, await niftyCandles(days));
     } catch (error) {
-      respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+      respondPublic(error.status || 502, { error: error.message, kind: error.kind || "upstream" });
     }
     return;
   }
   if (url.pathname !== "/api/nifty-chain") {
-    respond(response, 404, { error: "Not found" });
+    respondPublic(404, { error: "Not found" });
     return;
   }
   const expiry = url.searchParams.get("expiry") || "current_month";
   if (!/^(current|next|far)_(week|month)$/.test(expiry) && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
-    respond(response, 400, { error: "Expiry must be a supported relative expiry or YYYY-MM-DD." });
+    respondPublic(400, { error: "Expiry must be a supported relative expiry or YYYY-MM-DD." });
     return;
   }
   try {
-    respond(response, 200, await niftyChain(expiry));
+    const chain = await chainLoader(expiry);
+    if (exactIsoDate(expiry) && chain?.expiry !== expiry) {
+      throw Object.assign(new Error("Upstox chain expiry did not match requested expiry."), {
+        status: 502,
+        kind: "expiry_mismatch"
+      });
+    }
+    const resolved = await resolveChainMetadata(chain);
+    respondPublic(200, resolved.chain);
   } catch (error) {
-    respond(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" });
+    respondPublic(error.status || 502, { error: error.message, kind: error.kind || "upstream" });
   }
-}).listen(PORT, "127.0.0.1", () => {
-  console.log(`NIFTY data bridge listening at http://127.0.0.1:${PORT}`);
-});
+  };
+}
+
+export function startServer({ port = PORT, host = "127.0.0.1", ...handlerOptions } = {}) {
+  const server = http.createServer(createRequestHandler(handlerOptions));
+  return new Promise((resolveServer, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolveServer(server);
+    });
+  });
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  startServer().then(() => {
+    console.log(`NIFTY data bridge listening at http://127.0.0.1:${PORT}`);
+  }).catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

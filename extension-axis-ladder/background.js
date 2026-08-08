@@ -1,6 +1,26 @@
 "use strict";
 
-importScripts("overlay-utils.js");
+importScripts("overlay-utils.js", "side-panel.js", "manual-plan.js", "strategy-store.js", "seller-ledger.js", "margin-evidence.js");
+
+NiftySidePanel.install(chrome);
+
+const manualPlanApi = globalThis.NiftyManualPlan;
+const strategyStoreApi = globalThis.OptionsStrategyStore;
+const sellerLedgerApi = globalThis.NiftySellerLedger;
+const marginEvidenceApi = globalThis.OptionsMarginEvidence;
+const MANUAL_PLAN_MUTATION = "MUTATE_MANUAL_PLANS";
+const MANUAL_STRATEGY_MUTATION = "MUTATE_MANUAL_STRATEGY";
+const STRATEGY_BOOK_MUTATION = "MUTATE_STRATEGY_BOOK";
+const STRATEGY_BOOK_MIGRATION = "MIGRATE_MANUAL_PLANS";
+const CHAIN_FETCH = "FETCH_NIFTY_CHAIN";
+const HISTORY_FETCH = "FETCH_OPTION_HISTORY";
+const BROKER_REFRESH = "REFRESH_BROKER_SNAPSHOT";
+const BRIDGE_API = "http://127.0.0.1:8787";
+const LEGACY_MANUAL_LOT_SIZE = 65;
+let storageMutationTail = Promise.resolve();
+
+const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const nonEmpty = (value) => typeof value === "string" && Boolean(value.trim());
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -41,85 +61,595 @@ function isCaptureMessage(type) {
   return type === "CAPTURE_AXIS_SCALE";
 }
 
-function isFitMessage(type) {
-  return type === "FIT_AXIS_SCALE";
+function isManualPlanMutationMessage(type) {
+  return type === MANUAL_PLAN_MUTATION;
 }
 
-const fittingTabs = new Set();
-
-async function dispatchScaleDrag(debuggee, x, startY, endY) {
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mouseMoved", x, y: startY
-  });
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mousePressed", x, y: startY, button: "left", buttons: 1, clickCount: 1
-  });
-  const steps = 6;
-  for (let step = 1; step <= steps; step += 1) {
-    const y = startY + (endY - startY) * step / steps;
-    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mouseMoved", x, y, button: "left", buttons: 1
-    });
-  }
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mouseReleased", x, y: endY, button: "left", buttons: 0, clickCount: 1
-  });
+function isManualStrategyMutationMessage(type) {
+  return type === MANUAL_STRATEGY_MUTATION;
 }
 
-async function dispatchScaleDoubleClick(debuggee, x, y) {
-  await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-    type: "mouseMoved", x, y
-  });
-  for (const clickCount of [1, 2]) {
-    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mousePressed", x, y, button: "left", buttons: 1, clickCount
-    });
-    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
-      type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount
-    });
-  }
+function isChainFetchMessage(type) {
+  return type === CHAIN_FETCH;
 }
 
-async function fitAxisScale(sender, message) {
-  const tabId = Number(sender?.tab?.id);
-  const plot = normalizedRect(message?.plotRect);
-  const viewportWidth = finiteNumber(message?.viewportWidth);
-  const viewportHeight = finiteNumber(message?.viewportHeight);
-  const attempt = Number(message?.attempt);
-  const direction = message?.direction === "in" ? "in" : "out";
-  if (!Number.isInteger(tabId) || tabId <= 0 || !plot || viewportWidth === null || viewportHeight === null) {
-    return { ok: false, error: "Invalid price-scale fit request." };
-  }
-  if (fittingTabs.has(tabId)) return { ok: false, error: "Price-scale fit already running." };
+function isHistoryFetchMessage(type) {
+  return type === HISTORY_FETCH;
+}
 
-  const x = Math.min(viewportWidth - 8, plot.right + 18);
-  const startY = Math.max(plot.top + 24, plot.top + (plot.bottom - plot.top) * 0.50);
-  const dragDelta = direction === "in" ? -48 : 48;
-  const endY = Math.max(plot.top + 24, Math.min(plot.bottom - 24, startY + dragDelta));
-  if (![x, startY, endY].every(Number.isFinite) || x <= plot.right || endY === startY) {
-    return { ok: false, error: "TradingView price scale is unavailable." };
-  }
+function isBrokerRefreshMessage(type) {
+  return type === BROKER_REFRESH;
+}
 
-  const debuggee = { tabId };
-  fittingTabs.add(tabId);
-  let attached = false;
+async function bridgeJson(url, options = {}, fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error || "Broker refresh failed.");
+  return data;
+}
+
+function brokerStrategyLabel(expiry) {
+  const date = new Date(`${expiry}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) return "BROKER";
+  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  return `BROKER · ${months[date.getUTCMonth()]} ${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function storedBrokerStrategy(book, expiry) {
+  return Object.values(book?.strategies || {}).find((strategy) => {
+    if (strategy?.status !== "ACTIVE" || strategy.expiry !== expiry) return false;
+    const version = book?.versions?.[strategy.currentVersionId];
+    const legs = (version?.legIds || []).map((id) => book?.legs?.[id]).filter(Boolean);
+    return legs.length > 0 && legs.every((leg) => leg.source === "BROKER_POSITION");
+  }) || null;
+}
+
+function syncBrokerStrategyBook(book, positions, expiry, updatedAt) {
+  const existing = storedBrokerStrategy(book, expiry);
+  if (!positions.length && !existing) return book;
+  const underlying = positions[0]?.underlying || existing?.underlying;
+  const exchange = positions[0]?.exchange || String(existing?.instrumentKey || "BROKER:NFO:NIFTY").split(":")[1] || "NFO";
+  const instrumentKey = positions.length ? `BROKER:${exchange}:${underlying}` : existing.instrumentKey;
+  if (positions.some((position) => position.underlying !== underlying
+    || position.exchange !== exchange || position.expiry !== expiry)) {
+    throw new Error("Broker snapshot mixes strategy instruments or expiries.");
+  }
+  const encodedKey = encodeURIComponent(instrumentKey);
+  const snapshotId = encodeURIComponent(updatedAt);
+  return strategyStoreApi.applyCommand(book, {
+    id: `broker-sync:${encodedKey}:${expiry}:${snapshotId}`,
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: existing?.id || `broker:${encodedKey}:${expiry}`,
+    versionId: `broker-version:${encodedKey}:${expiry}:${snapshotId}`,
+    snapshotId,
+    label: brokerStrategyLabel(expiry),
+    instrumentKey,
+    underlying,
+    expiry,
+    positions
+  }, updatedAt);
+}
+
+async function refreshBrokerSnapshot(selectedIds = [], fetchImpl = globalThis.fetch) {
+  const stored = await chrome.storage.local.get({
+    expiry: "current_month",
+    sellerSafetyLedger: null,
+    sellerSafetyChainsByExpiry: {},
+    sellerSafetyRefreshFailuresByExpiry: {},
+    strategyBook: strategyStoreApi.emptyBook()
+  });
+  const expiry = stored.expiry;
+  if (!manualPlanApi.isIsoDate(expiry)) throw new Error("Select one exact NIFTY expiry first.");
+  const data = await bridgeJson(
+    `${BRIDGE_API}/api/seller-refresh?expiry=${encodeURIComponent(expiry)}`,
+    { cache: "no-store" },
+    fetchImpl
+  );
+  if (typeof data?.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt))
+    || !Array.isArray(data.positions) || !Array.isArray(data.trades)
+    || data.chain?.expiry !== expiry || !Number.isFinite(Number(data.chain?.spot))
+    || !Number.isInteger(data.chain?.lotSize) || data.chain.lotSize <= 0
+    || !Array.isArray(data.chain?.rows)) {
+    throw new Error("Bridge returned an invalid seller refresh snapshot.");
+  }
+  const ledger = stored.sellerSafetyLedger?.version === 1
+    ? stored.sellerSafetyLedger : sellerLedgerApi.emptyLedger();
+  const reconciled = sellerLedgerApi.reconcilePositions(ledger, data.positions, { expiry });
+  const nextLedger = sellerLedgerApi.ingestBrokerTrades(reconciled, {
+    trades: data.trades,
+    expiry,
+    observedAt: data.updatedAt
+  });
+  const strategyBook = syncBrokerStrategyBook(
+    stored.strategyBook || strategyStoreApi.emptyBook(),
+    data.positions,
+    expiry,
+    data.updatedAt
+  );
+  let brokerMarginEvidence = { version: 1, updatedAt: null, funds: null, baskets: {} };
   try {
-    await chrome.debugger.attach(debuggee, "1.3");
-    attached = true;
-    if (!Number.isFinite(attempt) || attempt <= 1 || message?.direction === "reset") {
-      await dispatchScaleDoubleClick(debuggee, x, startY);
-    } else {
-      await dispatchScaleDrag(debuggee, x, startY, endY);
-    }
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error?.message || "Trusted price-scale gesture failed." };
-  } finally {
-    if (attached) {
-      try { await chrome.debugger.detach(debuggee); } catch { /* Tab may have closed. */ }
-    }
-    fittingTabs.delete(tabId);
+    const requests = marginEvidenceApi.requestsForBook(strategyBook, selectedIds);
+    const marginData = await bridgeJson(`${BRIDGE_API}/api/zerodha/margins`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requests })
+    }, fetchImpl);
+    brokerMarginEvidence = marginEvidenceApi.normalizeRefreshEvidence(marginData);
+  } catch (_) {
+    // Margin stays fail-closed while broker positions and quotes still refresh.
   }
+  const chainSnapshot = {
+    version: 1,
+    updatedAt: data.updatedAt,
+    expiry,
+    lotSize: data.chain.lotSize,
+    spot: Number(data.chain.spot),
+    rows: data.chain.rows
+  };
+  const candidateId = `refresh:${encodeURIComponent(data.updatedAt)}`;
+  const failures = { ...(stored.sellerSafetyRefreshFailuresByExpiry || {}) };
+  delete failures[expiry];
+  await chrome.storage.local.set({
+    strategyBook,
+    sellerSafetyLedger: nextLedger,
+    sellerSafetyPending: {
+      version: 1,
+      candidateId,
+      updatedAt: data.updatedAt,
+      positionCount: data.positions.length,
+      tradeCount: data.trades.length,
+      chain: { candidateId, expiry, spot: Number(data.chain.spot), updatedAt: data.updatedAt, daysToExpiry: null }
+    },
+    sellerSafetyChartView: {
+      version: 1,
+      candidateId,
+      canPublish: false,
+      priority: { kind: "review", label: nextLedger.reviewChanges.length ? "REVIEW POSITION CHANGES" : "REVIEW REFRESH SNAPSHOT" },
+      expiry,
+      brokerUpdatedAt: data.updatedAt,
+      brokerSessionExpiresAt: null
+    },
+    sellerSafetyChain: chainSnapshot,
+    sellerSafetyChainsByExpiry: { ...(stored.sellerSafetyChainsByExpiry || {}), [expiry]: chainSnapshot },
+    sellerSafetyRefreshFailuresByExpiry: failures,
+    brokerMarginEvidence
+  });
+  return { ok: true, positionCount: data.positions.length, updatedAt: data.updatedAt };
+}
+
+function isStrategyMutationMessage(type) {
+  return type === STRATEGY_BOOK_MUTATION;
+}
+
+function isStrategyMigrationMessage(type) {
+  return type === STRATEGY_BOOK_MIGRATION;
+}
+
+function isTradingViewSender(sender) {
+  if (!sender?.tab?.id || typeof sender.url !== "string") return false;
+  try {
+    const url = new URL(sender.url);
+    return url.protocol === "https:"
+      && ["tradingview.com", "www.tradingview.com"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isExtensionSender(sender) {
+  if (typeof sender?.url !== "string" || typeof chrome?.runtime?.id !== "string") return false;
+  try {
+    const url = new URL(sender.url);
+    return sender.id === chrome.runtime.id
+      && url.protocol === "chrome-extension:"
+      && url.hostname === chrome.runtime.id;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchNiftyChain(expiry, fetchImpl = globalThis.fetch) {
+  if (!manualPlanApi.isIsoDate(expiry)) throw new Error("Select one exact NIFTY expiry first.");
+  const response = await fetchImpl(
+    `${BRIDGE_API}/api/nifty-chain?expiry=${encodeURIComponent(expiry)}`,
+    { cache: "no-store" }
+  );
+  const chain = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(chain.error || "Option chain unavailable.");
+  if (chain.expiry !== expiry) {
+    throw new Error("Option chain expiry does not match the requested exact expiry.");
+  }
+  if (typeof chain.lotSize !== "number" || !Number.isInteger(chain.lotSize) || chain.lotSize <= 0) {
+    throw new Error("Option chain lot size must be an exact positive integer.");
+  }
+  return chain;
+}
+
+async function fetchOptionHistory(request, fetchImpl = globalThis.fetch) {
+  const strike = Number(request?.strike);
+  const supportedIntervals = new Set(["1m", "5m", "15m", "1h", "4h", "1D", "1W", "1M"]);
+  if (!manualPlanApi.isIsoDate(request?.expiry) || !Number.isFinite(strike) || strike <= 0
+    || !supportedIntervals.has(request?.interval) || !manualPlanApi.isIsoDate(request?.from)
+    || !manualPlanApi.isIsoDate(request?.to) || request.from > request.to) {
+    throw Object.assign(new Error("Premium history request is invalid."), { kind: "invalid_request" });
+  }
+  const query = new URLSearchParams({
+    expiry: request.expiry,
+    strike: String(strike),
+    interval: request.interval,
+    from: request.from,
+    to: request.to
+  });
+  const response = await fetchImpl(`${BRIDGE_API}/api/option-history?${query}`, { cache: "no-store" });
+  const history = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(history.error || "CONTRACT HISTORY UNAVAILABLE"), { kind: history.kind || "upstream" });
+  return history;
+}
+
+function applyManualPlanMutation(store, mutation) {
+  if (mutation?.type === "upsert") return manualPlanApi.upsertEntry(store, mutation.entry);
+  if (mutation?.type === "remove"
+    && manualPlanApi.isIsoDate(mutation.expiry)
+    && typeof mutation.entryId === "string"
+    && mutation.entryId) {
+    return manualPlanApi.removeEntry(store, mutation.expiry, mutation.entryId);
+  }
+  throw new Error("Invalid manual plan mutation.");
+}
+
+const MANUAL_ENTRY_FIELDS = [
+  "id", "underlying", "expiry", "strike", "optionType", "direction", "lots", "lotSize", "premium",
+  "callSnapshot", "putSnapshot", "createdAt", "updatedAt"
+];
+
+function manualEntryMatchesLeg(entry, leg) {
+  return MANUAL_ENTRY_FIELDS.every((field) => {
+    if (field !== "lotSize") return Object.is(entry?.[field], leg?.[field]);
+    const entryLotSize = entry?.lotSize === undefined && entry?.underlying === "NIFTY"
+      ? LEGACY_MANUAL_LOT_SIZE
+      : entry?.lotSize;
+    return Object.is(entryLotSize, leg?.lotSize);
+  });
+}
+
+function requireExactManualLotSize(entry) {
+  if (typeof entry?.lotSize !== "number" || !Number.isInteger(entry.lotSize) || entry.lotSize <= 0) {
+    throw new Error("Manual entry lot size must be an exact positive integer.");
+  }
+}
+
+function strategyLegFromManualEntry(entry, strategy) {
+  return strategyStoreApi.normalizeLeg({
+    ...entry,
+    source: "MANUAL",
+    instrumentKey: strategy.instrumentKey,
+    underlying: strategy.underlying,
+    charges: [],
+    chargesComplete: false
+  });
+}
+
+function manualTransactionMarker(id) {
+  return `manual:${id}`;
+}
+
+function requireManualOwnership(strategyBook, manualPlans, entryId) {
+  if (!nonEmpty(entryId)) throw new Error("Manual entry identity is invalid.");
+  const stored = manualPlanApi.entryById(manualPlans, entryId);
+  if (!stored) throw new Error("Manual entry not found.");
+  const leg = strategyBook.legs[entryId];
+  if (!leg || leg.source !== "MANUAL") throw new Error("Manual strategy leg not found.");
+  if (!manualEntryMatchesLeg(stored.entry, leg)) {
+    throw new Error("Manual plan and strategy leg are inconsistent.");
+  }
+  const strategy = strategyStoreApi.activeStrategyForLeg(strategyBook, entryId);
+  if (!strategy) throw new Error("Active manual strategy ownership not found.");
+  return { stored, leg, strategy };
+}
+
+function applyManualPlanReplacements(rawPlans, replacements) {
+  let manualPlans = manualPlanApi.normalizeStore(rawPlans);
+  for (const replacement of replacements || []) {
+    const prior = manualPlanApi.entryById(manualPlans, replacement.oldId);
+    if (!prior) {
+      if (manualPlanApi.entryById(manualPlans, replacement.newId)) continue;
+      throw new Error("Manual plan reconciliation entry not found.");
+    }
+    manualPlans = manualPlanApi.replaceEntry(manualPlans, replacement.oldId, {
+      ...prior.entry,
+      id: replacement.newId
+    });
+  }
+  return manualPlans;
+}
+
+function reconcileManualState(strategyBook, manualPlans, options) {
+  const outcome = strategyStoreApi.reconcileManualPlans(strategyBook, manualPlans, options);
+  let reconciledPlans = applyManualPlanReplacements(manualPlans, outcome.replacements);
+  reconciledPlans = manualPlanApi.removeEntries(reconciledPlans, outcome.removedEntryIds);
+  for (const leg of outcome.rehydratedEntries || []) {
+    const entry = manualEntryFromStrategyLeg(leg);
+    if (!entry) throw new Error("Active manual strategy leg cannot populate manual plans.");
+    const existing = manualPlanApi.entryById(reconciledPlans, entry.id);
+    if (existing && !manualEntryMatchesLeg(existing.entry, leg)) {
+      throw new Error("Active manual strategy leg conflicts with manual plans.");
+    }
+    reconciledPlans = manualPlanApi.upsertEntry(reconciledPlans, entry);
+  }
+  return {
+    strategyBook: outcome.strategyBook,
+    manualPlans: reconciledPlans,
+    replacements: outcome.replacements
+  };
+}
+
+function manualEntryFromStrategyLeg(leg) {
+  return manualPlanApi.normalizeEntry(Object.fromEntries(MANUAL_ENTRY_FIELDS.map((field) => [field, leg[field]])));
+}
+
+function syncRestoredManualPlans(beforeBook, afterBook, rawPlans, strategyId) {
+  let manualPlans = manualPlanApi.normalizeStore(rawPlans);
+  const priorManualIds = strategyStoreApi.legsForStrategy(beforeBook, strategyId)
+    .filter((leg) => leg.source === "MANUAL")
+    .map((leg) => leg.id);
+  const restoredManualLegs = strategyStoreApi.legsForStrategy(afterBook, strategyId)
+    .filter((leg) => leg.source === "MANUAL");
+  const globallyActiveManualIds = new Set(strategyStoreApi.activeStrategies(afterBook)
+    .flatMap((strategy) => strategyStoreApi.legsForStrategy(afterBook, strategy.id))
+    .filter((leg) => leg.source === "MANUAL")
+    .map((leg) => leg.id));
+  manualPlans = manualPlanApi.removeEntries(
+    manualPlans,
+    priorManualIds.filter((id) => !globallyActiveManualIds.has(id))
+  );
+  for (const leg of restoredManualLegs) {
+    const entry = manualEntryFromStrategyLeg(leg);
+    if (!entry) throw new Error("Restored manual strategy leg cannot populate manual plans.");
+    manualPlans = manualPlanApi.upsertEntry(manualPlans, entry);
+  }
+  return manualPlans;
+}
+
+function applyManualStrategyMutation(rawBook, rawPlans, mutation, now = new Date().toISOString()) {
+  if (!isRecord(mutation) || !nonEmpty(mutation.id)
+    || !["CREATE", "EDIT", "REMOVE"].includes(mutation.type)
+    || !manualPlanApi.isIsoTimestamp(now)) {
+    throw new Error("Invalid manual strategy mutation.");
+  }
+  let strategyBook = strategyStoreApi.normalizeBook(rawBook);
+  let manualPlans = manualPlanApi.normalizeStore(rawPlans);
+  const marker = manualTransactionMarker(mutation.id);
+  if (strategyBook.appliedCommands[marker]) return { strategyBook, manualPlans };
+
+  if (mutation.type === "CREATE") {
+    requireExactManualLotSize(mutation.entry);
+    const entry = manualPlanApi.normalizeEntry(mutation.entry);
+    if (!entry) throw new Error("Invalid manual entry.");
+    if (manualPlanApi.entryById(manualPlans, entry.id) || strategyBook.legs[entry.id]) {
+      throw new Error("Manual entry identity already exists.");
+    }
+    if (!isRecord(mutation.strategy) || !["EXISTING", "CREATE_NEW"].includes(mutation.strategy.mode)
+      || !nonEmpty(mutation.strategy.strategyId)) {
+      throw new Error("Manual strategy ownership is invalid.");
+    }
+    if (mutation.strategy.mode === "CREATE_NEW") {
+      if (!nonEmpty(mutation.strategy.instrumentKey) || mutation.strategy.underlying !== entry.underlying) {
+        throw new Error("Manual strategy identity is invalid.");
+      }
+      strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+        id: `${marker}:strategy`,
+        type: "CREATE_STRATEGY",
+        strategyId: mutation.strategy.strategyId,
+        versionId: `${marker}:strategy-version`,
+        label: `T${strategyBook.nextSequence}`,
+        instrumentKey: mutation.strategy.instrumentKey,
+        underlying: mutation.strategy.underlying,
+        expiry: entry.expiry
+      }, now);
+    }
+    const strategy = strategyStoreApi.strategyById(strategyBook, mutation.strategy.strategyId);
+    if (!strategy || strategy.status !== strategyStoreApi.ACTIVE
+      || strategy.underlying !== entry.underlying || strategy.expiry !== entry.expiry) {
+      throw new Error("Active manual strategy ownership is incompatible.");
+    }
+    const leg = strategyLegFromManualEntry(entry, strategy);
+    if (!leg) throw new Error("Invalid manual strategy leg.");
+    strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+      id: marker,
+      type: "ADD_LEG",
+      strategyId: strategy.id,
+      versionId: `${marker}:version`,
+      leg
+    }, now);
+    manualPlans = manualPlanApi.upsertEntry(manualPlans, entry);
+    return { strategyBook, manualPlans };
+  }
+
+  let entryId = mutation.entryId;
+  const storedBeforeRepair = manualPlanApi.entryById(manualPlans, entryId);
+  const legBeforeRepair = strategyBook.legs[entryId];
+  if (storedBeforeRepair && legBeforeRepair?.source === "MANUAL"
+    && !manualEntryMatchesLeg(storedBeforeRepair.entry, legBeforeRepair)) {
+    const repaired = reconcileManualState(strategyBook, manualPlans, {
+      instrumentKey: legBeforeRepair.instrumentKey,
+      underlying: legBeforeRepair.underlying,
+      at: now
+    });
+    strategyBook = repaired.strategyBook;
+    manualPlans = repaired.manualPlans;
+    entryId = repaired.replacements.find((item) => item.oldId === entryId)?.newId || entryId;
+  }
+  const ownership = requireManualOwnership(strategyBook, manualPlans, entryId);
+  if (mutation.type === "EDIT") {
+    requireExactManualLotSize(mutation.entry);
+    const entry = manualPlanApi.normalizeEntry(mutation.entry);
+    if (!entry) throw new Error("Invalid manual entry.");
+    const leg = strategyLegFromManualEntry(entry, ownership.strategy);
+    if (!leg) throw new Error("Invalid manual strategy leg.");
+    strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+      id: marker,
+      type: "EDIT_LEG",
+      strategyId: ownership.strategy.id,
+      versionId: `${marker}:version`,
+      legId: entryId,
+      replacementLeg: leg
+    }, now);
+    manualPlans = manualPlanApi.replaceEntry(manualPlans, entryId, entry);
+    return { strategyBook, manualPlans };
+  }
+
+  strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+    id: marker,
+    type: "REMOVE_LEG",
+    strategyId: ownership.strategy.id,
+    versionId: `${marker}:version`,
+    legId: entryId
+  }, now);
+  if (!strategyStoreApi.legsForStrategy(strategyBook, ownership.strategy.id).length) {
+    strategyBook = strategyStoreApi.applyCommand(strategyBook, {
+      id: `${marker}:archive`,
+      type: "ARCHIVE_STRATEGY",
+      strategyId: ownership.strategy.id
+    }, now);
+  }
+  manualPlans = manualPlanApi.removeEntry(manualPlans, ownership.stored.expiry, entryId);
+  return { strategyBook, manualPlans };
+}
+
+function enqueueStorageCommit(commit) {
+  const write = async () => {
+    const stored = await chrome.storage.local.get([
+      strategyStoreApi.STORAGE_KEY,
+      manualPlanApi.STORAGE_KEY
+    ]);
+    const state = {
+      strategyBook: stored && Object.hasOwn(stored, strategyStoreApi.STORAGE_KEY)
+        ? stored[strategyStoreApi.STORAGE_KEY]
+        : strategyStoreApi.emptyBook(),
+      manualPlans: stored && Object.hasOwn(stored, manualPlanApi.STORAGE_KEY)
+        ? stored[manualPlanApi.STORAGE_KEY]
+        : manualPlanApi.emptyStore()
+    };
+    const outcome = commit(state);
+    if (!isRecord(outcome)) throw new Error("Storage mutation result is invalid.");
+    const values = {};
+    if (Object.hasOwn(outcome, strategyStoreApi.STORAGE_KEY)) {
+      values[strategyStoreApi.STORAGE_KEY] = outcome[strategyStoreApi.STORAGE_KEY];
+    }
+    if (Object.hasOwn(outcome, manualPlanApi.STORAGE_KEY)) {
+      values[manualPlanApi.STORAGE_KEY] = outcome[manualPlanApi.STORAGE_KEY];
+    }
+    if (!Object.keys(values).length) throw new Error("Storage mutation changed no values.");
+    await chrome.storage.local.set(values);
+    return outcome;
+  };
+  const result = storageMutationTail.then(write, write);
+  storageMutationTail = result.catch(() => {});
+  return result;
+}
+
+function enqueueManualPlanMutation() {
+  return Promise.reject(new Error(
+    "Deprecated split manual plan mutation route; use atomic manual strategy mutation."
+  ));
+}
+
+function enqueueStrategyCommit(commit) {
+  return enqueueStorageCommit(({ strategyBook, manualPlans }) => {
+    const outcome = commit(strategyBook, manualPlans);
+    return isRecord(outcome) && Object.hasOwn(outcome, strategyStoreApi.STORAGE_KEY)
+      ? outcome
+      : { strategyBook: outcome };
+  }).then((outcome) => outcome.strategyBook);
+}
+
+function enqueueManualStrategyMutation(mutation) {
+  return enqueueStorageCommit(({ strategyBook, manualPlans }) => applyManualStrategyMutation(
+    strategyBook,
+    manualPlans,
+    mutation
+  ));
+}
+
+function manualStrategyTarget(book, command) {
+  const normalized = strategyStoreApi.normalizeBook(book);
+  const strategy = normalized.strategies[command?.strategyId];
+  if (!strategy || strategy.id.startsWith("broker:")) return null;
+  const versionIds = [strategy.currentVersionId];
+  if (command?.type === "RESTORE_VERSION" && nonEmpty(command.restoreVersionId)) {
+    versionIds.push(command.restoreVersionId);
+  }
+  const ownsManualEvidence = versionIds.some((versionId) =>
+    normalized.versions[versionId]?.legIds.some((id) => normalized.legs[id]?.source === "MANUAL"));
+  return ownsManualEvidence || strategy.id.startsWith("legacy:") || strategy.id.startsWith("legacy-v2:")
+    ? strategy
+    : null;
+}
+
+function allocateStrategyCreateLabel(book, command) {
+  if (!isRecord(command)) return command;
+  const label = `T${strategyStoreApi.normalizeBook(book).nextSequence}`;
+  if (command.type === "CREATE_STRATEGY") return { ...command, label };
+  if (["MERGE_STRATEGIES", "SPLIT_STRATEGY"].includes(command.type)
+    && command.destination?.mode === "CREATE_NEW") {
+    return { ...command, destination: { ...command.destination, label } };
+  }
+  return command;
+}
+
+function enqueueStrategyMutation(command) {
+  return enqueueStrategyCommit((book, manualPlans) => {
+    const timestamp = new Date().toISOString();
+    let workingBook = book;
+    let workingPlans = manualPlans;
+    if (["ARCHIVE_STRATEGY", "RESTORE_VERSION"].includes(command?.type)) {
+      const target = manualStrategyTarget(workingBook, command);
+      if (target) {
+        const repaired = reconcileManualState(workingBook, workingPlans, {
+          instrumentKey: target.instrumentKey,
+          underlying: target.underlying,
+          at: timestamp
+        });
+        workingBook = repaired.strategyBook;
+        workingPlans = repaired.manualPlans;
+      }
+    }
+    const archivedLegIds = command?.type === "ARCHIVE_STRATEGY"
+      ? strategyStoreApi.legsForStrategy(workingBook, command.strategyId).map((leg) => leg.id)
+      : [];
+    const allocatedCommand = allocateStrategyCreateLabel(workingBook, command);
+    const strategyBook = strategyStoreApi.applyCommand(workingBook, allocatedCommand, timestamp);
+    if (command?.type === "RESTORE_VERSION") {
+      return {
+        strategyBook,
+        manualPlans: syncRestoredManualPlans(
+          workingBook,
+          strategyBook,
+          workingPlans,
+          command.strategyId
+        )
+      };
+    }
+    if (!archivedLegIds.length) return strategyBook;
+    const activeLegIds = new Set(strategyStoreApi.activeStrategies(strategyBook)
+      .flatMap((strategy) => strategyStoreApi.legsForStrategy(strategyBook, strategy.id))
+      .map((leg) => leg.id));
+    const retiredLegIds = archivedLegIds.filter((id) => !activeLegIds.has(id));
+    return {
+      strategyBook,
+      manualPlans: manualPlanApi.removeEntries(workingPlans, retiredLegIds)
+    };
+  });
+}
+
+function enqueueStrategyMigration({ instrumentKey, underlying, at }) {
+  const timestamp = typeof at === "string" && at ? at : new Date().toISOString();
+  return enqueueStorageCommit(({ strategyBook, manualPlans }) => reconcileManualState(
+    strategyBook,
+    manualPlans,
+    { instrumentKey, underlying, at: timestamp }
+  ));
 }
 
 function uniqueAxisCandidates(candidates) {
@@ -288,27 +818,85 @@ async function captureAxisScale(_sender, message) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!isCaptureMessage(message?.type) && !isFitMessage(message?.type)) return;
-  if (!sender.tab?.id || !sender.url?.startsWith("https://www.tradingview.com/")) {
-    sendResponse({ ok: false, error: "Axis capture is limited to TradingView tabs." });
-    return;
+  const manualMutation = isManualPlanMutationMessage(message?.type);
+  const manualStrategyMutation = isManualStrategyMutationMessage(message?.type);
+  const chainFetch = isChainFetchMessage(message?.type);
+  const historyFetch = isHistoryFetchMessage(message?.type);
+  const brokerRefresh = isBrokerRefreshMessage(message?.type);
+  const strategyMutation = isStrategyMutationMessage(message?.type);
+  const strategyMigration = isStrategyMigrationMessage(message?.type);
+  if (!isCaptureMessage(message?.type) && !manualMutation && !manualStrategyMutation && !chainFetch && !historyFetch && !brokerRefresh
+    && !strategyMutation && !strategyMigration) return;
+  const trustedExtensionSender = (strategyMutation || strategyMigration || brokerRefresh) && isExtensionSender(sender);
+  if (!isTradingViewSender(sender) && !trustedExtensionSender) {
+    sendResponse({
+      ok: false,
+      error: historyFetch
+        ? "Option history is limited to TradingView tabs."
+        : chainFetch
+        ? "Option-chain refresh is limited to TradingView tabs."
+        : brokerRefresh
+        ? "Broker refresh is limited to Options Ladder controls."
+        : strategyMutation || strategyMigration
+        ? "Strategy mutations are limited to TradingView tabs."
+        : manualStrategyMutation
+        ? "Manual strategy mutations are limited to TradingView tabs."
+        : manualMutation
+        ? "Manual plan mutations are limited to TradingView tabs."
+        : "Axis capture is limited to TradingView tabs."
+    });
+    return chainFetch || historyFetch || brokerRefresh || strategyMutation || strategyMigration || undefined;
   }
-  const operation = isFitMessage(message?.type) ? fitAxisScale(sender, message) : captureAxisScale(sender, message);
+  const operation = chainFetch
+    ? fetchNiftyChain(message.expiry).then((chain) => ({ ok: true, chain }))
+    : historyFetch
+    ? fetchOptionHistory(message).then((history) => ({ ok: true, history }))
+    : brokerRefresh
+    ? refreshBrokerSnapshot(Array.isArray(message.selectedIds) ? message.selectedIds : [])
+    : strategyMutation
+    ? enqueueStrategyMutation(message.command)
+      .then((strategyBook) => ({ ok: true, strategyBook }))
+    : strategyMigration
+    ? enqueueStrategyMigration(message)
+      .then(({ strategyBook, manualPlans }) => ({ ok: true, strategyBook, manualPlans }))
+    : manualStrategyMutation
+    ? enqueueManualStrategyMutation(message.mutation)
+      .then(({ manualPlans, strategyBook }) => ({ ok: true, manualPlans, strategyBook }))
+    : manualMutation
+    ? enqueueManualPlanMutation(message.mutation)
+      .then((manualPlans) => ({ ok: true, manualPlans }))
+    : captureAxisScale(sender, message);
   operation
     .then(sendResponse)
-    .catch((error) => sendResponse({ ok: false, error: error.message }));
+    .catch((error) => sendResponse(historyFetch
+      ? { ok: false, error: error.message, kind: error.kind || "upstream" }
+      : { ok: false, error: error.message }));
   return true;
 });
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    applyManualPlanMutation,
+    applyManualStrategyMutation,
     axisPairsFromCandidates,
     captureAxisScale,
-    dispatchScaleDrag,
+    enqueueManualPlanMutation,
+    enqueueManualStrategyMutation,
     extractAxisPrices,
-    fitAxisScale,
+    fetchNiftyChain,
+    fetchOptionHistory,
+    isBrokerRefreshMessage,
     isCaptureMessage,
-    isFitMessage,
-    isolateAxisCandidates
+    isChainFetchMessage,
+    isHistoryFetchMessage,
+    isManualPlanMutationMessage,
+    isManualStrategyMutationMessage,
+    isolateAxisCandidates,
+    manualEntryMatchesLeg,
+    isStrategyMigrationMessage,
+    isStrategyMutationMessage,
+    refreshBrokerSnapshot,
+    enqueueStrategyMigration,
+    enqueueStrategyMutation
   };
 }
