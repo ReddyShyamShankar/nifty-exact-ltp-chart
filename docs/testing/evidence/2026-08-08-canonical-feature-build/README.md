@@ -10,7 +10,7 @@ Validation path: reload unpacked extension, reload TradingView, run explicit pop
 ## Feature 2 — saved-minus-live seller premium difference
 
 - `feature-2-buy-strike-seller-diff-guard.jpeg`: Chrome after clicking visible saved 25,000 BUY Call. Seller-only premium evidence is correctly omitted; Call/Put BE labels remain singular and unclipped.
-- Current live dataset has SELL positions T48/T51 only as off-grid position markers, not clickable ladder strike rows. Positive sold-row rendering therefore remains browser-contract verified rather than falsely claimed as live-visible evidence.
+- `feature-2-sell-strike-premium-difference.png`: Chrome after clicking visible saved 23,500 SELL Call. Existing Call BE label shows `0.00 pts` from saved premium `1178.75` minus current manually refreshed premium `1178.75`; Put BE remains unchanged. T51 evidence and ladder row stay separate with no duplicate or overlap.
 - Contract evidence covers `440.00 - 654.85 = -214.85 pts`, matching-side-only display, explicit manual-refresh clear/re-click boundary, and zero automatic quote fetches during strike click or geometry retry.
 
 ## Feature 3 — broker margin and funds
