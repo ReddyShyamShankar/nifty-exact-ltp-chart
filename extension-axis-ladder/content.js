@@ -2075,7 +2075,8 @@
     const offGrid = new Set(membership?.offGridStrikes || []);
     return [...offGrid].sort((left, right) => left - right).flatMap((strike) => {
       const entries = (entriesByStrike.get(strike) || [])
-        .filter((entry) => entry?.source !== "BROKER_POSITION");
+        .filter((entry) => entry?.source !== "BROKER_POSITION"
+          && !activeStrategyOwnerForEntry(entry.id));
       return ["BUY", "SELL"].flatMap((direction) => {
         const matching = entries.filter((entry) => entry.direction === direction);
         if (!matching.length) return [];
@@ -2822,6 +2823,23 @@
       && Number.isFinite(Number(model.entries[0]?.strike)));
   }
 
+  function manualPositionSpineModels() {
+    const liveEntryIds = liveManualEntryIds();
+    return activeChartStrategies().flatMap((strategy) =>
+      strategyStoreApi.legsForStrategy(settings.strategyBook, strategy.id)
+        .filter((entry) => entry.source === "MANUAL" && liveEntryIds.has(entry.id))
+        .flatMap((entry) => strategyLevelModels({
+          strategyId: strategy.id,
+          strategyLabel: strategy.label,
+          entries: [entry],
+          viewKind: "MANUAL_LEG"
+        }).slice(0, 1)));
+  }
+
+  function positionSpineModels(models = []) {
+    return [...brokerPositionSpineModels(models), ...manualPositionSpineModels()];
+  }
+
   function strategyColumnSide(model, atm) {
     const sides = [...new Set((Array.isArray(model?.entries) ? model.entries : [])
       .map((entry) => entry?.optionType)
@@ -2849,7 +2867,7 @@
   }
 
   function renderBrokerPositionSpine(rootNodeValue, models, toY, rect, spineX, guide = {}) {
-    const visible = brokerPositionSpineModels(models).map((model) => {
+    const visible = models.map((model) => {
       const entry = model.entries[0];
       const y = Number(toY(Number(entry.strike)));
       return { model, entry, y };
@@ -2912,30 +2930,36 @@
       marker.className = `nifty-position-spine__marker is-${side} is-${direction}`;
       marker.classList.toggle("is-open", openedStrategyId === model.strategyId);
       marker.dataset.strategyId = model.strategyId;
-      marker.textContent = `${side === "call" ? "C" : "P"}${lots}`;
+      marker.textContent = entry.source === "BROKER_POSITION"
+        ? `${side === "call" ? "C" : "P"}${lots}`
+        : model.strategyLabel;
       marker.setAttribute("aria-expanded", String(openedStrategyId === model.strategyId));
       marker.setAttribute("aria-label", `${side === "call" ? "Call" : "Put"} ${entry.direction}, ${lots} ${lots === 1 ? "lot" : "lots"}, strike ${Number(entry.strike).toLocaleString("en-IN")}. Open P and L.`);
       marker.setAttribute("title", `${side === "call" ? "C" : "P"}${lots} · ${entry.direction} · ${Number(entry.strike).toLocaleString("en-IN")}`);
       marker.addEventListener("click", (event) => {
         event.stopPropagation?.();
-        openBrokerEntryDetails(entry.id);
+        if (entry.source === "BROKER_POSITION") openBrokerEntryDetails(entry.id);
+        else ensureStrategyChartController()?.label(model.strategyId);
       });
       if (side === "call") compact.append(compactSelect, marker);
       else compact.append(marker, compactSelect);
       rootNodeValue.append(compact);
       positionItems.push({
-        id: model.strategyId,
+        id: `${model.strategyId}:${entry.id}`,
         y,
         side,
-        kind: "BROKER",
+        kind: entry.source === "BROKER_POSITION" ? "BROKER" : "STRATEGY",
         tone: direction,
-        label: `${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`,
+        label: entry.source === "BROKER_POSITION"
+          ? `${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`
+          : `${model.strategyLabel} · ${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`,
         strategyId: model.strategyId,
         entryId: entry.id,
         element: compact
       });
 
-      if (breakEvenSelection.current() && visibleStrategyRailId === model.strategyId) {
+      if (entry.source === "BROKER_POSITION" && breakEvenSelection.current()
+        && visibleStrategyRailId === model.strategyId) {
         const projection = strategyChartApi.projectBreakEven(model.exact, {
           minPrice: Math.min(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
           maxPrice: Math.max(...(controller?.membership()?.axisPrices || []).map(Number).filter(Number.isFinite)),
@@ -2954,7 +2978,7 @@
         }
       }
 
-      if (openedStrategyId !== model.strategyId) return;
+      if (entry.source !== "BROKER_POSITION" || openedStrategyId !== model.strategyId) return;
       const item = strategyPnlItems(model.entries)[0];
       const card = document.createElement("span");
       card.className = `nifty-position-spine__card is-${direction}`;
@@ -3118,7 +3142,7 @@
   function placeStrategyRails(toY, rect, labelRight, visualPlacementRevision, spineGuide = {}) {
     if (!visualPlacementIsCurrent(visualPlacementRevision) || !strategyChartApi || !strategyStoreApi) return false;
     const originals = originalStrategyModels();
-    const spineModels = brokerPositionSpineModels(originals);
+    const spineModels = positionSpineModels(originals);
     const showStrategyBreakEvens = Boolean(breakEvenSelection.current());
     const selectedIds = ensureStrategyChartController()?.selected() || [];
     const selectedIdSet = new Set(selectedIds);
@@ -4213,7 +4237,7 @@
           atm: displayAtm
         });
         const estimatedQuickLabelRight = breakEvenLabelRight(strategyLabelRight, rect, window.innerWidth,
-          brokerPositionSpineModels(originalStrategyModels()).length > 0);
+          positionSpineModels(originalStrategyModels()).length > 0);
         const quickLabelRight = breakEvenLabelRightForRenderedBlockers(
           estimatedQuickLabelRight,
           rect,
