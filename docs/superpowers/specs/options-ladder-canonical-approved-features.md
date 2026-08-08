@@ -330,6 +330,11 @@ Its purpose is to bring the most important combined-strategy evidence directly o
 - Dynamic premium difference appears as a separate compact points badge beside the existing BE text, with an explicit positive or negative sign.
 - The normal extension popup action is `REFRESH ALL`. It refreshes broker positions, funds, selected-basket margin evidence, and option-chain numbers through the same explicit manual-refresh boundary as the side extension.
 - Broker position rows remain read-only and show their exact selected position face. Unavailable opposite-side snapshot evidence stays `—`; no value may be invented.
+- Native TradingView price ticks calibrate the ladder only. They must never hide valid in-viewport option strikes; every safely placeable live strike card remains visible.
+- Position spine headers read `CALL` and `PUT`, using compact green and red chart-native button treatments. Do not use one-letter `C` and `P` headings.
+- Every idle and selected selector square remains solid black. Do not substitute a white, transparent, or outline-only selected state.
+- Breakeven rails, combined BE labels, position tokens, and ladder labels use one consistent Geist Mono typography system and shared baseline alignment.
+- The position-spine divider is a slightly thicker two-pixel line so the Calls/Put sides remain visually separable without becoming a dashboard panel.
 
 ---
 

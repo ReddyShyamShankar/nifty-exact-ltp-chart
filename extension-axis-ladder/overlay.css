@@ -872,20 +872,34 @@
   position: fixed;
   z-index: 2;
   width: 0;
-  border-left: 1px solid var(--ladder-line);
+  border-left: 2px solid var(--ladder-line);
   pointer-events: none;
 }
 
 .nifty-position-spine__lane-label {
   position: fixed;
   z-index: 3;
-  color: var(--theme-ink-dim);
+  padding: 2px 4px;
+  border: 1px solid var(--plan-line);
+  border-radius: 2px;
+  color: var(--control-ink);
   font: 800 8px/1 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   pointer-events: none;
 }
 
-.nifty-position-spine__lane-label.is-call { transform: translateX(-10px); }
-.nifty-position-spine__lane-label.is-put { transform: translateX(4px); }
+.nifty-position-spine__lane-label.is-call {
+  transform: translateX(-20px);
+  border-color: var(--ladder-buy);
+  background: var(--ladder-buy);
+  color: var(--ladder-buy-ink);
+}
+
+.nifty-position-spine__lane-label.is-put {
+  transform: translateX(4px);
+  border-color: var(--ladder-sell);
+  background: var(--ladder-sell);
+  color: var(--ladder-sell-ink);
+}
 
 .nifty-position-spine__compact {
   position: fixed;
@@ -997,8 +1011,6 @@
 .nifty-position-spine__cluster-row-select[aria-pressed="true"] {
   border-color: var(--control-bg);
   background: var(--control-bg);
-  outline: 2px solid var(--control-bg);
-  outline-offset: 1px;
 }
 
 .nifty-position-spine__cluster-row-open {
@@ -1035,8 +1047,6 @@
 .nifty-position-spine__compact-select[aria-pressed="true"] {
   border-color: var(--control-bg);
   background: var(--control-bg);
-  outline: 2px solid var(--control-bg);
-  outline-offset: 1px;
 }
 
 .nifty-position-spine__marker {
@@ -1243,8 +1253,6 @@
   border-color: var(--control-bg);
   background: var(--control-bg);
   box-shadow: none;
-  outline: 2px solid var(--control-bg);
-  outline-offset: 1px;
 }
 
 .nifty-strategy__label {

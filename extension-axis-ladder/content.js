@@ -158,14 +158,11 @@
   }
 
   function renderableAxisStrikes(membership = {}) {
-    const nativeAxisPrices = (membership?.axisPrices || []).map(Number).filter(Number.isFinite);
-    const tolerance = Math.max(1e-9, Math.abs(Number(membership?.atmStep) || 1) * 1e-7);
-    const atm = Number(membership?.atm);
+    // Native ticks calibrate price-to-pixel mapping. They must not decide which
+    // option strikes are allowed to appear: most real strikes fall between them.
     return [...new Set((membership?.rows || [])
       .map((row) => Number(row?.strike))
-      .filter((strike) => Number.isFinite(strike)
-        && (nativeAxisPrices.some((price) => Math.abs(price - strike) <= tolerance)
-          || (Number.isFinite(atm) && Math.abs(atm - strike) <= tolerance))))];
+      .filter(Number.isFinite))];
   }
 
   function positionSpineBounds(points = [], rect = {}) {
@@ -3162,7 +3159,7 @@
     line.setAttribute("aria-hidden", "true");
     rootNodeValue.append(line);
 
-    [["C", "is-call"], ["P", "is-put"]].forEach(([text, className]) => {
+    [["CALL", "is-call"], ["PUT", "is-put"]].forEach(([text, className]) => {
       const laneLabel = document.createElement("span");
       laneLabel.className = `nifty-position-spine__lane-label ${className}`;
       laneLabel.textContent = text;

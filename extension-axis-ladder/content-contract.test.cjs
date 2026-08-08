@@ -1937,13 +1937,13 @@ test("display ATM snaps to nearest strike that is actually visible", () => {
   assert.equal(api.displayAtmStrike([], 24700), null);
 });
 
-test("render filter retains real in-range ATM between native grid labels", () => {
+test("render filter retains every real visible strike, including strikes between native grid labels", () => {
   assert.deepEqual(api.renderableAxisStrikes({
     axisPrices: [24200, 24400],
     atm: 24300,
     atmStep: 50,
-    rows: [{ strike: 24200 }, { strike: 24300 }, { strike: 24400 }]
-  }), [24200, 24300, 24400]);
+    rows: [{ strike: 24200 }, { strike: 24250 }, { strike: 24300 }, { strike: 24350 }, { strike: 24400 }]
+  }), [24200, 24250, 24300, 24350, 24400]);
 });
 
 test("position spine is bounded by first and last visible strike", () => {
@@ -3850,7 +3850,7 @@ test("manual-only strategies keep shared position spine and T labels visible wit
   assert.ok(rails, "manual positions must create chart position layer");
   assert.ok(rails.querySelector(".nifty-position-spine__line"), "manual positions must retain vertical spine");
   assert.deepEqual(rails.querySelectorAll(".nifty-position-spine__lane-label")
-    .map((node) => node.textContent).sort(), ["C", "P"]);
+    .map((node) => node.textContent).sort(), ["CALL", "PUT"]);
   const positions = rails.querySelectorAll(".nifty-position-spine__compact");
   assert.equal(positions.filter((node) => node.classList.contains("is-call")).length, 1);
   assert.equal(positions.filter((node) => node.classList.contains("is-put")).length, 1);
