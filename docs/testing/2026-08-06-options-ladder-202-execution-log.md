@@ -70,8 +70,26 @@
 | `WF-MAN-ADD-015` | PASS | `CREATE NEW STRATEGY` created next identity T49 and saved only chosen Call leg. |
 | `WF-MAN-ADD-016` | PASS | Second Put leg chooser offered `ADD TO T49`; selection added only to T49. Liquid fixture repeated same rule with T50. |
 | `WF-MAN-ADD-017` | PASS | Chooser CANCEL returned to editor with zero saved entries; close/outside/Escape cancellation guards also pass. |
+| `WF-MAN-EDIT-001` | PASS | T50 displayed separate exact Call and Put saved-entry badges at 25,000. |
+| `WF-MAN-EDIT-002` | PASS | Updating Call to two lots produced `Buy Call, 2 lots` face while Put stayed one lot. |
+| `WF-MAN-EDIT-003` | PASS | First saved-row click showed newest Sell Put face instead of live face. |
+| `WF-MAN-EDIT-004` | PASS | Repeated clicks cycled Sell Put → Buy Call → live quotes, newest-first without stacking. |
+| `WF-MAN-EDIT-005` | PASS | Saved face showed fixed snapshots and traded-side `×2`; live face returned alone after cycle. |
+| `WF-MAN-EDIT-006` | PASS | Exact Call badge opened populated SAVE/REMOVE editor, never blank ADD. |
+| `WF-MAN-EDIT-007` | PASS | Replayed former failure: unique saved Call cell double-click opened populated SAVE/REMOVE editor. |
+| `WF-MAN-EDIT-008` | PASS | Double-clicking displayed saved Buy Call face opened that exact identity. |
+| `WF-MAN-EDIT-009` | PASS | Saved editor prefilled Buy Call, one lot, premium 800.50, fixed snapshots, SAVE, and REMOVE. |
+| `WF-MAN-EDIT-010` | PASS | Premium update 800.50 → 805 changed only exact Call identity; Put sibling remained unchanged. |
+| `WF-MAN-EDIT-011` | PASS | Call lots update 1 → 2 moved T50 break-even from 25,202 to 25,506 and kept Put unchanged. |
+| `WF-MAN-EDIT-012` | PASS (CONTROLLED AUTOMATION) | Opposite-side edit command creates separate identity instead of overwriting existing other-side entry; UI side-specific editor prevents ambiguous side mutation. |
+| `WF-MAN-EDIT-013` | PASS | REMOVE deleted exact Call only; same-strike Sell Put sibling remained. |
+| `WF-MAN-EDIT-014` | PASS | Closing premium-801 draft without SAVE preserved stored premium 800.50. |
+| `WF-MAN-EDIT-015` | PASS | Manual refresh closed saved editor; reopening retained captured Put snapshot 598.85. |
+| `WF-MAN-EDIT-016` | PASS | TradingView reload plus refresh restored exact Put badge, expiry ownership, and snapshot. |
+| `WF-MAN-EDIT-017` | PASS | Far expiry restored two T49 entries at 24,000 with no T50; returning restored one T50 entry at 25,000 with no T49. |
+| `WF-MAN-EDIT-018` | PASS (CONTROLLED AUTOMATION) | Injected storage SAVE/REMOVE failure preserves old plan, keeps exact editor actionable, and reports `PLAN NOT SAVED`. |
 
-Current candidate tally: **56 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **74 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -223,6 +241,16 @@ Current candidate tally: **56 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - Missing/conflicting lot-size state cannot be safely produced from accepted live provider data; deterministic current-expiry metadata guard injects malformed fixture and proves fail-closed behavior.
 - No broker order or external financial action occurred; T49/T50 are local controlled strategy records created for required workflows.
 
+## `WF-MAN-EDIT-001` through `WF-MAN-EDIT-018` evidence
+
+- T50 rendered separate Call/Put badges. Saved-row clicks cycled newest Sell Put, older Buy Call, then live face; fixed snapshots and `×lots` never stacked with live values.
+- Exact badge and unique saved-cell double-click both opened populated SAVE/REMOVE editor. This live replay closes workflow 007's previously documented failure.
+- Close discarded premium-801 draft. Saved premium update to 805 affected only Call identity. Lots update to two moved T50 break-even to 25,506 and left Put sibling untouched.
+- Exact Call REMOVE left Sell Put sibling. Refresh closed editor and reopening preserved captured Put 598.85 snapshot.
+- Page reload plus refresh restored saved Put record. Expiry switch showed two far-expiry T49 entries only; returning showed one liquid-expiry T50 entry only.
+- Opposite-side identity and injected storage-failure paths passed deterministic guards because production UI/provider deliberately prevents ambiguous side mutation and storage fault injection.
+- Controlled records remain local-only; no broker or exchange action occurred.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -281,7 +309,14 @@ Current candidate tally: **56 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-011-012-invalid-and-missing-quote-input-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-014-015-017-chooser-create-cancel-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-016-existing-strategy-only-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-EDIT-001-005-badges-and-face-cycle-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-EDIT-006-011-exact-edit-premium-lots-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-EDIT-007-013-unique-doubleclick-remove-exact-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-EDIT-014-015-close-refresh-preserve-snapshot-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-EDIT-016-reload-restores-manual-entry-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-EDIT-017-far-expiry-isolated-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-EDIT-017-liquid-expiry-restored-PASS.png`
 
 ## Next workflow
 
-Run `WF-MAN-EDIT-001` through `WF-MAN-EDIT-018`. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-BRK-001` through `WF-BRK-016`, using deterministic broker mocks where live Zerodha authorization or destructive/external account mutation is unavailable. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
