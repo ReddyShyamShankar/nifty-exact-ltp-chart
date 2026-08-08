@@ -1777,6 +1777,15 @@ test("display ATM snaps to nearest strike that is actually visible", () => {
   assert.equal(api.displayAtmStrike([], 24700), null);
 });
 
+test("render filter retains real in-range ATM between native grid labels", () => {
+  assert.deepEqual(api.renderableAxisStrikes({
+    axisPrices: [24200, 24400],
+    atm: 24300,
+    atmStep: 50,
+    rows: [{ strike: 24200 }, { strike: 24300 }, { strike: 24400 }]
+  }), [24200, 24300, 24400]);
+});
+
 test("position spine is bounded by first and last visible strike", () => {
   assert.deepEqual(api.positionSpineBounds([
     { strike: 26200, y: 40 },
@@ -5571,7 +5580,7 @@ test("production ladder shows visible strikes while clipped siblings stay hidden
   assert.equal(h.row(23700).hidden, true);
 });
 
-test("production ladder hides off-axis real ATM and highlights nearest visible native strike", async () => {
+test("production ladder retains off-grid real ATM inside visible native range", async () => {
   const h = createBreakEvenLifecycleHarness({
     spot: 23767.45,
     initialAxisPairs: [23400, 23600, 23800, 24000, 24200].map((price, index) => ({
@@ -5581,10 +5590,12 @@ test("production ladder hides off-axis real ATM and highlights nearest visible n
   });
   await h.settle();
 
-  assert.equal(h.row(23750).hidden, true, "real ATM stays hidden when TradingView Y-axis omits it");
+  assert.equal(h.row(23750).hidden, false, "real ATM remains visible between TradingView grid labels");
+  assert.equal(h.row(23750).classList.contains("is-atm"), true,
+    "real ATM keeps exact theme highlight");
   assert.equal(h.row(23800).hidden, false);
-  assert.equal(h.row(23800).classList.contains("is-atm"), true,
-    "nearest visible native strike becomes display ATM");
+  assert.equal(h.row(23800).classList.contains("is-atm"), false,
+    "nearest native grid strike does not impersonate ATM");
   assert.equal(h.row(23600).classList.contains("is-atm"), false);
 });
 

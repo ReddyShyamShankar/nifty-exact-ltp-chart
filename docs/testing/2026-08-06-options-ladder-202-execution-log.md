@@ -28,8 +28,10 @@
 | `WF-LAD-004` | PASS | Native price-axis zoom increased visible rows from 20 to 24 and reduced minimum real strike step from 100 to 50 while ladder stayed `LIVE`. |
 | `WF-LAD-005` | PASS | Native price-axis zoom-out reduced visible rows from 24 to 17 and increased minimum real strike step from 50 to 200 while ladder stayed `LIVE`. |
 | `WF-LAD-006` | PASS | Live-price badge covered native 24,600 label; ladder restored real 24,600 row between visible 24,400 and 24,800 cadence. |
+| `WF-LAD-007` | PASS AFTER REPAIR | Initial sparse-axis replay omitted real in-range ATM. Latest unpacked revision retained exact 24,550 ATM once between native 24,000 and 25,000 rows while ladder stayed `LIVE`. |
+| `WF-LAD-008` | PASS | Historical NIFTY range around 4,480–5,440 kept cached ATM 24,550 outside view; no ATM row was forced and extension failed closed with `Visible axis contracts are unavailable.` |
 
-Current candidate tally: **14 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **16 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -102,6 +104,24 @@ Current candidate tally: **14 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - No product repair was required; live workflows matched expected behavior.
 - Full extension-plus-bridge suite after live verification: `988/988` passed with temporary localhost permission.
 
+## `WF-LAD-007` repair evidence
+
+- Live failure: 400-point sparse axis rendered native 24,400 and 24,800 rows but omitted real in-range ATM between them; nearest native row received ATM highlight instead.
+- Root cause: membership selection correctly pinned real ATM, but final production render filter kept only native-axis intersections and removed pinned ATM.
+- Rollback checkpoint: pushed `codex/checkpoint-before-atm-pin-fix` at `04883c1`.
+- RED regression: render filter must retain real in-range ATM between native grid labels.
+- Minimal repair: renderable strike filter now keeps native-axis intersections plus exact ATM already present in validated membership rows.
+- Targeted ATM contracts: `3/3` passed. Production DOM regressions plus timeframe, axis, and screenshot suites passed together.
+- Full extension-plus-bridge suite after repair: `989/989` passed with temporary localhost permission.
+- Latest unpacked revision was reloaded in Chrome. Exact live sparse-axis replay retained real 24,550 ATM once between native 24,000 and 25,000 rows, highlighted exact ATM, and kept ladder `LIVE`.
+
+## `WF-LAD-008` live evidence
+
+- Navigated NIFTY chart to historical visible price range around 4,480–5,440 while keeping cached exact-expiry chain and ATM 24,550.
+- Chart rendered zero option rows and did not force off-screen ATM back into view.
+- Extension displayed `Visible axis contracts are unavailable.` and kept chart free of top-left fallback rows.
+- Targeted out-of-range ATM contract passed.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -127,7 +147,10 @@ Current candidate tally: **14 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-005-axis-before-zoom-out.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-005-sparse-axis-fewer-rows-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-LAD-006-live-marker-grid-slot-restored-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-007-off-grid-atm-missing-FAIL.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-007-off-grid-atm-retained-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-LAD-008-out-of-range-atm-not-forced-PASS.png`
 
 ## Next workflow
 
-Run `WF-LAD-007` in-range ATM pin workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-LAD-009` cached-chain zoom-in workflow. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.

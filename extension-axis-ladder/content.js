@@ -152,6 +152,17 @@
     }, strikes[0]);
   }
 
+  function renderableAxisStrikes(membership = {}) {
+    const nativeAxisPrices = (membership?.axisPrices || []).map(Number).filter(Number.isFinite);
+    const tolerance = Math.max(1e-9, Math.abs(Number(membership?.atmStep) || 1) * 1e-7);
+    const atm = Number(membership?.atm);
+    return [...new Set((membership?.rows || [])
+      .map((row) => Number(row?.strike))
+      .filter((strike) => Number.isFinite(strike)
+        && (nativeAxisPrices.some((price) => Math.abs(price - strike) <= tolerance)
+          || (Number.isFinite(atm) && Math.abs(atm - strike) <= tolerance))))];
+  }
+
   function positionSpineBounds(points = [], rect = {}) {
     const ys = (Array.isArray(points) ? points : [])
       .map((point) => Number(point?.y ?? point))
@@ -1298,6 +1309,7 @@
     riskLabelLayout,
     rowLaneLayout,
     displayAtmStrike,
+    renderableAxisStrikes,
     positionSpineBounds,
     positionSpineLayout,
     breakEvenLabelRight,
@@ -4127,12 +4139,7 @@
       });
       const laneOffset = Math.ceil(Math.max(...dimensions.map(({ width }) => width))) + 10;
       const baseRight = Math.max(0, window.innerWidth - rect.right + 7);
-      const nativeAxisPrices = (membership?.axisPrices || []).map(Number).filter(Number.isFinite);
-      const nativeAxisTolerance = Math.max(1e-9, Math.abs(Number(membership?.atmStep) || 1) * 1e-7);
-      const axisVisibleStrikes = new Set((membership?.rows || [])
-        .map((row) => Number(row?.strike))
-        .filter((strike) => Number.isFinite(strike)
-          && nativeAxisPrices.some((price) => Math.abs(price - strike) <= nativeAxisTolerance)));
+      const axisVisibleStrikes = new Set(renderableAxisStrikes(membership));
       const visibleIndexes = visibleRowIndexes(
         rows,
         dimensions,
