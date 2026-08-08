@@ -1000,6 +1000,9 @@
 }
 
 .nifty-position-spine__marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   min-width: 28px;
   height: 18px;
   padding: 2px 5px;
@@ -1009,6 +1012,14 @@
   color: var(--plan-ink);
   font: 800 9px/1 "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   cursor: pointer;
+}
+
+.nifty-position-spine__marker-divider {
+  opacity: 0.55;
+}
+
+.nifty-position-spine__marker-be {
+  white-space: nowrap;
 }
 
 .nifty-position-spine__marker.is-buy {
@@ -1219,6 +1230,10 @@
   grid-template-columns: 16px 28px;
   gap: 4px;
   align-items: center;
+}
+
+.nifty-strategy__card.is-collapsed.is-spine-evidence-proxy {
+  display: none;
 }
 
 .nifty-strategy__card.is-collapsed.is-put {

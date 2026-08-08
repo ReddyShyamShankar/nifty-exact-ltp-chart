@@ -2286,7 +2286,7 @@ test("quick break-even labels and strategy controls stay in separate fixed slots
   assert.doesNotMatch(contentSource, /attachQuickBreakEvenStrategyCards/);
 });
 
-test("collapsed manual strategies keep fixed-slot controls and reveal BE header only when checked", async () => {
+test("collapsed manual strategy shows BE after strike click while checkbox controls rail", async () => {
   const book = chartStrategyBook();
   const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
   const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries });
@@ -2307,8 +2307,9 @@ test("collapsed manual strategies keep fixed-slot controls and reveal BE header 
       "checkbox remains first fixed slot for Call and Put");
     const label = card.children[1];
     assert.ok(label.children[0].classList.contains("nifty-strategy__rail-token"));
-    assert.equal(label.children.length, 1,
-      "unchecked control contains token only");
+    assert.equal(label.children.length, 3,
+      "strike-clicked control contains token, divider, and real BE evidence");
+    assert.equal(label.querySelector(".nifty-strategy__rail-text").textContent, "23,900");
   });
 
   cards[0].querySelector(".nifty-strategy__selector")
@@ -2322,8 +2323,7 @@ test("collapsed manual strategies keep fixed-slot controls and reveal BE header 
   const checked = cards.find((card) => card.querySelector(".nifty-strategy__selector")
     ?.getAttribute("aria-pressed") === "true");
   assert.ok(checked.querySelector(".nifty-strategy__rail-divider"));
-  assert.match(checked.querySelector(".nifty-strategy__rail-text").textContent,
-    /BE [\d,]+ · SELL (?:BELOW ↓|ABOVE ↑)/);
+  assert.equal(checked.querySelector(".nifty-strategy__rail-text").textContent, "23,900");
 });
 
 test("collapsed and open strategy cards cap quick BE labels without changing rail values or Y", async () => {
@@ -3663,7 +3663,7 @@ async function selectEveryReachableStrategy(h) {
   assert.fail("strategy selection did not settle");
 }
 
-test("selected strike shows quick BEs while each saved T checkbox owns its BE rail", async () => {
+test("strike click shows owning strategy BE while checkbox alone owns its rail", async () => {
   const at = "2026-07-31T10:02:00.000Z";
   let book = chartStrategyBook();
   book = strategyStore.applyCommand(book, {
@@ -3705,12 +3705,20 @@ test("selected strike shows quick BEs while each saved T checkbox owns its BE ra
   await h.settle();
   rails = h.strategyRails();
   assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 1,
-    "selected manual face reveals only its exact owning T control");
-  assert.equal(rails.querySelector(".nifty-strategy__label").textContent.trim(), "T1");
+    "strike click retains one reusable detail-card node");
+  assert.equal(rails.querySelector(".nifty-strategy__card")
+    .classList.contains("is-spine-evidence-proxy"), true,
+  "closed unchecked detail-card proxy stays hidden behind persistent T control");
+  const owningPosition = rails.querySelectorAll(".nifty-position-spine__compact")
+    .find((node) => node.querySelector(".nifty-position-spine__marker")?.textContent.includes("T1"));
+  assert.ok(owningPosition, "selected manual face retains its owning persistent T control");
+  assert.equal(owningPosition.querySelector(".nifty-position-spine__marker").textContent, "T1|23,900",
+    "strike click exposes real saved-strategy breakeven beside persistent T token");
+  assert.equal(owningPosition.querySelector(".nifty-position-spine__compact-select")
+    .getAttribute("aria-pressed"), "false",
+    "showing BE evidence never silently selects strategy");
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 0,
     "selected strike never reveals unchecked saved strategy BE rails");
-  assert.equal(rails.querySelectorAll(".nifty-strategy__rail-text").length, 0,
-    "unchecked saved strategies stay checkbox plus T token only");
   assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
     "selected strike reveals only quick Call and Put BE rails");
   assert.equal(rails.querySelectorAll(".nifty-position-spine__compact").length, 4,
@@ -3720,14 +3728,24 @@ test("selected strike shows quick BEs while each saved T checkbox owns its BE ra
   assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
     .filter((node) => node.classList.contains("is-put")).length, 2);
 
+  owningPosition.querySelector(".nifty-position-spine__marker")
+    .dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 1,
+    "T click reuses one existing card");
+  assert.equal(rails.querySelectorAll(".nifty-strategy__card")
+    .filter((node) => node.classList.contains("is-open")).length, 1,
+    "T click opens existing detail card without creating another card");
+
   rails.querySelectorAll(".nifty-strategy__selector")[0]
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
   rails = h.strategyRails();
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 1,
     "checking one T reveals only that strategy BE rail");
-  assert.equal(rails.querySelectorAll(".nifty-strategy__rail-text").length, 1,
-    "only checked T owns visible BE text");
+  assert.equal(rails.querySelector(".nifty-position-spine__marker-be").textContent, "23,900",
+    "checked rail never removes strike-click BE evidence from persistent T control");
   assert.equal(rails.querySelectorAll(".nifty-strategy__selector")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
   assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
@@ -3762,6 +3780,9 @@ test("selected strike shows quick BEs while each saved T checkbox owns its BE ra
   h.click(23800);
   await h.settle();
   assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 1);
+  assert.equal(h.strategyRails().querySelector(".nifty-strategy__card")
+    .classList.contains("is-spine-evidence-proxy"), true);
+  assert.equal(h.strategyRails().querySelector(".nifty-position-spine__marker-be").textContent, "23,900");
   h.document.dispatch("keydown", { key: "Escape", target: { closest() { return null; } } });
   await h.settle();
   rails = h.strategyRails();
@@ -3771,6 +3792,13 @@ test("selected strike shows quick BEs while each saved T checkbox owns its BE ra
   assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
     .filter((node) => !node.hidden).length, 4,
   "Escape never removes manual or broker C/P positions");
+});
+
+test("closed strike-evidence proxy stays visually hidden after collapsed-card display rules", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  assert.match(css,
+    /\.nifty-strategy__card\.is-collapsed\.is-spine-evidence-proxy\s*\{[^}]*display:\s*none;/s,
+    "collapsed detail proxy must beat normal collapsed-card display in CSS cascade");
 });
 
 test("same-strike broker face keeps two quick rails without leaking unrelated manual T controls", async () => {
@@ -4032,7 +4060,7 @@ test("production strategy rails open details, synchronize squares, preview combi
   let rails = h.strategyRails();
   assert.ok(rails, "strategy rail layer rendered");
   let labels = rails.querySelectorAll(".nifty-strategy__label");
-  assert.deepEqual(labels.map((node) => node.textContent.trim()).sort(), ["T1"]);
+  assert.deepEqual(labels.map((node) => node.textContent.trim()).sort(), ["T1 23,900"]);
   assert.equal(h.manualRails(), null, "legacy anonymous plan rails stay hidden after migration");
 
   labels[0].dispatch("click", { stopPropagation() {} });
@@ -4051,7 +4079,7 @@ test("production strategy rails open details, synchronize squares, preview combi
   rails = h.strategyRails();
   assert.deepEqual(rails.querySelectorAll(".nifty-strategy__label").map((node) => node.textContent).sort(), [
     "COMBINED BE 23,600", "COMBINED BE 24,000",
-    "T1 BE 23,900", "T2 "
+    "T1 BE 23,900", "T2 23,700"
   ]);
   assert.ok(rails.querySelector(".nifty-strategy-preview"));
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
@@ -4244,7 +4272,12 @@ test("overlapping Call strategy and off-grid Call tokens use restored position g
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
   rails = h.strategyRails();
-  assert.equal(rails.querySelector(".nifty-position-spine__cluster-select").getAttribute("aria-expanded"), "true");
+  assert.equal(rails.querySelector(".nifty-position-spine__cluster-select").getAttribute("aria-expanded"), "false",
+    "removing selected rail proxy closes stale group membership");
+  rails.querySelector(".nifty-position-spine__cluster-select")
+    .dispatch("click", { stopPropagation() {} });
+  await h.settle();
+  rails = h.strategyRails();
   assert.equal(rails.querySelector(".nifty-position-spine__cluster-flyout").querySelectorAll(".nifty-position-spine__cluster-row-select")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 0,
   "exact flyout square toggles the already-selected T1 off");
@@ -4254,6 +4287,12 @@ test("overlapping Call strategy and off-grid Call tokens use restored position g
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
   rails = h.strategyRails();
+  if (!rails.querySelector(".nifty-position-spine__cluster-flyout")) {
+    rails.querySelector(".nifty-position-spine__cluster-select")
+      .dispatch("click", { stopPropagation() {} });
+    await h.settle();
+    rails = h.strategyRails();
+  }
   assert.equal(rails.querySelector(".nifty-position-spine__cluster-flyout").querySelectorAll(".nifty-position-spine__cluster-row-select")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 2,
   "same exact flyout square synchronizes both visible T1 controls");
@@ -4965,8 +5004,8 @@ test("colliding manual and broker Calls collapse through restored Call-only posi
     underlying: "NIFTY",
     expiry: "2026-08-25",
     positions: [{
-      contractId: "NFO:NIFTY:2026-08-25:23900:CE", tradingsymbol: "NIFTY26AUG23900CE",
-      exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 23900,
+      contractId: "NFO:NIFTY:2026-08-25:23800:CE", tradingsymbol: "NIFTY26AUG23800CE",
+      exchange: "NFO", underlying: "NIFTY", expiry: "2026-08-25", strike: 23800,
       optionType: "CE", signedQuantity: 65, lotSize: 65, averagePrice: 50, lastPrice: 60, pnl: 650
     }]
   }, at);
@@ -4982,10 +5021,8 @@ test("colliding manual and broker Calls collapse through restored Call-only posi
   assert.ok(group);
   assert.equal(group.textContent, "+2");
   assert.match(selector.getAttribute("aria-label"), /2 grouped Call positions/);
-  assert.equal(rails.querySelectorAll(".nifty-strategy__card")
-    .filter((node) => node.textContent.startsWith("T1 ") && node.hidden).length, 1);
   assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
-    .filter((node) => node.classList.contains("is-call") && node.hidden).length, 1);
+    .filter((node) => node.classList.contains("is-call") && node.hidden).length, 2);
   assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
     .filter((node) => node.classList.contains("is-call")
       && node.classList.contains("is-grouped")
@@ -5358,7 +5395,7 @@ test("combined preview saves permanently from chart after explicit destination c
   h.click(23800);
   await h.settle();
   assert.deepEqual(h.strategyRails().querySelectorAll(".nifty-strategy__label")
-    .map((node) => node.textContent.trim()), ["T3", "T3"]);
+    .map((node) => node.textContent.trim()), ["T3 23,600", "T3 24,000"]);
   assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__rail").length, 0,
     "new saved T3 BE rails remain hidden until its checkbox is selected");
 });

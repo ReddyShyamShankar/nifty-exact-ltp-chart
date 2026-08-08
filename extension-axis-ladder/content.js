@@ -2837,7 +2837,20 @@
   }
 
   function positionSpineModels(models = []) {
-    return [...brokerPositionSpineModels(models), ...manualPositionSpineModels()];
+    const strategyBreakEvens = new Map();
+    models.filter((model) => model?.kind === "STRATEGY"
+      && ["STANDARD", "BROKER_COMBINED"].includes(String(model?.viewKind || "STANDARD")))
+      .forEach((model) => {
+        const values = strategyBreakEvens.get(model.strategyId) || [];
+        const exact = Number(model.exact);
+        if (Number.isFinite(exact) && !values.includes(exact)) values.push(exact);
+        strategyBreakEvens.set(model.strategyId, values);
+      });
+    return [...brokerPositionSpineModels(models), ...manualPositionSpineModels()]
+      .map((model) => ({
+        ...model,
+        strategyBreakEvens: strategyBreakEvens.get(model.strategyId) || []
+      }));
   }
 
   function strategyColumnSide(model, atm) {
@@ -2930,11 +2943,29 @@
       marker.className = `nifty-position-spine__marker is-${side} is-${direction}`;
       marker.classList.toggle("is-open", openedStrategyId === model.strategyId);
       marker.dataset.strategyId = model.strategyId;
-      marker.textContent = entry.source === "BROKER_POSITION"
+      const markerToken = document.createElement("span");
+      markerToken.className = "nifty-position-spine__marker-token";
+      markerToken.textContent = entry.source === "BROKER_POSITION"
         ? `${side === "call" ? "C" : "P"}${lots}`
         : model.strategyLabel;
+      marker.append(markerToken);
+      const evidenceValues = activeFaceEntry()?.id === entry.id
+        ? (model.strategyBreakEvens || [])
+        : [];
+      if (evidenceValues.length) {
+        const divider = document.createElement("span");
+        divider.className = "nifty-position-spine__marker-divider";
+        divider.setAttribute("aria-hidden", "true");
+        divider.textContent = "|";
+        const evidence = document.createElement("span");
+        evidence.className = "nifty-position-spine__marker-be";
+        evidence.textContent = evidenceValues
+          .map((value) => Math.round(value).toLocaleString("en-IN"))
+          .join("/");
+        marker.append(divider, evidence);
+      }
       marker.setAttribute("aria-expanded", String(openedStrategyId === model.strategyId));
-      marker.setAttribute("aria-label", `${side === "call" ? "Call" : "Put"} ${entry.direction}, ${lots} ${lots === 1 ? "lot" : "lots"}, strike ${Number(entry.strike).toLocaleString("en-IN")}. Open P and L.`);
+      marker.setAttribute("aria-label", `${side === "call" ? "Call" : "Put"} ${entry.direction}, ${lots} ${lots === 1 ? "lot" : "lots"}, strike ${Number(entry.strike).toLocaleString("en-IN")}${evidenceValues.length ? `, strategy breakeven ${evidenceValues.map((value) => Math.round(value).toLocaleString("en-IN")).join(" and ")}` : ""}. Open P and L.`);
       marker.setAttribute("title", `${side === "call" ? "C" : "P"}${lots} · ${entry.direction} · ${Number(entry.strike).toLocaleString("en-IN")}`);
       marker.addEventListener("click", (event) => {
         event.stopPropagation?.();
@@ -3173,6 +3204,7 @@
     const models = [
       ...chartOriginals.map((model) => ({
         ...model,
+        showStrikeEvidence: true,
         hideRail: previewingCombined
           ? !(showComparedOriginalRails && selectedIdSet.has(model.strategyId))
           : !selectedIdSet.has(model.strategyId)
@@ -3289,7 +3321,10 @@
       }
       const card = document.createElement("div");
       const isOpen = model.kind === "STRATEGY" && openedStrategyId === model.strategyId;
+      const isSpineEvidenceProxy = model.kind === "STRATEGY" && model.showStrikeEvidence
+        && !model.selected && !isOpen;
       card.className = `nifty-strategy__card is-${model.kind.toLowerCase()} is-${String(model.viewKind || "standard").toLowerCase()} is-${model.side} ${isOpen ? "is-open" : "is-collapsed"}`;
+      if (isSpineEvidenceProxy) card.classList.add("is-spine-evidence-proxy");
       if (model.kind === "STRATEGY" && !isOpen) card.classList.add("is-rail-header");
       card.dataset.exact = String(model.exact);
       if (model.viewKind === "BROKER_COMBINED") card.classList.add("is-summary-source");
@@ -3320,13 +3355,15 @@
           token.className = "nifty-strategy__rail-token";
           token.textContent = `${label.dataset.token} `;
           label.append(token);
-          if (!model.hideRail) {
+          if (model.showStrikeEvidence || !model.hideRail) {
             const divider = document.createElement("span");
             divider.className = "nifty-strategy__rail-divider";
             divider.setAttribute("aria-hidden", "true");
             const text = document.createElement("span");
             text.className = "nifty-strategy__rail-text";
-            text.textContent = strategyRailText(model);
+            text.textContent = model.showStrikeEvidence
+              ? Math.round(Number(model.exact)).toLocaleString("en-IN")
+              : strategyRailText(model);
             label.append(divider, text);
           }
         } else {
@@ -3350,7 +3387,7 @@
       }
       appendStrategyDetails(card, model);
       rootNodeValue.append(card);
-      if (model.kind === "STRATEGY" && !isOpen) {
+      if (model.kind === "STRATEGY" && !isOpen && !isSpineEvidenceProxy) {
         edgeStrategyItems.push({
           id: model.id,
           y: placement.cardY + POSITION_CONTROL_HEIGHT_PX / 2,
