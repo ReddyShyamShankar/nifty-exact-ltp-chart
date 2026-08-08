@@ -37,16 +37,16 @@ test("zoom rebuilds axis-aligned membership from cached chain without network", 
   });
 
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
-  assert.deepEqual(controller.membership().visibleStrikes, [24000, 24100, 24200, 24300, 24400]);
+  assert.deepEqual(controller.membership().visibleStrikes, Array.from({ length: 9 }, (_, index) => 24000 + index * 50));
 
   currentScale = scale([23400, 23700, 24000, 24300, 24600]);
   assert.equal(await controller.place(), true);
 
   assert.equal(fetches, 1);
-  assert.deepEqual(placements.at(-1).visibleStrikes, [23400, 23700, 24000, 24300, 24600]);
+  assert.deepEqual(placements.at(-1).visibleStrikes, Array.from({ length: 25 }, (_, index) => 23400 + index * 50));
   assert.equal(placements.at(-1).nativeInterval, 300);
-  assert.deepEqual(controller.membership().visibleStrikes, [23400, 23700, 24000, 24300, 24600]);
-  assert.deepEqual(renders.at(-1), [23400, 23700, 24000, 24300, 24600]);
+  assert.deepEqual(controller.membership().visibleStrikes, Array.from({ length: 25 }, (_, index) => 23400 + index * 50));
+  assert.deepEqual(renders.at(-1), Array.from({ length: 25 }, (_, index) => 23400 + index * 50));
   assert.equal(renders.length, 2, "zoom rebuilds visible DOM from cached full chain");
 });
 
@@ -62,8 +62,8 @@ test("controller pins real ATM row inside visible range for theme-specific highl
 
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 4 hours"), true);
   assert.equal(controller.membership().atm, 24300);
-  assert.deepEqual(controller.membership().strikes, [23600, 23800, 24000, 24200, 24300, 24400, 24600]);
-  assert.deepEqual(renders.at(-1), [23600, 23800, 24000, 24200, 24300, 24400, 24600]);
+  assert.deepEqual(controller.membership().strikes, Array.from({ length: 21 }, (_, index) => 23600 + index * 50));
+  assert.deepEqual(renders.at(-1), Array.from({ length: 21 }, (_, index) => 23600 + index * 50));
 });
 
 test("single-column layout never requires visible strikes to align around ATM", () => {

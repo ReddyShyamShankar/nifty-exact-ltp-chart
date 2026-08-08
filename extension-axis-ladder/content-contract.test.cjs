@@ -166,13 +166,12 @@ test("rows owning C/P position badges render above neighboring ladder rows", () 
     "vertical chart coordinate must never become stacking priority");
 });
 
-test("all compact chart controls stay black before and after selection without checkmarks", () => {
+test("checkboxes stay white while identity tokens stay black and checkmark-free", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   for (const selector of [
     ".nifty-position-spine__cluster-select",
     ".nifty-position-spine__cluster-row-select",
     ".nifty-position-spine__compact-select",
-    ".nifty-position-spine__marker",
     ".nifty-position-spine__select",
     ".nifty-strategy__selector",
     ".nifty-edge-stack__selector",
@@ -180,8 +179,10 @@ test("all compact chart controls stay black before and after selection without c
   ]) {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const rule = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`))?.[1] || "";
-    assert.match(rule, /background:\s*var\(--control-bg\)/, `${selector} must paint black when idle`);
+    assert.match(rule, /background:\s*var\(--plan-surface\)/, `${selector} must keep original white checkbox face`);
   }
+  const marker = css.match(/\.nifty-position-spine__marker\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(marker, /background:\s*var\(--control-bg\)/, "B/T identity token remains black");
   assert.doesNotMatch(css, /content:\s*["']✓["']/,
     "selection state must not restore tick marks");
   assert.doesNotMatch(css,
@@ -887,7 +888,7 @@ test("axis grid with no real contract never replaces last valid membership", asy
   assert.deepEqual(controller.membership().strikes, validStrikes);
 });
 
-test("production membership uses axis intersections plus real ATM inside visible range", () => {
+test("production membership keeps every option strike inside visible price bounds", () => {
   const rows = Array.from({ length: 101 }, (_, index) => ({
     strike: 21300 + index * 50,
     call: index,
@@ -905,7 +906,7 @@ test("production membership uses axis intersections plus real ATM inside visible
   assert.equal(membership.interval, 200);
   assert.equal(membership.center, 23750);
   assert.equal(membership.atmStep, 50);
-  assert.deepEqual(membership.strikes, [23400, 23600, 23750, 23800, 24000, 24200]);
+  assert.deepEqual(membership.strikes, Array.from({ length: 17 }, (_, index) => 23400 + index * 50));
   assert.deepEqual(api.freezeMembership({
     timeframe: "1M",
     expiry: "current_month",
@@ -933,10 +934,10 @@ test("membership keeps active off-grid strikes out of premium rows and exposes t
     pinnedStrikes: [24100, 24300]
   });
 
-  assert.deepEqual(membership.strikes, [24000, 24200, 24400]);
-  assert.deepEqual(membership.visibleStrikes, [24000, 24200, 24400]);
+  assert.deepEqual(membership.strikes, [24000, 24100, 24200, 24300, 24400]);
+  assert.deepEqual(membership.visibleStrikes, [24000, 24100, 24200, 24300, 24400]);
   assert.deepEqual(membership.pinnedStrikes, [24100, 24300]);
-  assert.deepEqual(membership.offGridStrikes, [24100, 24300]);
+  assert.deepEqual(membership.offGridStrikes, []);
 });
 
 test("edge stack clusters transitive collisions into one stable price group", () => {
@@ -957,7 +958,7 @@ test("edge stack clusters transitive collisions into one stable price group", ()
   ]);
 });
 
-test("off-grid active trade renders compact directional chip while native premium rows stay axis-only", async () => {
+test("active strike between coarse native ticks remains a full visible premium row", async () => {
   const h = createBreakEvenLifecycleHarness({
     manualEntries: [savedManualEntry({ strike: 23900, direction: "SELL", lots: 3 })],
     initialAxisPairs: [23400, 23600, 23800, 24000, 24200].map((price, index) => ({
@@ -967,13 +968,10 @@ test("off-grid active trade renders compact directional chip while native premiu
   });
   await h.settle();
 
-  assert.equal(h.row(23900), null, "off-grid strike must not become full premium row");
+  assert.ok(h.row(23900), "valid strike between coarse native ticks must remain a full premium row");
   const chip = h.document.getElementById("nifty-axis-ladder")
     .querySelector(".nifty-axis-ladder__off-grid");
-  assert.ok(chip);
-  assert.equal(chip.textContent, "C3", "edge stack keeps only compact side and lot token visible");
-  assert.equal(chip.getAttribute("aria-label"), "C3 · 23,900 SELL");
-  assert.equal(chip.classList.contains("is-sell"), true);
+  assert.equal(chip, null, "visible ladder strike must not be demoted into an off-grid chip");
   assert.equal(h.document.getElementById("nifty-axis-ladder")
     .querySelector(".nifty-axis-ladder__off-grid-title"), null);
   assert.ok(h.row(23600), "native Y-axis strike remains normal premium row");
@@ -1181,7 +1179,7 @@ test("LTP refresh recenters at the exact interval midpoint without another axis 
   assert.equal(placements.at(-1).find((row) => row.strike === 23800).isAtm, true);
 });
 
-test("LTP refresh recenters on true contract midpoint while axis controls visible rows", async () => {
+test("LTP refresh recenters on true contract midpoint while every in-range strike stays visible", async () => {
   let spot = 23767.45;
   const denseRows = Array.from({ length: 101 }, (_, index) => ({
     strike: 21300 + index * 50,
@@ -1205,7 +1203,8 @@ test("LTP refresh recenters on true contract midpoint while axis controls visibl
   await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 month");
   assert.equal(controller.membership().atm, 23750);
   assert.equal(controller.membership().interval, 1000);
-  assert.deepEqual(controller.membership().visibleStrikes, [22000, 23000, 23750, 24000]);
+  assert.deepEqual(controller.membership().visibleStrikes,
+    Array.from({ length: 41 }, (_, index) => 22000 + index * 50));
   assert.equal(controller.membership().atmStep, 50);
 
   spot = 23774.99;
@@ -1215,7 +1214,8 @@ test("LTP refresh recenters on true contract midpoint while axis controls visibl
   spot = 23775;
   await controller.refreshLtp();
   assert.equal(controller.membership().atm, 23800);
-  assert.deepEqual(controller.membership().visibleStrikes, [22000, 23000, 23800, 24000]);
+  assert.deepEqual(controller.membership().visibleStrikes,
+    Array.from({ length: 41 }, (_, index) => 22000 + index * 50));
   await controller.refreshLtp();
   await controller.refreshLtp();
   assert.equal(controller.membership().atm, 23800, "unchanged midpoint must not ping-pong back down");
@@ -1926,6 +1926,22 @@ test("dense body-height fallback suppresses absolute saved-badge bands before pl
   assert.match(contentSource, /if \(!separatedCenters\) \{\s*suppressSavedBadges = true/);
   assert.match(contentSource, /savedBadges\.hidden = suppressSavedBadges/,
     "fallback cannot keep absolute badges that would overlap neighboring row bodies");
+});
+
+test("dense zoom samples real strikes and preserves the actual ATM instead of hiding the ladder", () => {
+  const indexes = Array.from({ length: 100 }, (_, index) => index);
+  const dimensions = indexes.map(() => ({ baseHeight: 22, height: 22 }));
+  const sampled = api.evenlySampleRowIndexes(indexes, dimensions, 0, 200, 50, 2);
+  assert.ok(sampled.length > 0 && sampled.length < indexes.length,
+    "dense zoom keeps a safely-sized sample rather than concealing every strike");
+  assert.ok(sampled.includes(50), "actual ATM stays visible in the sampled ladder");
+  assert.ok(api.separateRowCenters(
+    sampled.map((index) => ({ y: index })),
+    sampled.map(() => ({ height: 22 })),
+    0,
+    200,
+    2
+  ), "sampled rows remain non-overlapping");
 });
 
 test("display ATM snaps to nearest strike that is actually visible", () => {
@@ -2881,7 +2897,7 @@ test("light chart theme gives strategy evidence light surfaces and non-obscuring
   assert.match(light, /--plan-line:\s*#d4d4d8/);
   assert.match(light, /--ladder-selected:\s*var\(--theme-warn-soft\)/);
   assert.match(light, /--ladder-selected-ink:\s*#18181b/);
-  assert.match(css, /\.nifty-strategy__card\.is-combined\.is-collapsed \.nifty-strategy__label\s*\{[\s\S]*?width:\s*auto[\s\S]*?background:\s*transparent[\s\S]*?font:\s*800 9px/);
+  assert.match(css, /\.nifty-strategy__card\.is-combined\.is-collapsed \.nifty-strategy__label\s*\{[\s\S]*?display:\s*inline-flex[\s\S]*?align-items:\s*center[\s\S]*?width:\s*var\(--chart-rail-label-width\)[\s\S]*?height:\s*22px[\s\S]*?background:\s*transparent[\s\S]*?font:\s*var\(--chart-rail-font\)/);
   assert.match(css, /\.nifty-strategy-preview button:disabled\s*\{[\s\S]*?cursor:\s*not-allowed[\s\S]*?opacity:\s*0\.55/);
 });
 

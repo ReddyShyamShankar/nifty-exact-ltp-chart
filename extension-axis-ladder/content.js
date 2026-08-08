@@ -374,6 +374,27 @@
     return result;
   }
 
+  function evenlySampleRowIndexes(indexes, dimensions, minY, maxY, focusIndex = null, gap = 2) {
+    if (!Array.isArray(indexes) || !indexes.length || !Array.isArray(dimensions)) return [];
+    const heights = indexes.map((index) => Number(dimensions[index]?.baseHeight || dimensions[index]?.height))
+      .filter((height) => Number.isFinite(height) && height > 0);
+    const available = Number(maxY) - Number(minY);
+    const maximumHeight = Math.max(...heights);
+    const capacity = Math.floor((available + gap) / (maximumHeight + gap));
+    if (!Number.isFinite(capacity) || capacity < 1) return [];
+    if (indexes.length <= capacity) return indexes.slice();
+    const chosen = new Set(Array.from({ length: capacity }, (_, slot) => {
+      const ratio = capacity === 1 ? 0.5 : slot / (capacity - 1);
+      return indexes[Math.round(ratio * (indexes.length - 1))];
+    }));
+    if (Number.isInteger(focusIndex) && indexes.includes(focusIndex)) {
+      const nearest = [...chosen].reduce((best, index) => Math.abs(index - focusIndex) < Math.abs(best - focusIndex) ? index : best);
+      chosen.delete(nearest);
+      chosen.add(focusIndex);
+    }
+    return [...chosen].sort((left, right) => left - right);
+  }
+
   function priceScaleFailure(kind) {
     if (kind === "overlap") return "VISIBLE STRIKES CANNOT BE PLACED SAFELY";
     if (kind === "outside") return "NO OPTION STRIKES ON VISIBLE PRICE GRID";
@@ -660,7 +681,18 @@
     const rankedRows = rankOpenInterestRows(chainRows);
     const selection = timeframeApi.selectAxisAlignedRows(rankedRows, spot, axisPrices, undefined, tieDirection);
     if (!selection?.rows?.length) return null;
-    const selectedStrikes = new Set(selection.rows.map((row) => Number(row.strike)));
+    // Tick labels calibrate TradingView coordinates. They must not sample away
+    // option strikes that lie between two coarse native grid prices.
+    const observedAxisPrices = [...new Set((Array.isArray(axisPrices) ? axisPrices : [])
+      .map(Number)
+      .filter(Number.isFinite))].sort((left, right) => left - right);
+    const axisMin = observedAxisPrices[0];
+    const axisMax = observedAxisPrices.at(-1);
+    const inViewportRows = Number.isFinite(axisMin) && Number.isFinite(axisMax)
+      ? rankedRows.filter((row) => Number(row?.strike) >= axisMin && Number(row?.strike) <= axisMax)
+      : [];
+    const selectedStrikes = new Set((inViewportRows.length ? inViewportRows : selection.rows)
+      .map((row) => Number(row.strike)));
     const chainByStrike = new Map(rankedRows.map((row) => [Number(row?.strike), row]));
     const pins = [...new Set((Array.isArray(pinnedStrikes) ? pinnedStrikes : [])
       .map(Number)
@@ -1442,6 +1474,7 @@
     breakEvenLabelRightForRenderedBlockers,
     rowsFitPlot,
     separateRowCenters,
+    evenlySampleRowIndexes,
     strategyOwnershipChoices,
     chartInstrumentIdentity,
     normalizePremiumTimeAxis,
@@ -3159,12 +3192,16 @@
     line.setAttribute("aria-hidden", "true");
     rootNodeValue.append(line);
 
-    [["CALL", "is-call"], ["PUT", "is-put"]].forEach(([text, className]) => {
+    const laneHeaderTop = Math.max(Number(rect.top) + 4, Number(bounds.top) - 30);
+    [
+      ["CALL", "is-call", spineX - POSITION_LANE_GAP_PX - POSITION_CONTROL_WIDTH_PX / 2],
+      ["PUT", "is-put", spineX + POSITION_LANE_GAP_PX + POSITION_CONTROL_WIDTH_PX / 2]
+    ].forEach(([text, className, left]) => {
       const laneLabel = document.createElement("span");
       laneLabel.className = `nifty-position-spine__lane-label ${className}`;
       laneLabel.textContent = text;
-      laneLabel.style.left = `${spineX}px`;
-      laneLabel.style.top = `${Math.max(0, bounds.top - 15)}px`;
+      laneLabel.style.left = `${left}px`;
+      laneLabel.style.top = `${laneHeaderTop}px`;
       rootNodeValue.append(laneLabel);
     });
 
@@ -4544,17 +4581,37 @@
       if (!visibleIndexes.length) {
         throw new Error(priceScaleFailure("outside"));
       }
+      let displayIndexes = visibleIndexes.slice();
       let suppressSavedBadges = false;
       let separatedCenters = separateRowCenters(
-        visibleIndexes.map((index) => rows[index]),
-        visibleIndexes.map((index) => dimensions[index]),
+        displayIndexes.map((index) => rows[index]),
+        displayIndexes.map((index) => dimensions[index]),
         Number(rect.top), Number(rect.bottom), 2
       );
       if (!separatedCenters) {
         suppressSavedBadges = true;
         separatedCenters = separateRowCenters(
-          visibleIndexes.map((index) => rows[index]),
-          visibleIndexes.map((index) => ({
+          displayIndexes.map((index) => rows[index]),
+          displayIndexes.map((index) => ({
+            width: dimensions[index].width,
+            height: dimensions[index].baseHeight
+          })),
+          Number(rect.top), Number(rect.bottom), 2
+        );
+      }
+      if (!separatedCenters) {
+        const atmIndex = rows.findIndex((row) => Number(row.strike) === Number(membership?.atm));
+        displayIndexes = evenlySampleRowIndexes(
+          visibleIndexes,
+          dimensions,
+          Number(rect.top),
+          Number(rect.bottom),
+          atmIndex,
+          2
+        );
+        separatedCenters = separateRowCenters(
+          displayIndexes.map((index) => rows[index]),
+          displayIndexes.map((index) => ({
             width: dimensions[index].width,
             height: dimensions[index].baseHeight
           })),
@@ -4563,11 +4620,11 @@
       }
       if (!separatedCenters) throw new Error(priceScaleFailure("overlap"));
       const displayCenters = rows.map((row) => Number(row.y));
-      visibleIndexes.forEach((rowIndex, visibleIndex) => {
+      displayIndexes.forEach((rowIndex, visibleIndex) => {
         displayCenters[rowIndex] = separatedCenters[visibleIndex];
       });
-      const visibleIndexSet = new Set(visibleIndexes);
-      const renderedStrikes = visibleIndexes.map((index) => Number(rows[index].strike));
+      const visibleIndexSet = new Set(displayIndexes);
+      const renderedStrikes = displayIndexes.map((index) => Number(rows[index].strike));
       reconcileBreakEvenSelection(rows, new Set(renderedStrikes));
       const displayAtm = displayAtmStrike(renderedStrikes, membership?.atm);
       elements.forEach(({ row, element }, index) => {

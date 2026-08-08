@@ -246,7 +246,8 @@ test("bridge payload flows through reviewed ledger, both risk maps, storage, and
   t.after(() => controller.invalidate());
   assert.equal(await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour"), true);
   assert.equal(controller.chain().lotSize, 65);
-  assert.deepEqual(renderedRows.map((row) => row.strike), [23800, 23900, 24000, 24100, 24200, 24300, 24400]);
+  assert.deepEqual(renderedRows.map((row) => row.strike),
+    Array.from({ length: 13 }, (_, index) => 23800 + index * 50));
   assert.equal(extraChainRequests, 0);
 
   assert.equal(layers.status, "OK");

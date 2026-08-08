@@ -319,7 +319,7 @@ Its purpose is to bring the most important combined-strategy evidence directly o
 
 ## 5. Approved chart interaction and visual corrections
 
-- Every compact selector square and identity token uses the original black control treatment in both light and dark chart themes, including idle selectors. Do not draw checkmarks inside selectors.
+- Every compact selector square keeps its original white checkbox treatment in both light and dark chart themes. Every strategy or broker identity token keeps its original black control treatment. Do not draw checkmarks inside selectors.
 - A grouped-position flyout stays open while the user selects or deselects multiple exact strategies. It closes only from its opener, outside click, or Escape.
 - Only one ladder strike may show an expanded saved-position face at a time. Opening another strike clears the previous expanded face.
 - An idle saved strategy identity stays at its owning strike. Clicking that saved position moves its strategy evidence to every real calculated strategy breakeven; it must not remain falsely anchored at the strike.
@@ -332,7 +332,7 @@ Its purpose is to bring the most important combined-strategy evidence directly o
 - Broker position rows remain read-only and show their exact selected position face. Unavailable opposite-side snapshot evidence stays `—`; no value may be invented.
 - Native TradingView price ticks calibrate the ladder only. They must never hide valid in-viewport option strikes; every safely placeable live strike card remains visible.
 - Position spine headers read `CALL` and `PUT`, using compact green and red chart-native button treatments. Do not use one-letter `C` and `P` headings.
-- Every idle and selected selector square remains solid black. Do not substitute a white, transparent, or outline-only selected state.
+- Selector squares retain their original white checkbox face. Strategy and broker identity tokens such as `T40` and `B1` remain solid black; do not merge the two visual roles.
 - Breakeven rails, combined BE labels, position tokens, and ladder labels use one consistent Geist Mono typography system and shared baseline alignment.
 - The position-spine divider is a slightly thicker two-pixel line so the Calls/Put sides remain visually separable without becoming a dashboard panel.
 

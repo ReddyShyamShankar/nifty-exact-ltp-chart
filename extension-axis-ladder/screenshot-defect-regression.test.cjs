@@ -133,7 +133,7 @@ test("UI: combined label and strategy cards use readable plan ink", () => {
   assert.match(css, /\.nifty-strategy__card\.is-combined \.nifty-strategy__label\s*\{[\s\S]*?color:\s*var\(--plan-ink\);/);
 });
 
-test("UI: strategy selection uses original black square state without check glyphs", () => {
+test("UI: selection squares stay white while identity tokens stay black, without check glyphs", () => {
   const css = read("overlay.css");
   assert.doesNotMatch(css, /content:\s*["']✓["']/,
     "selected controls never render an unapproved checkmark");
@@ -144,8 +144,8 @@ test("UI: strategy selection uses original black square state without check glyp
   ]) {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const rule = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`))?.[1] || "";
-    assert.match(rule, /background:\s*var\(--control-bg\)/,
-      `${selector} uses solid black selected state`);
+    assert.match(rule, /background:\s*var\(--plan-surface\)/,
+      `${selector} preserves the original white checkbox state`);
   }
 });
 
@@ -345,7 +345,8 @@ test("runtime: axis zoom rebuild can reuse cached chain without membership cap",
   prices = [23400, 23700, 24000, 24300, 24600];
   await controller.place();
   assert.equal(fetches, 1);
-  assert.deepEqual(controller.membership().visibleStrikes, prices);
+  assert.deepEqual(controller.membership().visibleStrikes,
+    Array.from({ length: 25 }, (_, index) => 23400 + index * 50));
 });
 
 test("runtime: save command deduplication prevents repeated mutation", () => {
