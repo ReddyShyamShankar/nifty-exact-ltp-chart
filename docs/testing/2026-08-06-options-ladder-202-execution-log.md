@@ -42,19 +42,36 @@
 | `WF-QBE-002` | PASS | One clean 25,000 strike click produced exactly one Call rail and one Put rail. |
 | `WF-QBE-003` | PASS | Call break-even used displayed 800.50 premium: 25,000 + 800.50 rounded to 25,801. |
 | `WF-QBE-004` | PASS | Put break-even used displayed 598.85 premium: 25,000 − 598.85 rounded to 24,401. |
-| `WF-QBE-005` | PENDING FIXTURE | Mapped automated saved-position guard passes; live replay waits for manual workflow to create controlled C/P badge fixture. |
+| `WF-QBE-005` | PASS | Controlled T50 Call/Put fixture retained both saved-entry badges while one row click rendered exact quick rails. |
 | `WF-QBE-006` | PASS | Clicking selected 25,000 again cleared selection and both rails. |
 | `WF-QBE-007` | PASS | Selecting 24,000 then 25,000 replaced old rails with only new exact 25,000 rails. |
-| `WF-QBE-008` | PENDING FIXTURE | Mapped automated ownership guard passes; live replay waits for controlled saved strategy fixture. |
-| `WF-QBE-009` | PENDING FIXTURE | Mapped automated same-strike isolation guard passes; live replay waits for controlled saved/broker fixture. |
+| `WF-QBE-008` | PASS | Selecting saved 25,000 strike exposed only owning T50 rail control; unrelated far-expiry T49 stayed hidden. |
+| `WF-QBE-009` | PASS | Saved 25,000 fixture showed no unrelated T identity or break-even; exact quick rails and owning T50 stayed isolated. |
 | `WF-QBE-010` | PASS | Chart outside click cleared selected row and all quick rails. |
 | `WF-QBE-011` | PASS | Escape cleared selected row and all quick rails. |
 | `WF-QBE-012` | PASS | Manual refresh cleared selected row and rails before quote request completed. |
 | `WF-QBE-013` | PASS AFTER REPAIR | Initial price-scale drag cleared selection. Drag-aware outside-click repair retained exact selected snapshot and both rails through live zoom remap. |
 | `WF-QBE-014` | PASS | Selecting 24,000 with missing Call showed `OPTION PRICE UNAVAILABLE`; no Call or Put fake rail rendered. |
 | `WF-QBE-015` | PASS | Narrowed price range pinned off-screen Call break-even truthfully at plot edge while in-range Put rail stayed exact and controls remained unobscured. |
+| `WF-MAN-ADD-001` | PASS | Double-clicking Call premium opened Call-only BUY/SELL actions. |
+| `WF-MAN-ADD-002` | PASS | Double-clicking Put premium opened Put-only BUY/SELL actions. |
+| `WF-MAN-ADD-003` | PASS | Double-click opened editor without quick-rail flash or face flip. |
+| `WF-MAN-ADD-004` | PASS | Original row stayed at exact y as editor sibling without duplicate strike text. |
+| `WF-MAN-ADD-005` | PASS | BUY action auto-filled exact selected-side live premium. |
+| `WF-MAN-ADD-006` | PASS | SELL action auto-filled exact selected-side live premium. |
+| `WF-MAN-ADD-007` | PASS | Plus/minus changed lots in place while preview and editor remained open. |
+| `WF-MAN-ADD-008` | PASS | UI stepper prevents zero, negative, or decimal lots; controlled malformed-input matrix rejects all three and disables commit. |
+| `WF-MAN-ADD-009` | PASS | Custom Put premium 600 updated preview break-even to 24,400 and kept ADD enabled. |
+| `WF-MAN-ADD-010` | PASS | Keyboard-entered manual premium 0 remained visible, enabled ADD, and previewed exact 25,000 break-even. |
+| `WF-MAN-ADD-011` | PASS | Blank and negative premium showed `ENTER PREMIUM` and disabled ADD; number input rejects nonnumeric text. |
+| `WF-MAN-ADD-012` | PASS | Missing Call quote started blank; manual 100 enabled ADD while opposite Put snapshot remained available. |
+| `WF-MAN-ADD-013` | PASS (CONTROLLED AUTOMATION) | Exact missing/conflicting lot-size fixture fails closed; live provider returned valid lot metadata, so malformed provider state was injected only in deterministic guard. |
+| `WF-MAN-ADD-014` | PASS | Valid ADD opened explicit `CHOOSE STRATEGY` without writing first. |
+| `WF-MAN-ADD-015` | PASS | `CREATE NEW STRATEGY` created next identity T49 and saved only chosen Call leg. |
+| `WF-MAN-ADD-016` | PASS | Second Put leg chooser offered `ADD TO T49`; selection added only to T49. Liquid fixture repeated same rule with T50. |
+| `WF-MAN-ADD-017` | PASS | Chooser CANCEL returned to editor with zero saved entries; close/outside/Escape cancellation guards also pass. |
 
-Current candidate tally: **36 PASS · 1 PARTIAL · 1 DEFERRED · 3 PENDING FIXTURE · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **56 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -179,7 +196,7 @@ Current candidate tally: **36 PASS · 1 PARTIAL · 1 DEFERRED · 3 PENDING FIXTU
 - One 25,000 click created exactly `CALL BE 25,801` and `PUT BE 24,401`, matching displayed Call 800.50 and Put 598.85 premiums.
 - Second click toggled selection off; switching 24,000 to 25,000 replaced old rails without duplication.
 - Outside click, Escape, and manual refresh each cleared quick selection and rails.
-- `WF-QBE-005`, `WF-QBE-008`, and `WF-QBE-009` retain passing mapped automated evidence but need controlled saved-position fixtures; live replay is scheduled after manual workflow creation.
+- Controlled liquid-expiry T50 fixture added Buy Call and Sell Put at 25,000. Selected row retained both saved-entry badges, exact quick rails, and only owning T50 control; unrelated far-expiry T49 remained hidden. This closed `WF-QBE-005`, `WF-QBE-008`, and `WF-QBE-009` live.
 
 ## `WF-QBE-013` repair evidence
 
@@ -195,6 +212,16 @@ Current candidate tally: **36 PASS · 1 PARTIAL · 1 DEFERRED · 3 PENDING FIXTU
 
 - `WF-QBE-014`: far-expiry 24,000 row had `Call —, Put 933.85`; click retained visible selection, showed `OPTION PRICE UNAVAILABLE`, and rendered zero fake BE rails.
 - `WF-QBE-015`: narrowing price scale moved Call 25,801 outside plot; truthful Call edge label pinned to lower plot edge while Put 24,401 remained at exact in-range coordinate and never covered Call/Put controls.
+
+## `WF-MAN-ADD-001` through `WF-MAN-ADD-017` evidence
+
+- Call and Put premium double-clicks opened side-specific two-action editors; double-click path produced no quick-rail flash and kept editor at exact row coordinate.
+- BUY/SELL choices auto-filled selected-side quote. Lots controls updated in place; custom premium 600 updated preview to 24,400; keyboard premium 0 remained valid and enabled ADD.
+- Blank and negative premiums disabled ADD with `ENTER PREMIUM`; number input rejected nonnumeric text. Invalid lot values are unreachable through stepper and rejected by controlled malformed-input matrix.
+- Missing Call quote started blank on 2031 expiry. Manual premium 100 enabled ADD without backfilling unavailable market quote; opposite Put 933.85 snapshot remained intact.
+- Valid ADD opened explicit ownership chooser. CANCEL wrote nothing. CREATE NEW created T49; second Put leg offered and used only `ADD TO T49`. Liquid T50 fixture repeated same ownership rule.
+- Missing/conflicting lot-size state cannot be safely produced from accepted live provider data; deterministic current-expiry metadata guard injects malformed fixture and proves fail-closed behavior.
+- No broker order or external financial action occurred; T49/T50 are local controlled strategy records created for required workflows.
 
 ## Screenshots
 
@@ -248,7 +275,13 @@ Current candidate tally: **36 PASS · 1 PARTIAL · 1 DEFERRED · 3 PENDING FIXTU
 - `evidence/2026-08-06-202-workflow-run/WF-QBE-013-selected-snapshot-remaps-on-zoom-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-QBE-014-missing-side-no-fake-rail-PASS.png`
 - `evidence/2026-08-06-202-workflow-run/WF-QBE-015-truthful-edge-marker-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-QBE-005-008-009-saved-badges-owning-strategy-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-001-004-side-specific-editor-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-005-010-autofill-lots-custom-zero-premium-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-011-012-invalid-and-missing-quote-input-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-014-015-017-chooser-create-cancel-PASS.png`
+- `evidence/2026-08-06-202-workflow-run/WF-MAN-ADD-016-existing-strategy-only-PASS.png`
 
 ## Next workflow
 
-Run `WF-MAN-ADD-001` through `WF-MAN-ADD-017`, then replay `WF-QBE-005`, `WF-QBE-008`, and `WF-QBE-009` against controlled saved-position fixtures. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run `WF-MAN-EDIT-001` through `WF-MAN-EDIT-018`. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
