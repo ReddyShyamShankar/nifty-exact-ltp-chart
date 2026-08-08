@@ -86,6 +86,17 @@ test("grouped-position flyout uses vertical clearance when left side is unavaila
   "narrow charts move flyout below combined summary without leaving viewport");
 });
 
+test("combined summary moves clear of its own chart-native BE label", () => {
+  assert.equal(api.combinedSummaryTopAvoidingRails(
+    { top: 42, bottom: 760 }, 166, [222]
+  ), 243,
+  "summary shifts below a combined BE rail instead of covering its label");
+  assert.equal(api.combinedSummaryTopAvoidingRails(
+    { top: 42, bottom: 760 }, 166, [650]
+  ), 54,
+  "summary remains in its normal upper position when rail already clears it");
+});
+
 test("content delegates bridge chain requests to extension service worker", () => {
   assert.match(contentSource, /chrome\.runtime\.sendMessage\(\{\s*type:\s*"FETCH_NIFTY_CHAIN",\s*expiry\s*\}\)/);
   assert.doesNotMatch(contentSource, /fetch\([^)]*api\/nifty-chain/);

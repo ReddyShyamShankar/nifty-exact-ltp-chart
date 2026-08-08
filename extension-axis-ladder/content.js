@@ -648,6 +648,24 @@
       });
   }
 
+  function combinedSummaryTopAvoidingRails(rect, panelHeight, railYs, gap = 10) {
+    const top = Math.max(8, Number(rect?.top) + 12);
+    const bottom = Number(rect?.bottom);
+    const height = Number(panelHeight);
+    const clearance = Math.max(0, Number(gap) || 0);
+    if (!Number.isFinite(top) || !Number.isFinite(bottom) || !Number.isFinite(height) || height <= 0) return top;
+    const maximum = Math.max(top, bottom - height - 8);
+    const rails = (Array.isArray(railYs) ? railYs : []).map(Number).filter(Number.isFinite);
+    const clears = (candidate) => rails.every((railY) => railY + 11 + clearance <= candidate
+      || railY - 11 - clearance >= candidate + height);
+    if (clears(top)) return top;
+    const candidates = [top, maximum, ...rails.flatMap((railY) => [
+      railY - 11 - clearance - height,
+      railY + 11 + clearance
+    ])].filter((candidate) => Number.isFinite(candidate) && candidate >= top && candidate <= maximum && clears(candidate));
+    return (candidates.length ? candidates : [top]).sort((left, right) => Math.abs(left - top) - Math.abs(right - top) || left - right)[0];
+  }
+
   function axisPriceToY(axisPairs) {
     if (!Array.isArray(axisPairs) || axisPairs.length < 2) return null;
     const pairs = axisPairs.map((pair) => ({ price: Number(pair?.price), y: Number(pair?.y) }));
@@ -1475,6 +1493,7 @@
     rowsFitPlot,
     separateRowCenters,
     evenlySampleRowIndexes,
+    combinedSummaryTopAvoidingRails,
     strategyOwnershipChoices,
     chartInstrumentIdentity,
     normalizePremiumTimeAxis,
@@ -2945,7 +2964,7 @@
     return model?.strategyLabel || "Saved position";
   }
 
-  function renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect, summaryRight, originals = []) {
+  function renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect, summaryRight, originals = [], blockedRailYs = []) {
     if (selectedIds.length < 2) return;
     const panelWidth = Math.max(0, Math.min(280, Number(summaryRight) - Number(rect?.left) - 20));
     if (panelWidth < 180) return;
@@ -2990,6 +3009,8 @@
     appendCombinedMetric(metrics, "MARGIN REQUIRED", marginEvidenceApi?.formatMoney?.(basket?.total) || "—", "margin");
     panel.append(metrics);
     rootNodeValue.append(panel);
+    const panelHeight = Number(panel.getBoundingClientRect?.().height) || 166;
+    panel.style.top = `${combinedSummaryTopAvoidingRails(rect, panelHeight, blockedRailYs)}px`;
   }
 
   function appendStrategyDetails(card, model) {
@@ -3600,7 +3621,10 @@
       && Number(spineLayout.call?.left) - Number(rect.left) >= 180
       ? Number(spineLayout.call.left)
       : ladderLeft;
-    renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect, summaryRight, originals);
+    const combinedRailYs = projected
+      .filter((model) => model.kind === "COMBINED" && model.projection.mode === "RAIL")
+      .map((model) => Number(model.projection.railY));
+    renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect, summaryRight, originals, combinedRailYs);
     renderStrategyPreviewBar(rootNodeValue, preview, selectedIds.length);
     const useTypeColumns = spineLayout?.hasSafePutGap;
     const activeSpineX = useTypeColumns ? spineLayout.spineX : ladderLeft;
