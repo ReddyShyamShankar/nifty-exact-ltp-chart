@@ -208,3 +208,18 @@ test("exact badge opens one owned face and cancels any queued row click", () => 
   assert.deepEqual(h.calls, [["face", "broker"]]);
   assert.equal(h.controller.openFace(context, "missing"), false);
 });
+
+test("opening another strike clears every previously expanded strike face", () => {
+  const h = harness();
+  const first = { strike: 24900, entries: [{ id: "first" }] };
+  const second = { strike: 24200, entries: [{ id: "second" }] };
+
+  h.controller.click(first);
+  h.flush();
+  assert.equal(h.controller.activeEntryId(24900), "first");
+
+  assert.equal(h.controller.openFace(second, "second"), true);
+  assert.equal(h.controller.activeEntryId(24900), null,
+    "only one clicked strike may remain expanded");
+  assert.equal(h.controller.activeEntryId(24200), "second");
+});

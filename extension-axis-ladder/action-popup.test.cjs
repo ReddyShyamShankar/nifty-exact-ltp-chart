@@ -24,7 +24,8 @@ function fakeNode() {
   };
 }
 
-function harness({ tab, response = { ok: true }, sendError = null } = {}) {
+function harness({ tab, response = { ok: true }, brokerResponse = { ok: true, updatedAt: "2026-08-08T14:42:49.146Z" },
+  previewResponse = { ok: true, selectedIds: ["T44", "T45"] }, sendError = null } = {}) {
   const nodes = new Map([
     ["refresh-ladder", fakeNode()],
     ["open-side-panel", fakeNode()],
@@ -34,6 +35,12 @@ function harness({ tab, response = { ok: true }, sendError = null } = {}) {
   const calls = [];
   let closed = false;
   const chromeApi = {
+    runtime: {
+      async sendMessage(message) {
+        calls.push(["runtime-message", message]);
+        return brokerResponse;
+      }
+    },
     tabs: {
       async query(value) {
         calls.push(["query", value]);
@@ -42,6 +49,7 @@ function harness({ tab, response = { ok: true }, sendError = null } = {}) {
       async sendMessage(tabId, message) {
         calls.push(["message", tabId, message]);
         if (sendError) throw sendError;
+        if (message?.type === "GET_STRATEGY_PREVIEW_STATE") return previewResponse;
         return response;
       }
     },
@@ -62,18 +70,35 @@ test("popup describes TradingView-axis membership without fixed strike count", (
   assert.doesNotMatch(html, /13 STRIKES/);
 });
 
-test("refresh action gives immediate feedback and refreshes only active TradingView ladder", async () => {
+test("refresh action coordinates broker snapshot before refreshing active TradingView ladder", async () => {
   const h = harness({ tab: tradingViewTab });
 
   assert.equal(await h.controller.refreshLadder(), true);
   assert.deepEqual(h.calls, [
     ["query", { active: true, currentWindow: true }],
-    ["message", 7, { type: "REFRESH_OPTION_NUMBERS" }]
+    ["message", 7, { type: "GET_STRATEGY_PREVIEW_STATE" }],
+    ["runtime-message", { type: "REFRESH_BROKER_SNAPSHOT", selectedIds: ["T44", "T45"] }],
+    ["message", 7, { type: "REFRESH_OPTION_NUMBERS", expectedUpdatedAt: "2026-08-08T14:42:49.146Z" }]
   ]);
-  assert.equal(h.nodes.get("refresh-label").textContent, "REFRESH LADDER");
+  assert.equal(h.nodes.get("refresh-label").textContent, "REFRESH ALL");
   assert.equal(h.nodes.get("popup-status").textContent, "REFRESHED JUST NOW");
   assert.equal(h.nodes.get("popup-status").dataset.tone, "success");
   assert.equal(h.nodes.get("refresh-ladder").disabled, false);
+});
+
+test("broker refresh failure prevents false success from normal extension popup", async () => {
+  const h = harness({
+    tab: tradingViewTab,
+    brokerResponse: { ok: false, error: "Broker refresh failed" }
+  });
+
+  assert.equal(await h.controller.refreshLadder(), false);
+  assert.equal(h.nodes.get("popup-status").textContent, "Broker refresh failed");
+  assert.deepEqual(h.calls, [
+    ["query", { active: true, currentWindow: true }],
+    ["message", 7, { type: "GET_STRATEGY_PREVIEW_STATE" }],
+    ["runtime-message", { type: "REFRESH_BROKER_SNAPSHOT", selectedIds: ["T44", "T45"] }]
+  ]);
 });
 
 test("failed refresh stays in popup and explains failure", async () => {

@@ -31,14 +31,14 @@ Extension never changes TradingView price scale or Auto-fit state and requests n
 
 ## Setup
 
-Load [`extension-axis-ladder`](extension-axis-ladder) as unpacked extension in Chrome 141 or newer. Open logged-in TradingView NIFTY chart, select exact expiry, and click pinned extension icon. Use **Refresh ladder** to fetch current option values or **Open side panel** for permanent strategy/version controls. Double-click row to add or edit one leg.
+Load [`extension-axis-ladder`](extension-axis-ladder) as unpacked extension in Chrome 141 or newer. Open logged-in TradingView NIFTY chart, select exact expiry, and click pinned extension icon. Use **REFRESH ALL** to capture connected-broker evidence and fetch current option values, or **Open side panel** for permanent strategy/version controls. Double-click row to add or edit one leg.
 
-No automatic option refresh, full option-chain table, bottom tray, Greeks, probability, margin, or recommendation path is added. Existing broker and seller-safety code remains independent from manual-plan storage and was not changed by this candidate.
+No automatic option refresh, full option-chain table, bottom tray, Greeks, probability, or recommendation path is added. Broker refresh remains read-only and separate from manual-plan storage; unavailable margin evidence stays `—`.
 
 ## Compact toolbar popup and read-only side panel
 
-Click the pinned Options Ladder icon on a TradingView tab to open a compact popup. **Refresh ladder** updates chart option numbers and reports progress in the popup. **Open side panel** opens the full-height seller-safety controls. Clicking outside closes the popup. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes an open panel.
+Click the pinned Options Ladder icon on a TradingView tab to open a compact popup. **REFRESH ALL** captures connected-broker evidence, updates chart option numbers, and reports progress in the popup. **Open side panel** opens the full-height seller-safety controls. Clicking outside closes the popup. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes an open panel.
 
-Popup refresh updates ladder option numbers only. Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually. This existing read-only workflow remains separate from manual strategy entries and has no-order capability.
+Popup REFRESH ALL first captures connected-broker positions, funds, and margin evidence, then refreshes ladder option numbers. Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually. This existing read-only workflow remains separate from manual strategy entries and has no-order capability.
 
 See the [extension guide](extension-axis-ladder/README.md) for exact row behavior, independent quick break-evens, combined plan break-evens, failure boundaries, and keyboard controls.

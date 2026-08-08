@@ -69,4 +69,7 @@ test("resolves evidence only when saved-leg fingerprint still matches", () => {
   });
   assert.equal(margin.resolveBasket(evidence, "strategy:s1", legs).total, 120000);
   assert.equal(margin.resolveBasket(evidence, "strategy:s1", [{ ...legs[0], premium: 441 }]), null);
+  assert.equal(margin.resolveExactBasket(evidence, legs).total, 120000,
+    "virtual B selections can reuse broker evidence only for exact same saved legs");
+  assert.equal(margin.resolveExactBasket(evidence, [{ ...legs[0], premium: 441 }]), null);
 });

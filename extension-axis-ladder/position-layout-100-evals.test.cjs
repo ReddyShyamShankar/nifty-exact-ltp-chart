@@ -116,7 +116,7 @@ test("POS_A11Y_097 closed plus count is informational and cannot be clicked", se
 
 test("POS_A11Y_098 exact flyout row owns explicit selection state", sequential, () => {
   assert.match(source, /nifty-position-spine__cluster-row-select[\s\S]*?setAttribute\("aria-pressed"/);
-  assert.match(cssCase('.nifty-position-spine__cluster-row-select[aria-pressed="true"]'), /background:\s*var\(--pnl-profit\)/);
+  assert.match(cssCase('.nifty-position-spine__cluster-row-select[aria-pressed="true"]'), /background:\s*var\(--control-bg\)/);
 });
 
 test("POS_LAYER_099 grouped flyout renders above ladder and compact controls", sequential, () => {

@@ -26,8 +26,8 @@
         const currentIndex = entries.findIndex((entry) => entry.id === currentId);
         const index = currentIndex + 1;
         const entry = entries[index] || null;
+        faces.clear();
         if (entry) faces.set(context.strike, entry.id);
-        else faces.delete(context.strike);
         options.onFace({ ...context, entryId: entry?.id || null });
       }, options.delay ?? 240);
       pending = timer;
@@ -43,7 +43,7 @@
         ? editableEntries.filter((entry) => entry?.optionType === optionType)
         : editableEntries;
       const entryId = activeEntryId || (matchingEntries.length === 1 ? matchingEntries[0].id : null);
-      faces.delete(context.strike);
+      faces.clear();
       options.onEditor({ ...context, entryId });
     }
 
@@ -52,6 +52,7 @@
       const entries = Array.isArray(context?.entries) ? context.entries : [];
       const entry = entries.find((candidate) => candidate?.id === entryId) || null;
       if (!entry) return false;
+      faces.clear();
       faces.set(context.strike, entry.id);
       options.onFace({ ...context, entryId: entry.id });
       return true;

@@ -106,6 +106,15 @@
     return basket && basket.fingerprint === fingerprint(legs) ? basket : null;
   }
 
+  function resolveExactBasket(evidence, legs) {
+    if (evidence?.version !== 1) return null;
+    const target = fingerprint(legs);
+    const matches = Object.values(evidence?.baskets || {})
+      .filter((basket) => basket?.fingerprint === target);
+    if (!matches.length) return null;
+    return matches.every((basket) => basket.total === matches[0].total) ? matches[0] : null;
+  }
+
   function formatMoney(value) {
     const numeric = finite(value);
     if (numeric === null) return "—";
@@ -116,5 +125,5 @@
     return `${sign}₹${absolute.toFixed(2)}`;
   }
 
-  return { fingerprint, formatMoney, normalizeRefreshEvidence, requestsForBook, resolveBasket };
+  return { fingerprint, formatMoney, normalizeRefreshEvidence, requestsForBook, resolveBasket, resolveExactBasket };
 });

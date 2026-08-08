@@ -317,6 +317,22 @@ Its purpose is to bring the most important combined-strategy evidence directly o
 
 ---
 
+## 5. Approved chart interaction and visual corrections
+
+- Every compact selector square and identity token uses the original black control treatment in both light and dark chart themes, including idle selectors. Do not draw checkmarks inside selectors.
+- A grouped-position flyout stays open while the user selects or deselects multiple exact strategies. It closes only from its opener, outside click, or Escape.
+- Only one ladder strike may show an expanded saved-position face at a time. Opening another strike clears the previous expanded face.
+- An idle saved strategy identity stays at its owning strike. Clicking that saved position moves its strategy evidence to every real calculated strategy breakeven; it must not remain falsely anchored at the strike.
+- Broker positions use a separate ordered identity namespace (`B1`, `B2`, and so on). They never reuse or impersonate manual `T` strategy identities.
+- Manual trade strategy-ownership chooser always paints above ladder rows and remains fully clickable.
+- Combined summary sits in the chart's upper-right area beside the ladder and uses readable saved-strategy names. Internal broker IDs, encoded delimiters, and storage keys must never appear in the visible title.
+- Combined BE evidence keeps exact TradingView price placement and uses the same bordered, bottom-accented chart label geometry as saved strategy evidence.
+- Dynamic premium difference appears as a separate compact points badge beside the existing BE text, with an explicit positive or negative sign.
+- The normal extension popup action is `REFRESH ALL`. It refreshes broker positions, funds, selected-basket margin evidence, and option-chain numbers through the same explicit manual-refresh boundary as the side extension.
+- Broker position rows remain read-only and show their exact selected position face. Unavailable opposite-side snapshot evidence stays `—`; no value may be invented.
+
+---
+
 ## Canonical documentation rule
 
 This file is the single canonical Options Ladder feature specification for the approved items above.

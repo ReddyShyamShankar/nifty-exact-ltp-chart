@@ -205,6 +205,45 @@
     };
   }
 
+  function flyoutPlacementAvoidingRect(flyout = {}, blocker = {}, viewport = {}, gap = 12, inset = 8) {
+    const subject = {
+      left: Number(flyout.left),
+      top: Number(flyout.top),
+      width: Number(flyout.width),
+      height: Number(flyout.height)
+    };
+    const obstacle = {
+      left: Number(blocker.left),
+      top: Number(blocker.top),
+      right: Number(blocker.right),
+      bottom: Number(blocker.bottom)
+    };
+    const viewportWidth = Number(viewport.width);
+    const viewportHeight = Number(viewport.height);
+    if (![subject.left, subject.top, subject.width, subject.height,
+      obstacle.left, obstacle.top, obstacle.right, obstacle.bottom,
+      viewportWidth, viewportHeight].every(Number.isFinite)) return null;
+    const subjectRight = subject.left + subject.width;
+    const subjectBottom = subject.top + subject.height;
+    const overlaps = subject.left < obstacle.right && subjectRight > obstacle.left
+      && subject.top < obstacle.bottom && subjectBottom > obstacle.top;
+    if (!overlaps) return { left: subject.left, top: subject.top };
+
+    const clearance = Math.max(0, Number(gap) || 0);
+    const viewportInset = Math.max(0, Number(inset) || 0);
+    const leftOfBlocker = obstacle.left - clearance - subject.width;
+    if (leftOfBlocker >= viewportInset) return { left: leftOfBlocker, top: subject.top };
+
+    const belowBlocker = obstacle.bottom + clearance;
+    if (belowBlocker + subject.height <= viewportHeight - viewportInset) {
+      return { left: subject.left, top: belowBlocker };
+    }
+    return {
+      left: Math.min(subject.left, viewportWidth - viewportInset - subject.width),
+      top: Math.max(viewportInset, obstacle.top - clearance - subject.height)
+    };
+  }
+
   function breakEvenLabelRight(ladderLeft, rect = {}, viewportWidth = 0, hasPositionControls = false) {
     const plotLeft = Number(rect.left);
     const plotRight = Number(rect.right);
@@ -293,6 +332,49 @@
   function rowsFitPlot(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset) {
     if (!Array.isArray(rows)) return false;
     return visibleRowIndexes(rows, dimensions, plotRect, viewportWidth, baseRight, lanes, laneOffset).length === rows.length;
+  }
+
+  function separateRowCenters(rows, dimensions, minY, maxY, gap = 2) {
+    if (!Array.isArray(rows) || !Array.isArray(dimensions) || rows.length !== dimensions.length) return null;
+    const top = Number(minY);
+    const bottom = Number(maxY);
+    const spacing = Math.max(0, Number(gap) || 0);
+    if (!Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= top) return null;
+    const ordered = rows.map((row, index) => ({
+      index,
+      desired: Number(row?.y),
+      height: Number(dimensions[index]?.height)
+    })).filter((item) => Number.isFinite(item.desired) && Number.isFinite(item.height) && item.height > 0)
+      .sort((left, right) => left.desired - right.desired || left.index - right.index);
+    if (ordered.length !== rows.length) return null;
+    const requiredHeight = ordered.reduce((sum, item) => sum + item.height, 0)
+      + Math.max(0, ordered.length - 1) * spacing;
+    if (requiredHeight > bottom - top) return null;
+    const forward = [];
+    ordered.forEach((item, index) => {
+      const floor = index === 0
+        ? top + item.height / 2
+        : forward[index - 1] + ordered[index - 1].height / 2 + spacing + item.height / 2;
+      forward.push(Math.max(item.desired, floor));
+    });
+    const backward = Array(ordered.length);
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      const item = ordered[index];
+      const ceiling = index === ordered.length - 1
+        ? bottom - item.height / 2
+        : backward[index + 1] - ordered[index + 1].height / 2 - spacing - item.height / 2;
+      backward[index] = Math.min(item.desired, ceiling);
+    }
+    const placed = ordered.map((item, index) => ({
+      ...item,
+      y: (forward[index] + backward[index]) / 2
+    }));
+    const firstTop = placed[0].y - placed[0].height / 2;
+    const lastBottom = placed.at(-1).y + placed.at(-1).height / 2;
+    const shift = firstTop < top ? top - firstTop : lastBottom > bottom ? bottom - lastBottom : 0;
+    const result = Array(rows.length);
+    placed.forEach((item) => { result[item.index] = item.y + shift; });
+    return result;
   }
 
   function priceScaleFailure(kind) {
@@ -472,6 +554,23 @@
       side,
       key: `${side}:${cluster.key}`
     })));
+  }
+
+  function preserveOpenedEdgeGroup(clusters) {
+    if (!openedEdgeGroupKey || !Array.isArray(clusters) || !clusters.length) return;
+    if (clusters.some((cluster) => cluster.key === openedEdgeGroupKey)) return;
+    const separator = openedEdgeGroupKey.indexOf(":");
+    const side = separator >= 0 ? openedEdgeGroupKey.slice(0, separator) : "";
+    const priorIds = new Set((separator >= 0 ? openedEdgeGroupKey.slice(separator + 1) : openedEdgeGroupKey)
+      .split("|").filter(Boolean));
+    const replacement = clusters
+      .filter((cluster) => cluster.side === side)
+      .map((cluster) => ({
+        cluster,
+        overlap: cluster.items.filter((item) => priorIds.has(String(item.id))).length
+      }))
+      .sort((left, right) => right.overlap - left.overlap)[0];
+    openedEdgeGroupKey = replacement?.overlap > 0 ? replacement.cluster.key : null;
   }
 
   function placeHeadersAroundFixedControls(cards, controls, options = {}) {
@@ -701,6 +800,7 @@
     let expiry = dependencies.expiry || DEFAULTS.expiry;
     const scheduleRetry = dependencies.scheduleRetry || ((run, delay) => setTimeout(run, delay));
     const cancelRetry = dependencies.cancelRetry || clearTimeout;
+    const waitForIdle = dependencies.waitForIdle || ((delay) => new Promise((resolve) => setTimeout(resolve, delay)));
     const now = dependencies.now || (() => Date.now());
     const scheduleRiskDeadline = dependencies.scheduleRiskDeadline || ((run, delay) => setTimeout(run, delay));
     const cancelRiskDeadline = dependencies.cancelRiskDeadline || clearTimeout;
@@ -1126,6 +1226,27 @@
       }
     }
 
+    async function refreshWhenIdle(timeoutMs = 5000, pollMs = 25) {
+      const deadline = now() + timeoutMs;
+      while (rebuilding) {
+        const remaining = deadline - now();
+        if (remaining <= 0) return false;
+        await waitForIdle(Math.min(pollMs, remaining));
+      }
+      return refreshLtp();
+    }
+
+    async function settleSnapshot(expectedUpdatedAt, timeoutMs = 5000, pollMs = 25) {
+      if (typeof expectedUpdatedAt !== "string" || !expectedUpdatedAt) return refreshWhenIdle(timeoutMs, pollMs);
+      const deadline = now() + timeoutMs;
+      while (cachedChain?.updatedAt !== expectedUpdatedAt || rebuilding) {
+        const remaining = deadline - now();
+        if (remaining <= 0) return false;
+        await waitForIdle(Math.min(pollMs, remaining));
+      }
+      return Boolean(current && current.expiry === expiry);
+    }
+
     async function updateAxisPlacement(replaceMembership, visualPlacementRevision) {
       const snapshot = current;
       if (!snapshot || rebuilding || snapshot.expiry !== expiry || snapshot.timeframe !== desiredTimeframe) return false;
@@ -1260,6 +1381,8 @@
       remap,
       rebuild,
       refreshLtp,
+      refreshWhenIdle,
+      settleSnapshot,
       setChainSnapshot,
       setChainSnapshots,
       setExpiry,
@@ -1317,9 +1440,11 @@
     renderableAxisStrikes,
     positionSpineBounds,
     positionSpineLayout,
+    flyoutPlacementAvoidingRect,
     breakEvenLabelRight,
     breakEvenLabelRightForRenderedBlockers,
     rowsFitPlot,
+    separateRowCenters,
     strategyOwnershipChoices,
     chartInstrumentIdentity,
     normalizePremiumTimeAxis,
@@ -2161,7 +2286,7 @@
     const rowZIndex = Number.parseInt(row.style?.zIndex, 10);
     if (top) manualEditor.element.style.top = top;
     if (right) manualEditor.element.style.right = right;
-    if (Number.isFinite(rowZIndex)) manualEditor.element.style.zIndex = String(rowZIndex + 1);
+    manualEditor.element.style.zIndex = Number.isFinite(rowZIndex) ? String(rowZIndex + 1) : "";
   }
 
   function ensureManualInteraction() {
@@ -2176,13 +2301,14 @@
         handleQuickSelection(liveRow);
       },
       onFace: ({ strike, liveRow }) => {
+        const priorStrike = Number(breakEvenSelection.current()?.strike);
         closeManualEditorForOtherRow(strike);
         resetStrategyInteractionState();
         if (breakEvenSelection.current()?.strike !== strike && liveRow) {
           clearBreakEvenRails();
           breakEvenSelection.select(liveRow);
         }
-        renderManualRows([strike]);
+        renderManualRows([...new Set([priorStrike, Number(strike)].filter(Number.isFinite))]);
         void controller?.place();
       },
       onEditor: (context) => {
@@ -2615,12 +2741,15 @@
         previewOptions
       );
     if (!Array.isArray(preview.breakEvens) || !preview.breakEvens.length) return { models: [], preview };
+    const levels = strategyPreviewApi.displayLevels(preview, "COMBINED BE");
     return {
       preview,
-      models: strategyPreviewApi.displayLevels(preview, "COMBINED BE").map((level) => ({
+      models: levels.map((level, index) => ({
         kind: "COMBINED",
         exact: level.exact,
-        label: level.label,
+        label: `${levels.length === 1 ? "BE" : levels.length === 2
+          ? (index === 0 ? "BE LOW" : "BE HIGH")
+          : `BE ${index + 1}`} ${Math.round(level.exact).toLocaleString("en-IN")} · COMBINED`,
         entries: preview.entries,
         disclosure: preview.disclosure
       }))
@@ -2752,10 +2881,15 @@
     return `${sign}₹${Math.abs(numeric).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
   }
 
-  function combinedMarginBasket(selectedIds) {
-    if (!marginEvidenceApi || selectedIds.length < 2 || selectedIds.some((id) => id.includes("::leg::"))) return null;
+  function combinedMarginBasket(selectedIds, originals = []) {
+    if (!marginEvidenceApi || selectedIds.length < 2) return null;
     const sortedIds = [...new Set(selectedIds)].sort();
-    const legs = sortedIds.flatMap((id) => strategyStoreApi.legsForStrategy(settings.strategyBook, id));
+    const virtual = sortedIds.some((id) => id.includes("::leg::"));
+    const legs = virtual
+      ? sortedIds.flatMap((id) => originals.find((model) => model.strategyId === id)?.entries || [])
+      : sortedIds.flatMap((id) => strategyStoreApi.legsForStrategy(settings.strategyBook, id));
+    if (!legs.length) return null;
+    if (virtual) return marginEvidenceApi.resolveExactBasket?.(settings.brokerMarginEvidence, legs) || null;
     return marginEvidenceApi.resolveBasket(
       settings.brokerMarginEvidence,
       `selection:${sortedIds.join("+")}`,
@@ -2774,8 +2908,17 @@
     container.append(metric);
   }
 
-  function renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect) {
+  function combinedSelectionLabel(id, originals = []) {
+    const stored = strategyStoreApi.strategyById(settings.strategyBook, id)?.label;
+    if (stored) return stored;
+    const model = originals.find((candidate) => candidate.strategyId === id);
+    return model?.strategyLabel || "Saved position";
+  }
+
+  function renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect, summaryRight, originals = []) {
     if (selectedIds.length < 2) return;
+    const panelWidth = Math.max(0, Math.min(280, Number(summaryRight) - Number(rect?.left) - 20));
+    if (panelWidth < 180) return;
     const panel = document.createElement("section");
     panel.className = "nifty-strategy-combined-summary";
     const missingQuoteCount = Array.isArray(preview?.missingQuotes) ? preview.missingQuotes.length : 0;
@@ -2786,9 +2929,10 @@
     ].filter(Boolean).join(", ");
     panel.setAttribute("aria-label", `Combined selected strategy summary, ${evidenceStatus}`);
     panel.setAttribute("aria-live", "polite");
-    panel.style.left = `${Math.max(8, Number(rect?.left) + 12)}px`;
+    panel.style.width = `${panelWidth}px`;
+    panel.style.left = `${Math.max(Number(rect?.left) + 8, Number(summaryRight) - panelWidth - 12)}px`;
     panel.style.top = `${Math.max(8, Number(rect?.top) + 12)}px`;
-    const labels = selectedIds.map((id) => strategyStoreApi.strategyById(settings.strategyBook, id)?.label || id);
+    const labels = selectedIds.map((id) => combinedSelectionLabel(id, originals));
     const title = document.createElement("strong");
     title.className = "nifty-strategy-combined-summary__title";
     title.textContent = `COMBINED · ${labels.join(" + ")}`;
@@ -2812,7 +2956,7 @@
     appendCombinedMetric(metrics, "MAX PROFIT", combinedMoney(preview?.maxProfit), "profit");
     appendCombinedMetric(metrics, "MAX LOSS", combinedMoney(preview?.maxLoss), "loss");
     appendCombinedMetric(metrics, "WIN RATE", Number.isFinite(preview?.winRate) ? `${preview.winRate.toFixed(1)}%` : "—");
-    const basket = combinedMarginBasket(selectedIds);
+    const basket = combinedMarginBasket(selectedIds, originals);
     appendCombinedMetric(metrics, "MARGIN REQUIRED", marginEvidenceApi?.formatMoney?.(basket?.total) || "—", "margin");
     panel.append(metrics);
     rootNodeValue.append(panel);
@@ -3035,7 +3179,7 @@
       const lots = Math.max(1, Number(entry.lots) || 1);
       const compact = document.createElement("span");
       compact.className = `nifty-position-spine__compact is-${side}`;
-      compact.hidden = openedStrategyId === model.strategyId;
+      compact.hidden = openedStrategyId === model.strategyId || activeFaceEntry()?.id === entry.id;
       compact.style.top = `${y - 9}px`;
       compact.style.right = side === "call"
         ? `${Math.max(0, window.innerWidth - spineX + POSITION_LANE_GAP_PX)}px`
@@ -3059,9 +3203,7 @@
       marker.dataset.strategyId = model.strategyId;
       const markerToken = document.createElement("span");
       markerToken.className = "nifty-position-spine__marker-token";
-      markerToken.textContent = entry.source === "BROKER_POSITION"
-        ? `${side === "call" ? "C" : "P"}${lots}`
-        : model.strategyLabel;
+      markerToken.textContent = model.strategyLabel;
       marker.append(markerToken);
       const evidenceValues = activeFaceEntry()?.id === entry.id
         ? (model.strategyBreakEvens || [])
@@ -3103,7 +3245,7 @@
         kind: entry.source === "BROKER_POSITION" ? "BROKER" : "STRATEGY",
         tone: direction,
         label: entry.source === "BROKER_POSITION"
-          ? `${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`
+          ? `${model.strategyLabel} · ${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`
           : `${model.strategyLabel} · ${side === "call" ? "C" : "P"}${lots} · ${Number(entry.strike).toLocaleString("en-IN")} · ${entry.direction}`,
         strategyId: model.strategyId,
         entryId: entry.id,
@@ -3209,7 +3351,9 @@
 
   function renderEdgeStackGroups(rootNodeValue, items, layout) {
     if (!layout?.call || !layout?.put) return;
-    positionColumnClusters(items).filter((cluster) => cluster.items.length > 1).forEach((cluster) => {
+    const clusters = positionColumnClusters(items).filter((cluster) => cluster.items.length > 1);
+    preserveOpenedEdgeGroup(clusters);
+    clusters.forEach((cluster) => {
       const lane = layout[cluster.side];
       const sideLabel = cluster.side === "put" ? "Put" : "Call";
       cluster.items.forEach((item) => {
@@ -3269,8 +3413,6 @@
           itemSelector.setAttribute("aria-label", `${ensureStrategyChartController()?.isSelected(item.strategyId) ? "Clear" : "Select"} ${item.label} for combined preview`);
           itemSelector.addEventListener("click", (event) => {
             event.stopPropagation?.();
-            openedEdgeGroupKey = null;
-            removeOpenedPositionGroupDom();
             ensureStrategyChartController()?.square(item.strategyId);
           });
           const openItem = document.createElement("button");
@@ -3279,7 +3421,6 @@
           openItem.textContent = item.label;
           openItem.addEventListener("click", (event) => {
             event.stopPropagation?.();
-            openedEdgeGroupKey = null;
             if (item.kind === "BROKER" && item.entryId) openBrokerEntryDetails(item.entryId);
             else strategyChartController.label(item.strategyId);
           });
@@ -3290,6 +3431,20 @@
         flyout.append(row);
       });
       rootNodeValue.append(flyout);
+      const combinedSummary = rootNodeValue.querySelector(".nifty-strategy-combined-summary");
+      if (combinedSummary) {
+        const flyoutRect = flyout.getBoundingClientRect();
+        const summaryRect = combinedSummary.getBoundingClientRect();
+        const clearPlacement = flyoutPlacementAvoidingRect(flyoutRect, summaryRect, {
+          width: window.innerWidth,
+          height: window.innerHeight
+        });
+        if (clearPlacement) {
+          flyout.style.right = `${Math.max(0,
+            window.innerWidth - clearPlacement.left - flyoutRect.width)}px`;
+          flyout.style.top = `${clearPlacement.top}px`;
+        }
+      }
     });
   }
 
@@ -3314,10 +3469,15 @@
         if (ownsManualAtFaceStrike) manualFaceOwnerIds.add(strategy.id);
       });
     }
-    const manualOriginals = originals.filter((model) =>
-      !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind));
     const chartOriginals = showStrategyBreakEvens
-      ? manualOriginals.filter((model) => manualFaceOwnerIds.has(model.strategyId))
+      ? originals.filter((model) => {
+        if (faceEntry?.source === "BROKER_POSITION") {
+          return model.viewKind === "BROKER_LEG"
+            && model.entries?.some((entry) => entry.id === faceEntry.id);
+        }
+        return !["BROKER_LEG", "BROKER_COMBINED"].includes(model.viewKind)
+          && manualFaceOwnerIds.has(model.strategyId);
+      })
       : [];
     const hasCombinedSelection = selectedIds.length >= 2;
     const { models: combined, preview } = hasCombinedSelection
@@ -3400,10 +3560,14 @@
     const cardById = new Map(cards.map((card) => [card.id, card]));
     const rootNodeValue = strategyRailsRoot();
     rootNodeValue.replaceChildren();
-    renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect);
-    renderStrategyPreviewBar(rootNodeValue, preview, selectedIds.length);
     const ladderLeft = Math.max(Number(rect.left), Math.min(Number(rect.right), Number(labelRight) || Number(rect.right)));
     const spineLayout = positionSpineLayout(ladderLeft, rect, window.innerWidth);
+    const summaryRight = spineLayout
+      && Number(spineLayout.call?.left) - Number(rect.left) >= 180
+      ? Number(spineLayout.call.left)
+      : ladderLeft;
+    renderCombinedStrategySummary(rootNodeValue, preview, selectedIds, rect, summaryRight, originals);
+    renderStrategyPreviewBar(rootNodeValue, preview, selectedIds.length);
     const useTypeColumns = spineLayout?.hasSafePutGap;
     const activeSpineX = useTypeColumns ? spineLayout.spineX : ladderLeft;
     const typeLayout = useTypeColumns ? spineLayout : {
@@ -3446,10 +3610,7 @@
       }
       const card = document.createElement("div");
       const isOpen = model.kind === "STRATEGY" && openedStrategyId === model.strategyId;
-      const isSpineEvidenceProxy = model.kind === "STRATEGY" && model.showStrikeEvidence
-        && !model.selected && !isOpen;
       card.className = `nifty-strategy__card is-${model.kind.toLowerCase()} is-${String(model.viewKind || "standard").toLowerCase()} is-${model.side} ${isOpen ? "is-open" : "is-collapsed"}`;
-      if (isSpineEvidenceProxy) card.classList.add("is-spine-evidence-proxy");
       if (model.kind === "STRATEGY" && !isOpen) card.classList.add("is-rail-header");
       card.dataset.exact = String(model.exact);
       if (model.viewKind === "BROKER_COMBINED") card.classList.add("is-summary-source");
@@ -3512,7 +3673,7 @@
       }
       appendStrategyDetails(card, model);
       rootNodeValue.append(card);
-      if (model.kind === "STRATEGY" && !isOpen && !isSpineEvidenceProxy) {
+      if (model.kind === "STRATEGY" && !isOpen) {
         edgeStrategyItems.push({
           id: model.id,
           y: placement.cardY + POSITION_CONTROL_HEIGHT_PX / 2,
@@ -3799,9 +3960,25 @@
 
   function quickBreakEvenLabel(level) {
     const difference = quickPremiumDifference(level?.kind);
-    return Number.isFinite(difference)
-      ? `${level.label} · ${difference.toFixed(2)} pts`
-      : level.label;
+    return {
+      text: level.label,
+      premiumDifference: Number.isFinite(difference)
+        ? `${difference > 0 ? "+" : ""}${difference.toFixed(2)} pts`
+        : null
+    };
+  }
+
+  function appendQuickBreakEvenLabel(container, level) {
+    const value = quickBreakEvenLabel(level);
+    const text = document.createElement("span");
+    text.className = "nifty-break-even__label-text";
+    text.textContent = value.text;
+    container.append(text);
+    if (!value.premiumDifference) return;
+    const difference = document.createElement("span");
+    difference.className = "nifty-break-even__premium-difference";
+    difference.textContent = value.premiumDifference;
+    container.append(difference);
   }
 
   function sharedRailDecorations(toY, rect, { includeManual = true } = {}) {
@@ -3850,14 +4027,14 @@
         label.dataset.exact = String(level.exact);
         label.style.right = `${window.innerWidth - railRight}px`;
         label.style.top = `${labelDecorations[index].top}px`;
-        label.textContent = quickBreakEvenLabel(level);
+        appendQuickBreakEvenLabel(label, level);
         element.append(label);
       } else {
         element.style.left = "";
         element.style.right = `${window.innerWidth - railRight}px`;
         element.style.top = `${labelDecorations[index].top}px`;
         element.classList.add(`is-${projection.edge}`);
-        element.textContent = quickBreakEvenLabel(level);
+        appendQuickBreakEvenLabel(element, level);
       }
       rails.append(element);
     });
@@ -4348,7 +4525,12 @@
     try {
       const dimensions = elements.map(({ element }) => {
         const bounds = element.getBoundingClientRect();
-        return { width: bounds.width, height: bounds.height };
+        const hasSavedBadges = Boolean(element.querySelector?.(".nifty-axis-ladder__badges:not(:empty)"));
+        return {
+          width: bounds.width,
+          height: bounds.height + (hasSavedBadges ? 14 : 0),
+          baseHeight: bounds.height
+        };
       });
       const laneOffset = Math.ceil(Math.max(...dimensions.map(({ width }) => width))) + 10;
       const baseRight = Math.max(0, window.innerWidth - rect.right + 7);
@@ -4365,6 +4547,28 @@
       if (!visibleIndexes.length) {
         throw new Error(priceScaleFailure("outside"));
       }
+      let suppressSavedBadges = false;
+      let separatedCenters = separateRowCenters(
+        visibleIndexes.map((index) => rows[index]),
+        visibleIndexes.map((index) => dimensions[index]),
+        Number(rect.top), Number(rect.bottom), 2
+      );
+      if (!separatedCenters) {
+        suppressSavedBadges = true;
+        separatedCenters = separateRowCenters(
+          visibleIndexes.map((index) => rows[index]),
+          visibleIndexes.map((index) => ({
+            width: dimensions[index].width,
+            height: dimensions[index].baseHeight
+          })),
+          Number(rect.top), Number(rect.bottom), 2
+        );
+      }
+      if (!separatedCenters) throw new Error(priceScaleFailure("overlap"));
+      const displayCenters = rows.map((row) => Number(row.y));
+      visibleIndexes.forEach((rowIndex, visibleIndex) => {
+        displayCenters[rowIndex] = separatedCenters[visibleIndex];
+      });
       const visibleIndexSet = new Set(visibleIndexes);
       const renderedStrikes = visibleIndexes.map((index) => Number(rows[index].strike));
       reconcileBreakEvenSelection(rows, new Set(renderedStrikes));
@@ -4372,16 +4576,22 @@
       elements.forEach(({ row, element }, index) => {
         element.hidden = !visibleIndexSet.has(index);
         if (element.hidden) return;
+        const savedBadges = element.querySelector?.(".nifty-axis-ladder__badges");
+        if (savedBadges) savedBadges.hidden = suppressSavedBadges;
         element.classList.toggle("is-atm", Number(row.strike) === Number(displayAtm));
         const lane = layout.lanes[index];
         element.dataset.lane = String(lane);
         element.style.setProperty("--nifty-lane-offset", `${laneOffset}px`);
         element.style.setProperty("--nifty-connector-width", `${lane * laneOffset}px`);
         element.style.right = `${baseRight + lane * laneOffset}px`;
-        element.style.top = `${row.y}px`;
-        element.style.zIndex = element.classList.contains("has-lot-badges")
-          ? String(100 + Math.round(row.y))
-          : "";
+        const displayY = displayCenters[index];
+        const anchorShift = Number(row.y) - displayY;
+        element.style.top = `${displayY}px`;
+        element.style.setProperty("--nifty-anchor-shift", `${anchorShift}px`);
+        element.style.setProperty("--nifty-anchor-connector-top", `${Math.min(0, anchorShift)}px`);
+        element.style.setProperty("--nifty-anchor-connector-height", `${Math.abs(anchorShift)}px`);
+        element.dataset.displaced = Math.abs(anchorShift) >= 0.5 ? "true" : "false";
+        element.style.zIndex = "";
       });
       const visibleRowRects = elements
         .filter(({ element }) => !element.hidden)
@@ -4998,7 +5208,12 @@
       clearStrategyPreview();
       clearManualTransientState({ invalidatePlacements: false });
       clearManualPlanRails();
-      const refresh = controller?.membership() ? controller.refreshLtp() : rebuildCurrent(true, true);
+      const expectedUpdatedAt = typeof message.expectedUpdatedAt === "string" ? message.expectedUpdatedAt : "";
+      const refresh = expectedUpdatedAt && controller
+        ? controller.settleSnapshot(expectedUpdatedAt)
+        : controller?.membership()
+          ? controller.refreshWhenIdle()
+          : rebuildCurrent(true, true);
       refresh.then((ok) => sendResponse(ok
         ? { ok: true, chain: controller.chain() }
         : { ok: false, error: "Option-number refresh failed. Existing numbers were kept." }))

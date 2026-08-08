@@ -5,6 +5,8 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const manualPlan = require("./manual-plan.js");
 const strategyStore = require("./strategy-store.js");
+const sellerLedger = require("./seller-ledger.js");
+const marginEvidence = require("./margin-evidence.js");
 
 function loadBackground({
   manualPlans = manualPlan.emptyStore(),
@@ -84,6 +86,8 @@ function loadBackground({
       if (file === "side-panel.js") global.NiftySidePanel = require("./side-panel.js");
       if (file === "manual-plan.js") global.NiftyManualPlan = manualPlan;
       if (file === "strategy-store.js") global.OptionsStrategyStore = strategyStore;
+      if (file === "seller-ledger.js") global.NiftySellerLedger = sellerLedger;
+      if (file === "margin-evidence.js") global.OptionsMarginEvidence = marginEvidence;
     }
   };
   global.fetch = fetchImpl;
@@ -97,10 +101,10 @@ test("exports native-axis capture and single-writer manual mutation API", () => 
   assert.deepEqual(Object.keys(api).sort(), [
     "applyManualPlanMutation", "applyManualStrategyMutation", "axisPairsFromCandidates", "captureAxisScale",
     "enqueueManualPlanMutation", "enqueueManualStrategyMutation", "enqueueStrategyMigration", "enqueueStrategyMutation",
-    "extractAxisPrices", "fetchNiftyChain", "fetchOptionHistory",
+    "extractAxisPrices", "fetchNiftyChain", "fetchOptionHistory", "isBrokerRefreshMessage",
     "isCaptureMessage", "isChainFetchMessage", "isHistoryFetchMessage", "isManualPlanMutationMessage",
     "isManualStrategyMutationMessage", "isStrategyMigrationMessage", "isStrategyMutationMessage", "isolateAxisCandidates",
-    "manualEntryMatchesLeg"
+    "manualEntryMatchesLeg", "refreshBrokerSnapshot"
   ]);
   assert.equal(api.isCaptureMessage("CAPTURE_AXIS_SCALE"), true);
   assert.equal(api.isCaptureMessage("CAPTURE_PINE_ANCHORS"), false);
@@ -110,6 +114,48 @@ test("exports native-axis capture and single-writer manual mutation API", () => 
   assert.equal(api.isHistoryFetchMessage("FETCH_OPTION_HISTORY"), true);
   assert.equal(api.isStrategyMutationMessage("MUTATE_STRATEGY_BOOK"), true);
   assert.equal(api.isStrategyMigrationMessage("MIGRATE_MANUAL_PLANS"), true);
+  assert.equal(api.isBrokerRefreshMessage("REFRESH_BROKER_SNAPSHOT"), true);
+});
+
+test("normal extension refresh persists broker strategy, review snapshot, chain, and margin evidence", async () => {
+  const updatedAt = "2026-08-08T12:00:00.000Z";
+  const expiry = "2026-08-25";
+  const position = {
+    contractId: `NFO:NIFTY:${expiry}:24400:PE`, tradingsymbol: "NIFTY26AUG24400PE",
+    exchange: "NFO", underlying: "NIFTY", expiry, strike: 24400, optionType: "PE",
+    signedQuantity: 65, lotSize: 65, averagePrice: 137, lastPrice: 137, pnl: 0
+  };
+  const h = loadBackground({
+    fetchImpl: async (url) => {
+      if (String(url).includes("/api/seller-refresh")) return {
+        ok: true,
+        async json() { return {
+          updatedAt, positions: [position], trades: [],
+          chain: { expiry, spot: 24570.65, lotSize: 65, rows: [{ strike: 24400, call: null, put: 137 }] }
+        }; }
+      };
+      if (String(url).includes("/api/zerodha/margins")) return {
+        ok: true,
+        async json() { return {
+          updatedAt, funds: { availableMargin: 100000, usedMargin: 20000, availableCash: 80000 }, baskets: []
+        }; }
+      };
+      throw new Error(`Unexpected URL ${url}`);
+    }
+  });
+  Object.assign(h.local, {
+    expiry,
+    sellerSafetyLedger: sellerLedger.emptyLedger(),
+    sellerSafetyChainsByExpiry: {}
+  });
+
+  const result = await h.api.refreshBrokerSnapshot([]);
+  assert.equal(result.ok, true);
+  assert.equal(h.local.sellerSafetyChain.expiry, expiry);
+  assert.equal(h.local.sellerSafetyPending.positionCount, 1);
+  assert.equal(h.local.sellerSafetyLedger.brokerPositions.length, 1);
+  assert.equal(strategyStore.activeStrategies(h.local.strategyBook, "BROKER:NFO:NIFTY", expiry).length, 1);
+  assert.equal(h.local.brokerMarginEvidence.funds.availableCash, 80000);
 });
 
 function createStrategyCommand(id, strategyId) {

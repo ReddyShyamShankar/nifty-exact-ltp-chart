@@ -751,7 +751,7 @@ test("operator docs define setup, daily review, map semantics, stale behavior, a
   assert.match(extensionReadme, /REFRESH FAILED[\s\S]*immediately[\s\S]*hides/i);
   assert.match(extensionReadme, /strategy selector[\s\S]*without another refresh/i);
   for (const readme of [rootReadme, extensionReadme]) {
-    assert.match(readme, /click[\s\S]*Options Ladder icon[\s\S]*Refresh ladder[\s\S]*Open side panel/i);
+    assert.match(readme, /click[\s\S]*Options Ladder icon[\s\S]*REFRESH ALL[\s\S]*Open side panel/i);
     assert.match(readme, /full[- ]height[\s\S]*side panel/i);
     assert.match(readme, /side panel[\s\S]*TradingView-only/i);
     assert.match(readme, /same seller-safety UI[\s\S]*version 0\.4\.0/i);

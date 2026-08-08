@@ -133,6 +133,32 @@ test("UI: combined label and strategy cards use readable plan ink", () => {
   assert.match(css, /\.nifty-strategy__card\.is-combined \.nifty-strategy__label\s*\{[\s\S]*?color:\s*var\(--plan-ink\);/);
 });
 
+test("UI: strategy selection uses original black square state without check glyphs", () => {
+  const css = read("overlay.css");
+  assert.doesNotMatch(css, /content:\s*["']✓["']/,
+    "selected controls never render an unapproved checkmark");
+  for (const selector of [
+    ".nifty-strategy__selector[aria-pressed=\"true\"]",
+    ".nifty-position-spine__compact-select[aria-pressed=\"true\"]",
+    ".nifty-position-spine__cluster-row-select[aria-pressed=\"true\"]"
+  ]) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const rule = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`))?.[1] || "";
+    assert.match(rule, /background:\s*var\(--control-bg\)/,
+      `${selector} uses solid black selected state`);
+  }
+});
+
+test("UI: combined BE label is chart-native text on exact rail, not a boxed pill", () => {
+  const css = read("overlay.css");
+  const rule = css.match(/\.nifty-strategy__card\.is-combined\.is-collapsed \.nifty-strategy__label\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(rule, /background:\s*transparent/);
+  assert.match(rule, /border:\s*0/);
+  assert.match(rule, /border-left:\s*3px solid var\(--plan-ink\)/);
+  assert.match(rule, /border-radius:\s*0/);
+  assert.doesNotMatch(rule, /border-bottom|theme-warn/);
+});
+
 test("UI: Save chooser cannot produce anonymous blank action buttons", () => {
   const source = read("content.js");
   assert.match(source, /choice\.textContent = option\.label/);

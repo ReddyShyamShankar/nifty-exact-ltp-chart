@@ -53,9 +53,21 @@
       }
       refreshButton.disabled = true;
       refreshLabel.textContent = "REFRESHING…";
-      setStatus("FETCHING LATEST LADDER VALUES", "working");
+      setStatus("READING BROKER + MARKET SNAPSHOT", "working");
       try {
-        const result = await chromeApi.tabs.sendMessage(tab.id, { type: "REFRESH_OPTION_NUMBERS" });
+        const preview = await chromeApi.tabs.sendMessage(tab.id, { type: "GET_STRATEGY_PREVIEW_STATE" });
+        const selectedIds = Array.isArray(preview?.selectedIds)
+          ? preview.selectedIds.filter((id) => typeof id === "string" && id)
+          : [];
+        const brokerResult = await chromeApi.runtime.sendMessage({
+          type: "REFRESH_BROKER_SNAPSHOT",
+          selectedIds
+        });
+        if (!brokerResult?.ok) throw new Error(brokerResult?.error || "Broker refresh failed");
+        const result = await chromeApi.tabs.sendMessage(tab.id, {
+          type: "REFRESH_OPTION_NUMBERS",
+          expectedUpdatedAt: brokerResult.updatedAt || null
+        });
         if (!result?.ok) throw new Error(result?.error || "Ladder refresh failed");
         setStatus("REFRESHED JUST NOW", "success");
         return true;
@@ -63,7 +75,7 @@
         setStatus(error?.message || "Ladder refresh failed", "error");
         return false;
       } finally {
-        refreshLabel.textContent = "REFRESH LADDER";
+        refreshLabel.textContent = "REFRESH ALL";
         refreshButton.disabled = false;
       }
     }

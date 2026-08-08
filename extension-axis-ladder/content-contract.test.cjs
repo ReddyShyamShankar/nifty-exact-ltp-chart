@@ -68,6 +68,24 @@ test("operator guide treats TradingView badge styling as cosmetic and fail-safe"
   assert.match(readme, /badge styling cannot block[^\n]*break-even rails/i);
 });
 
+test("grouped-position flyout moves clear of combined summary", () => {
+  assert.deepEqual(api.flyoutPlacementAvoidingRect(
+    { left: 581, top: 189, width: 166, height: 67 },
+    { left: 580, top: 54, right: 860, bottom: 220 },
+    { width: 1252, height: 813 }
+  ), { left: 402, top: 189 },
+  "wide charts place flyout twelve pixels left of combined summary");
+});
+
+test("grouped-position flyout uses vertical clearance when left side is unavailable", () => {
+  assert.deepEqual(api.flyoutPlacementAvoidingRect(
+    { left: 20, top: 80, width: 166, height: 67 },
+    { left: 8, top: 54, right: 220, bottom: 220 },
+    { width: 300, height: 400 }
+  ), { left: 20, top: 232 },
+  "narrow charts move flyout below combined summary without leaving viewport");
+});
+
 test("content delegates bridge chain requests to extension service worker", () => {
   assert.match(contentSource, /chrome\.runtime\.sendMessage\(\{\s*type:\s*"FETCH_NIFTY_CHAIN",\s*expiry\s*\}\)/);
   assert.doesNotMatch(contentSource, /fetch\([^)]*api\/nifty-chain/);
@@ -142,9 +160,33 @@ test("rows owning C/P position badges render above neighboring ladder rows", () 
   assert.match(raised, /overflow:\s*visible/);
   assert.match(css, /\.nifty-axis-ladder__row:has\(> \.nifty-axis-ladder__badges:not\(:empty\)\)\s*\{[\s\S]*?z-index:\s*6/,
     "DOM-shape fallback keeps badges above rows even if helper class is missing");
-  assert.match(placement,
-    /element\.style\.zIndex\s*=\s*element\.classList\.contains\("has-lot-badges"\)\s*\?\s*String\(100 \+ Math\.round\(row\.y\)\)\s*:\s*""/,
-    "lower badge owners must paint above upper rows so C1/P1 stickers cannot be clipped");
+  assert.match(placement, /element\.style\.zIndex\s*=\s*""/,
+    "row order must use semantic CSS layers so lower rows cannot cover editors or ownership choosers");
+  assert.doesNotMatch(placement, /100 \+ Math\.round\(row\.y\)/,
+    "vertical chart coordinate must never become stacking priority");
+});
+
+test("all compact chart controls stay black before and after selection without checkmarks", () => {
+  const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
+  for (const selector of [
+    ".nifty-position-spine__cluster-select",
+    ".nifty-position-spine__cluster-row-select",
+    ".nifty-position-spine__compact-select",
+    ".nifty-position-spine__marker",
+    ".nifty-position-spine__select",
+    ".nifty-strategy__selector",
+    ".nifty-edge-stack__selector",
+    ".nifty-edge-stack__flyout-selector"
+  ]) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const rule = css.match(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`))?.[1] || "";
+    assert.match(rule, /background:\s*var\(--control-bg\)/, `${selector} must paint black when idle`);
+  }
+  assert.doesNotMatch(css, /content:\s*["']✓["']/,
+    "selection state must not restore tick marks");
+  assert.doesNotMatch(css,
+    /\.(?:nifty-position-spine__cluster-select|nifty-edge-stack__selector)\[aria-expanded="true"\]::after\s*\{[^}]*content:\s*""/s,
+    "expanded black selector must not paint a second absolutely-positioned block over +N identity");
 });
 
 test("grouped broker controls explicitly remove hidden compact originals from layout", () => {
@@ -244,7 +286,7 @@ test("render transaction never exposes an axis row before placement coordinates 
   const renderRows = source.match(/function renderRows\(rows, membership\)\s*\{[\s\S]*?\n  \}/)?.[0] || "";
   const placeRows = source.match(/function placeRows\(rows, membership, toY, visualPlacementRevision\)\s*\{[\s\S]*?\n  \}/)?.[0] || "";
   assert.match(renderRows, /renderManualRow\(element, row, membership, entriesByStrike\);\s*element\.hidden = true;/);
-  assert.match(placeRows, /element\.style\.right = `\$\{baseRight \+ lane \* laneOffset\}px`;\s*element\.style\.top = `\$\{row\.y\}px`;/);
+  assert.match(placeRows, /element\.style\.right = `\$\{baseRight \+ lane \* laneOffset\}px`;[\s\S]*?element\.style\.top = `\$\{displayY\}px`;/);
 });
 
 function acceptedRiskView(overrides = {}) {
@@ -1504,6 +1546,90 @@ test("placement started during rebuild cannot overwrite newly committed axis map
   assert.equal(placements.at(-1).find((row) => row.strike === 23750).y, 150);
 });
 
+test("popup refresh waits for broker-triggered ladder rebuild to settle", async () => {
+  let releaseCapture;
+  const heldCapture = new Promise((resolve) => { releaseCapture = resolve; });
+  let captures = 0;
+  let fetches = 0;
+  const controller = api.createLadderController({
+    expiry: "current_month",
+    fetchChain: async () => chain(23767.45, fetches++),
+    captureAxisScale: async () => {
+      captures += 1;
+      return captures === 3 ? heldCapture : scale();
+    },
+    renderRows: () => {},
+    placeRows: () => true
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  const rebuilding = controller.rebuild("1D");
+  const refreshing = controller.refreshWhenIdle();
+  let refreshSettled = false;
+  refreshing.finally(() => { refreshSettled = true; });
+  await Promise.resolve();
+  assert.equal(refreshSettled, false, "refresh must not fail while broker storage rebuild is active");
+
+  releaseCapture(scale());
+  assert.equal(await rebuilding, true);
+  assert.equal(await refreshing, true);
+});
+
+test("popup broker handoff waits for exact storage snapshot revision before succeeding", async () => {
+  const observedAt = "2026-08-08T14:42:49.146Z";
+  const controller = api.createLadderController({
+    expiry: RISK_EXPIRY,
+    now: () => Date.parse(observedAt),
+    fetchChain: async () => ({ ...chain(23767.45), updatedAt: "2026-08-08T14:40:00.000Z" }),
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => true
+  });
+
+  await controller.syncTimeframe("Chart for NSE_DLY:NIFTY, 1 hour");
+  const handoff = controller.settleSnapshot(observedAt);
+  let settled = false;
+  handoff.finally(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, "popup cannot report success before matching storage revision arrives");
+
+  assert.equal(controller.setChainSnapshot({
+    version: 1,
+    updatedAt: observedAt,
+    expiry: RISK_EXPIRY,
+    lotSize: 65,
+    ...chain(23767.45, 10)
+  }), true);
+  const rebuilding = controller.rebuild("1D");
+  assert.equal(await rebuilding, true);
+  assert.equal(await handoff, true);
+  assert.equal(controller.chain().updatedAt, observedAt);
+});
+
+test("first popup refresh waits for exact broker snapshot before initial membership exists", async () => {
+  const observedAt = "2026-08-08T14:44:00.000Z";
+  const controller = api.createLadderController({
+    expiry: RISK_EXPIRY,
+    now: () => Date.parse(observedAt),
+    fetchChain: async () => { throw new Error("exact broker snapshot must avoid redundant fetch"); },
+    captureAxisScale: async () => scale(),
+    renderRows: () => {},
+    placeRows: () => true
+  });
+
+  const handoff = controller.settleSnapshot(observedAt);
+  assert.equal(controller.setChainSnapshot({
+    version: 1,
+    updatedAt: observedAt,
+    expiry: RISK_EXPIRY,
+    lotSize: 65,
+    ...chain(23767.45)
+  }), true);
+  assert.equal(await controller.rebuild("1D"), true);
+  assert.equal(await handoff, true);
+  assert.equal(controller.membership().expiry, RISK_EXPIRY);
+});
+
 test("in-flight zoom placement survives concurrent LTP refresh and places latest quotes", async () => {
   let resolvePlacementScale;
   const pendingPlacementScale = new Promise((resolve) => { resolvePlacementScale = resolve; });
@@ -1773,6 +1899,33 @@ test("dense and coincident rows never expand beyond one column", () => {
     ...coincident,
     { strike: 24050, y: 300.5 }
   ], 23750, 50), null);
+});
+
+test("single-column row centers separate a pinned ATM collision without changing order", () => {
+  const rows = [
+    { strike: 24750, y: 339 },
+    { strike: 24550, y: 352 },
+    { strike: 24500, y: 366 },
+    { strike: 24250, y: 422 }
+  ];
+  const dimensions = rows.map(() => ({ width: 238, height: 24 }));
+
+  assert.deepEqual(api.separateRowCenters(rows, dimensions, 50, 750, 2), [326.5, 352.5, 378.5, 422]);
+  assert.deepEqual(api.separateRowCenters(
+    [{ strike: 25000, y: 300 }, { strike: 24750, y: 340 }],
+    dimensions.slice(0, 2), 50, 750, 2
+  ), [300, 340], "already separated native rows stay exact");
+  assert.equal(api.separateRowCenters(
+    [{ strike: 25000, y: 20 }, { strike: 24950, y: 50 }, { strike: 24900, y: 80 }],
+    [{ height: 40 }, { height: 40 }, { height: 40 }], 0, 100, 2
+  ), null, "impossible row density must fail closed instead of returning overlapping centers");
+});
+
+test("dense body-height fallback suppresses absolute saved-badge bands before placement", () => {
+  assert.match(contentSource, /let suppressSavedBadges = false/);
+  assert.match(contentSource, /if \(!separatedCenters\) \{\s*suppressSavedBadges = true/);
+  assert.match(contentSource, /savedBadges\.hidden = suppressSavedBadges/,
+    "fallback cannot keep absolute badges that would overlap neighboring row bodies");
 });
 
 test("display ATM snaps to nearest strike that is actually visible", () => {
@@ -2382,7 +2535,7 @@ test("collapsed and open strategy cards cap quick BE labels without changing rai
   assert.deepEqual(railIdentity(), before, "open/collapse changes horizontal clearance only");
 });
 
-test("shared rail header keeps black surface on token only and plain BE text outside it", () => {
+test("shared rail header keeps approved black token and plain BE text outside it", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   const labelRule = css.match(/\.nifty-strategy__card\.is-collapsed\.is-rail-header \.nifty-strategy__label\s*\{([^}]+)\}/)?.[1] || "";
   const tokenRule = css.match(/\.nifty-strategy__rail-token\s*\{([^}]+)\}/)?.[1] || "";
@@ -2398,9 +2551,9 @@ test("shared rail header keeps black surface on token only and plain BE text out
     "BE text follows chart theme outside token");
   assert.match(tokenRule, /border:\s*1px solid var\(--plan-line\)/);
   assert.match(tokenRule, /border-radius:\s*3px/);
-  assert.match(tokenRule, /background:\s*var\(--plan-surface\)/,
-    "only T token owns black surface");
-  assert.match(tokenRule, /color:\s*var\(--plan-ink\)/);
+  assert.match(tokenRule, /background:\s*var\(--control-bg\)/,
+    "T token restores approved black surface");
+  assert.match(tokenRule, /color:\s*var\(--control-ink\)/);
   assert.match(textRule, /color:\s*var\(--theme-ink\)/);
   assert.match(callTokenRule, /border-bottom-color:\s*var\(--ladder-buy\)/);
   assert.match(putTokenRule, /border-bottom-color:\s*var\(--ladder-sell\)/);
@@ -2503,16 +2656,21 @@ test("whole-trade profit and loss bands receive distinct production DOM classes 
   assert.notEqual(profit.trim(), loss.trim(), "profit and loss cannot remain visually identical");
 });
 
-test("every non-axis lane draws a full connector back to the exact right-axis anchor", () => {
+test("horizontal lanes and vertically displaced rows draw connectors to exact axis anchors", () => {
   const source = fs.readFileSync(path.join(__dirname, "content.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
   assert.match(source, /--nifty-connector-width", `\$\{lane \* laneOffset\}px`/);
   assert.match(source, /element\.style\.right = `\$\{baseRight \+ lane \* laneOffset\}px`/);
-  assert.match(source, /element\.style\.top = `\$\{row\.y\}px`/);
+  assert.match(source, /element\.style\.top = `\$\{displayY\}px`/);
+  assert.match(source, /--nifty-anchor-shift", `\$\{anchorShift\}px`/);
   assert.match(css, /\[data-lane\]:not\(\[data-lane="0"\]\)::before/);
   assert.match(css, /width:\s*var\(--nifty-connector-width\)/);
   assert.match(css, /\[data-lane\]:not\(\[data-lane="0"\]\)::after/);
   assert.match(css, /right:\s*calc\(-1 \* \(var\(--nifty-connector-width\) \+ 7px\)\)/);
+  assert.match(css, /\[data-displaced="true"\]::before/);
+  assert.match(css, /height:\s*var\(--nifty-anchor-connector-height\)/);
+  assert.match(css, /\[data-displaced="true"\]::after/);
+  assert.match(css, /top:\s*calc\(50% \+ var\(--nifty-anchor-shift\)\)/);
   assert.doesNotMatch(css, /\[data-lane="1"\]/);
 });
 
@@ -2723,7 +2881,7 @@ test("light chart theme gives strategy evidence light surfaces and non-obscuring
   assert.match(light, /--plan-line:\s*#d4d4d8/);
   assert.match(light, /--ladder-selected:\s*var\(--theme-warn-soft\)/);
   assert.match(light, /--ladder-selected-ink:\s*#18181b/);
-  assert.match(css, /\.nifty-strategy__card\.is-combined\.is-collapsed \.nifty-strategy__label\s*\{[\s\S]*?width:\s*auto[\s\S]*?font:\s*800 9px/);
+  assert.match(css, /\.nifty-strategy__card\.is-combined\.is-collapsed \.nifty-strategy__label\s*\{[\s\S]*?width:\s*auto[\s\S]*?background:\s*transparent[\s\S]*?font:\s*800 9px/);
   assert.match(css, /\.nifty-strategy-preview button:disabled\s*\{[\s\S]*?cursor:\s*not-allowed[\s\S]*?opacity:\s*0\.55/);
 });
 
@@ -2734,7 +2892,6 @@ test("preview actions read as white outlined buttons and combined label keeps wh
   assert.match(buttonRule, /border:\s*1px solid var\(--plan-ink\)/);
   assert.match(buttonRule, /background:\s*transparent/);
   assert.match(buttonRule, /color:\s*var\(--plan-ink\)/);
-  assert.match(combinedRule, /border-color:\s*var\(--theme-warn\)/);
   assert.match(combinedRule, /color:\s*var\(--plan-ink\)/);
 });
 
@@ -3582,6 +3739,30 @@ function chartStrategyBook() {
   return book;
 }
 
+function chartTwoRootStrategyBook() {
+  const at = "2026-08-08T10:00:00.000Z";
+  const identity = { instrumentKey: "NSE_DLY:NIFTY", underlying: "NIFTY", expiry: "2026-08-25" };
+  let book = strategyStore.emptyBook();
+  book = strategyStore.applyCommand(book, {
+    id: "create-two-root", type: "CREATE_STRATEGY", strategyId: "two-root",
+    versionId: "two-root-v1", label: "T55", ...identity
+  }, at);
+  for (const [id, strike, optionType] of [["two-root-put", 23600, "PUT"], ["two-root-call", 24000, "CALL"]]) {
+    book = strategyStore.applyCommand(book, {
+      id: `add-${id}`,
+      type: "ADD_LEG",
+      strategyId: "two-root",
+      versionId: `version-${id}`,
+      leg: {
+        id, source: "MANUAL", ...identity, strike, optionType, direction: "SELL", lots: 1,
+        premium: 50, callSnapshot: 50, putSnapshot: 50, charges: [], chargesComplete: true,
+        createdAt: at, updatedAt: at
+      }
+    }, at);
+  }
+  return book;
+}
+
 function chartStrategyBookWithSameStrikeBroker() {
   const at = "2026-07-31T10:02:00.000Z";
   return strategyStore.applyCommand(chartStrategyBook(), {
@@ -3639,10 +3820,11 @@ function resyncSameStrikeBroker(book, snapshotId, at = "2026-07-31T10:03:00.000Z
   }, at);
 }
 
-function chartStrategyHarness(book = chartStrategyBook()) {
+function chartStrategyHarness(book = chartStrategyBook(), options = {}) {
   const h = createBreakEvenLifecycleHarness({
     manualEntries: Object.values(book.legs),
-    strategyBook: book
+    strategyBook: book,
+    ...options
   });
   const settle = h.settle;
   let activated = false;
@@ -3676,7 +3858,29 @@ test("manual-only strategies keep shared position spine and T labels visible wit
     .map((node) => node.textContent).sort(), ["T1", "T2"]);
 });
 
-test("two persistent T checkboxes render combined evidence without a strike click", async () => {
+test("clicked two-root strategy shows its T evidence at both real breakevens", async () => {
+  const book = chartTwoRootStrategyBook();
+  const manualEntries = Object.values(book.legs);
+  const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries, spot: 23800 });
+  await h.settle();
+
+  assert.deepEqual(h.strategyRails().querySelectorAll(".nifty-position-spine__marker")
+    .map((node) => node.textContent), ["T55", "T55"],
+  "idle state keeps compact T55 identity at each owning saved strike");
+
+  h.click(23600);
+  await h.settle();
+  const cards = h.strategyRails().querySelectorAll(".nifty-strategy__card")
+    .filter((card) => card.textContent.startsWith("T55 "));
+  assert.equal(cards.length, 2,
+    "selected strategy renders evidence at every real payoff zero-crossing");
+  assert.deepEqual(cards.map((card) => Number(card.dataset.exact)).sort((a, b) => a - b), [23500, 24100]);
+  assert.equal(h.strategyRails().querySelectorAll(".nifty-position-spine__compact")
+    .filter((node) => !node.hidden).length, 1,
+  "only clicked leg's idle strike token moves; other saved leg identity stays visible");
+});
+
+test("narrow chart omits unreadable combined summary instead of covering position controls", async () => {
   const book = chartStrategyBook();
   const h = createBreakEvenLifecycleHarness({
     strategyBook: book,
@@ -3692,10 +3896,16 @@ test("two persistent T checkboxes render combined evidence without a strike clic
 
   const rails = h.strategyRails();
   const summary = rails.querySelector(".nifty-strategy-combined-summary");
-  assert.ok(summary, "2+ persistent T selections automatically render chart summary");
-  assert.match(summary.textContent, /COMBINED · T1 \+ T2/);
-  assert.match(summary.textContent, /BE LOW23,600/);
-  assert.match(summary.textContent, /BE HIGH24,000/);
+  assert.equal(summary, null,
+    "impossibly narrow chart must not render an unreadable summary over position controls");
+  assert.match(contentSource, /if \(panelWidth < 180\) return/,
+    "responsive boundary hides summary only when five metrics cannot fit safely");
+  assert.match(contentSource,
+    /Number\(spineLayout\.call\?\.left\) - Number\(rect\.left\) >= 180/,
+    "wide live chart places summary before the position-control spine");
+  assert.match(contentSource,
+    /panel\.style\.left\s*=\s*`\$\{Math\.max\(Number\(rect\?\.left\) \+ 8, Number\(summaryRight\) - panelWidth - 12\)\}px`/,
+    "summary placement uses collision-safe right boundary, not viewport edge");
   assert.equal(h.rails(), null, "combined selection never invents a saved-strike click");
 });
 
@@ -3769,15 +3979,18 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   assert.equal(rails.querySelectorAll(".nifty-strategy__card").length, 1,
     "strike click retains one reusable detail-card node");
   assert.equal(rails.querySelector(".nifty-strategy__card")
-    .classList.contains("is-spine-evidence-proxy"), true,
-  "closed unchecked detail-card proxy stays hidden behind persistent T control");
+    .classList.contains("is-spine-evidence-proxy"), false,
+  "clicked saved position exposes its T evidence at real strategy breakeven");
   const owningPosition = rails.querySelectorAll(".nifty-position-spine__compact")
     .find((node) => node.querySelector(".nifty-position-spine__marker")?.textContent.includes("T1"));
   assert.ok(owningPosition, "selected manual face retains its owning persistent T control");
-  assert.equal(owningPosition.querySelector(".nifty-position-spine__marker").textContent,
-    "T1|BE 23,900|Margin ₹1.20L",
-    "strike click exposes real saved-strategy breakeven and broker margin beside persistent T token");
-  assert.equal(owningPosition.querySelector(".nifty-position-spine__compact-select")
+  assert.equal(owningPosition.hidden, true,
+    "clicked saved position removes idle T token from strike so it never appears at two prices");
+  const evidenceCard = rails.querySelector(".nifty-strategy__card");
+  assert.equal(evidenceCard.dataset.exact, "23900");
+  assert.equal(evidenceCard.textContent, "T1 BE 23,900 | Margin ₹1.20L",
+    "T evidence moves beside real saved-strategy breakeven with margin");
+  assert.equal(evidenceCard.querySelector(".nifty-strategy__selector")
     .getAttribute("aria-pressed"), "false",
     "showing BE evidence never silently selects strategy");
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 0,
@@ -3815,8 +4028,11 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   rails = h.strategyRails();
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 1,
     "checking one T reveals only that strategy BE rail");
-  assert.equal(rails.querySelector(".nifty-position-spine__marker-be").textContent, "BE 23,900",
-    "checked rail never removes strike-click BE evidence from persistent T control");
+  const checkedT1 = rails.querySelectorAll(".nifty-strategy__card")
+    .find((card) => card.dataset.exact === "23900" && card.textContent.includes("T1"));
+  assert.ok(checkedT1, "checked T1 remains physically anchored at 23,900");
+  assert.match(checkedT1.textContent, /MARGIN REQUIRED ₹1\.20L/,
+    "opened T1 detail retains broker margin while checked rail stays anchored");
   assert.equal(rails.querySelectorAll(".nifty-strategy__selector")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
   assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
@@ -3852,8 +4068,9 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   await h.settle();
   assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 1);
   assert.equal(h.strategyRails().querySelector(".nifty-strategy__card")
-    .classList.contains("is-spine-evidence-proxy"), true);
-  assert.equal(h.strategyRails().querySelector(".nifty-position-spine__marker-be").textContent, "BE 23,900");
+    .classList.contains("is-spine-evidence-proxy"), false);
+  assert.equal(h.strategyRails().querySelector(".nifty-strategy__rail-text").textContent,
+    "BE 23,900 | Margin ₹1.20L");
   h.document.dispatch("keydown", { key: "Escape", target: { closest() { return null; } } });
   await h.settle();
   rails = h.strategyRails();
@@ -3865,11 +4082,11 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   "Escape never removes manual or broker C/P positions");
 });
 
-test("closed strike-evidence proxy stays visually hidden after collapsed-card display rules", () => {
+test("clicked saved position moves strategy evidence to real breakeven instead of hiding it", () => {
   const css = fs.readFileSync(path.join(__dirname, "overlay.css"), "utf8");
-  assert.match(css,
+  assert.doesNotMatch(css,
     /\.nifty-strategy__card\.is-collapsed\.is-spine-evidence-proxy\s*\{[^}]*display:\s*none;/s,
-    "collapsed detail proxy must beat normal collapsed-card display in CSS cascade");
+    "clicked strategy evidence must remain visible at its projected breakeven");
 });
 
 test("sold saved strike appends saved-minus-live premium points only after explicit refresh", async () => {
@@ -3881,8 +4098,11 @@ test("sold saved strike appends saved-minus-live premium points only after expli
   h.click(23750);
   await h.settle();
   let labels = h.rails().querySelectorAll(".nifty-break-even__label");
-  assert.equal(labels.find((label) => label.classList.contains("is-call")).textContent,
-    "CALL BE 23,869 · SELL BELOW ↓ · 321.00 pts");
+  let callLabel = labels.find((label) => label.classList.contains("is-call"));
+  assert.equal(callLabel.querySelector(".nifty-break-even__label-text").textContent,
+    "CALL BE 23,869 · SELL BELOW ↓");
+  assert.equal(callLabel.querySelector(".nifty-break-even__premium-difference").textContent,
+    "+321.00 pts");
   assert.doesNotMatch(labels.find((label) => label.classList.contains("is-put")).textContent, /pts/,
     "premium difference belongs only to saved option side");
   assert.equal(h.fetchCalls(), fetchesBeforeClick,
@@ -3893,8 +4113,11 @@ test("sold saved strike appends saved-minus-live premium points only after expli
   h.click(23750);
   await h.settle();
   labels = h.rails().querySelectorAll(".nifty-break-even__label");
-  assert.equal(labels.find((label) => label.classList.contains("is-call")).textContent,
-    "CALL BE 24,405 · SELL BELOW ↓ · -214.85 pts");
+  callLabel = labels.find((label) => label.classList.contains("is-call"));
+  assert.equal(callLabel.querySelector(".nifty-break-even__label-text").textContent,
+    "CALL BE 24,405 · SELL BELOW ↓");
+  assert.equal(callLabel.querySelector(".nifty-break-even__premium-difference").textContent,
+    "-214.85 pts");
   const fetchesAfterManualRefresh = h.fetchCalls();
 
   await h.retryPlacement();
@@ -3916,13 +4139,15 @@ test("same-strike broker face keeps two quick rails without leaking unrelated ma
     "newest broker P1 owns first saved face at shared strike");
   assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
     "broker face preserves agreed quick Call and Put SELL what-if rails");
-  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 0,
-    "broker face cannot reveal unrelated manual T controls");
+  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 1,
+    "broker face exposes only its B1 breakeven evidence");
+  assert.ok(h.strategyRails().querySelector(".nifty-strategy__card").classList.contains("is-broker_leg"));
+  assert.match(h.strategyRails().querySelector(".nifty-strategy__card").textContent, /^B1 /);
   assert.equal(h.strategyRails().querySelectorAll(".nifty-position-spine__compact").length, 3,
     "exact broker and manual positions remain visible in shared type columns");
   assert.equal(h.strategyRails().querySelectorAll(".nifty-position-spine__marker")
-    .filter((node) => node.textContent === "P1").length, 1,
-  "exact broker P control remains identifiable");
+    .filter((node) => node.textContent === "B1").length, 1,
+  "exact broker B1 control remains identifiable");
 });
 
 test("ordinary cell double-click from broker face opens fresh manual editor", async () => {
@@ -4046,8 +4271,9 @@ test("broker spine click claims its exact strike instead of inheriting stale qui
   assert.equal(h.row(23800).getAttribute("aria-pressed"), "true");
   assert.match(h.row(23800).getAttribute("aria-label"), /Buy Put, 1 lot/);
   assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2);
-  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 0,
-    "broker face cannot expose stale manual T controls");
+  assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 1,
+    "broker face exposes B1 evidence without stale manual T controls");
+  assert.ok(h.strategyRails().querySelector(".nifty-strategy__card").classList.contains("is-broker_leg"));
   const card = h.strategyRails().querySelector(".nifty-position-spine__card");
   assert.ok(card);
   assert.match(card.textContent, /23,800/);
@@ -4119,8 +4345,9 @@ test("production interaction path survives 1,000 neutral broker manual and live 
       `cycle ${cycle}: first click opens newest broker face`);
     assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
       `cycle ${cycle}: broker face keeps exactly two quick rails`);
-    assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 0,
-      `cycle ${cycle}: broker face leaks no manual T controls`);
+    assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 1,
+      `cycle ${cycle}: broker face exposes only B1 evidence`);
+    assert.ok(h.strategyRails().querySelector(".nifty-strategy__card").classList.contains("is-broker_leg"));
     evaluations += 1;
 
     row = h.click(23800);
@@ -4157,7 +4384,14 @@ test("production interaction path survives 1,000 neutral broker manual and live 
 });
 
 test("production strategy rails open details, synchronize squares, preview combined roots, compare, and clear on refresh", async () => {
-  const h = chartStrategyHarness();
+  const h = chartStrategyHarness(chartStrategyBook(), {
+    elementBounds(node) {
+      if (node.classList.contains("nifty-axis-ladder__row")) {
+        return { left: 1280, top: 20, right: 1500, bottom: 40 };
+      }
+      return null;
+    }
+  });
   await h.settle();
 
   let rails = h.strategyRails();
@@ -4181,7 +4415,7 @@ test("production strategy rails open details, synchronize squares, preview combi
 
   rails = h.strategyRails();
   assert.deepEqual(rails.querySelectorAll(".nifty-strategy__label").map((node) => node.textContent).sort(), [
-    "COMBINED BE 23,600", "COMBINED BE 24,000",
+    "BE HIGH 24,000 · COMBINED", "BE LOW 23,600 · COMBINED",
     "T1 BE 23,900", "T2 BE 23,700 | Margin —"
   ]);
   const combinedSummary = rails.querySelector(".nifty-strategy-combined-summary");
@@ -4387,12 +4621,10 @@ test("overlapping Call strategy and off-grid Call tokens use restored position g
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
   rails = h.strategyRails();
-  assert.equal(rails.querySelector(".nifty-position-spine__cluster-select").getAttribute("aria-expanded"), "false",
-    "removing selected rail proxy closes stale group membership");
-  rails.querySelector(".nifty-position-spine__cluster-select")
-    .dispatch("click", { stopPropagation() {} });
-  await h.settle();
-  rails = h.strategyRails();
+  assert.equal(rails.querySelector(".nifty-position-spine__cluster-select").getAttribute("aria-expanded"), "true",
+    "exact selection keeps grouped choices open for further multi-select");
+  assert.ok(rails.querySelector(".nifty-position-spine__cluster-flyout"),
+    "group closes only through outside click, Escape, or opener toggle");
   assert.equal(rails.querySelector(".nifty-position-spine__cluster-flyout").querySelectorAll(".nifty-position-spine__cluster-row-select")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 0,
   "exact flyout square toggles the already-selected T1 off");
@@ -4440,6 +4672,26 @@ test("saved-position face click keeps quick Call and Put break-even rails visibl
   assert.equal(h.rails().querySelectorAll(".nifty-break-even__line").length, 2,
     "cycling saved C1/P1 face must not clear quick rails");
   assert.equal(h.row(23750).classList.contains("is-manual-entry"), true);
+});
+
+test("opening a saved face on another strike repaints the previous row back to live", async () => {
+  const h = createBreakEvenLifecycleHarness({
+    manualEntries: [
+      savedManualEntry({ id: "first-strike", strike: 23750 }),
+      savedManualEntry({ id: "second-strike", strike: 23800 })
+    ]
+  });
+  await h.settle();
+
+  h.click(23750);
+  await h.settle();
+  assert.equal(h.row(23750).classList.contains("is-manual-entry"), true);
+
+  h.click(23800);
+  await h.settle();
+  assert.equal(h.row(23750).classList.contains("is-manual-entry"), false,
+    "prior strike cannot remain visually expanded");
+  assert.equal(h.row(23800).classList.contains("is-manual-entry"), true);
 });
 
 test("broker disconnect hides persisted broker position spine without deleting strategy book", async () => {
@@ -4629,7 +4881,8 @@ test("broker position renders on exact-Y spine and ladder badge without blocking
   assert.equal(line.dataset.atm, visibleAtmRows[0].dataset.strike);
   const marker = rails.querySelector(".nifty-position-spine__marker");
   assert.equal(marker.className, "nifty-position-spine__marker is-put is-sell");
-  assert.equal(marker.textContent, "P1");
+  assert.equal(marker.textContent, "B1",
+    "broker position uses broker identity instead of pretending to be manual T or option-lot tag");
   assert.ok(marker.parent.querySelector(".nifty-position-spine__compact-select"),
     "Put token keeps its selector visible without opening P&L");
   assert.ok(marker.parent.classList.contains("is-put"));
@@ -4645,6 +4898,18 @@ test("broker position renders on exact-Y spine and ladder badge without blocking
   await h.settle();
   assert.match(h.rails().textContent, /CALL BE 23,920 · SELL BELOW ↓/);
   assert.match(h.rails().textContent, /PUT BE 23,580 · SELL ABOVE ↑/);
+
+  const brokerBadge = h.row(23800).querySelector(".nifty-axis-ladder__badge");
+  h.pointerThenClickTarget(brokerBadge);
+  await h.settle();
+  const brokerEvidence = h.strategyRails().querySelectorAll(".nifty-strategy__card")
+    .filter((card) => card.textContent.startsWith("B1 "));
+  assert.equal(brokerEvidence.length, 1,
+    "clicked broker position exposes one B1 evidence control at its real breakeven");
+  assert.ok(Number(brokerEvidence[0].dataset.exact) < 23800,
+    "B1 evidence is projected to calculated Put breakeven, not saved strike");
+  assert.equal(h.strategyRails().querySelector(".nifty-position-spine__compact").hidden, true,
+    "idle B1 strike token moves away while broker breakeven evidence is active");
 });
 
 test("broker spine opens one compact P&L card and shows break-even rail only on request", async () => {
@@ -4809,9 +5074,6 @@ test("broker card CLOSE preserves an independent open plus group and exact strat
     .querySelector(".nifty-position-spine__cluster-row-select")
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
-  h.strategyRails().querySelector(".nifty-position-spine__cluster-select")
-    .dispatch("click", { stopPropagation() {} });
-  await h.settle();
   h.strategyRails().querySelector(".nifty-position-spine__rail-toggle")
     .dispatch("click", { stopPropagation() {} });
   await h.settle();
@@ -4938,10 +5200,39 @@ test("broker spine compact selectors build combined preview without opening P&L 
       optionType: "CE", signedQuantity: 65, lotSize: 65, averagePrice: 50, lastPrice: 60, pnl: 650
     }]
   }, at);
-  const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries: [] });
+  const marginApi = require("./margin-evidence.js");
+  const brokerStrategy = strategyStore.activeStrategies(book, "BROKER:NFO:NIFTY", "2026-08-25")[0];
+  const brokerLegs = strategyStore.legsForStrategy(book, brokerStrategy.id);
+  const brokerMarginEvidence = {
+    version: 1,
+    updatedAt: "2026-08-08T10:00:00.000Z",
+    funds: null,
+    baskets: {
+      [`strategy:${brokerStrategy.id}`]: {
+        fingerprint: marginApi.fingerprint(brokerLegs),
+        total: 120000,
+        legs: brokerLegs.map((entry) => ({ entryId: entry.id, total: 450000 }))
+      }
+    }
+  };
+  const h = createBreakEvenLifecycleHarness({
+    strategyBook: book,
+    manualEntries: [],
+    brokerMarginEvidence,
+    elementBounds(node) {
+      if (node.classList.contains("nifty-axis-ladder__row")) {
+        return { left: 1280, top: 20, right: 1500, bottom: 40 };
+      }
+      return null;
+    }
+  });
   await h.settle();
   h.select(23750);
   await h.settle();
+
+  assert.deepEqual(h.strategyRails().querySelectorAll(".nifty-position-spine__marker")
+    .map((node) => node.textContent).sort(), ["B1", "B2"],
+  "two broker legs keep unique B1/B2 identities");
 
   for (const side of ["is-put", "is-call"]) {
     const compact = h.strategyRails().querySelectorAll(".nifty-position-spine__compact")
@@ -4955,8 +5246,18 @@ test("broker spine compact selectors build combined preview without opening P&L 
   assert.equal(rails.querySelectorAll(".nifty-position-spine__card").length, 0,
     "selection does not force an individual P&L card open");
   assert.ok(rails.querySelector(".nifty-strategy-preview"));
-  assert.ok(rails.querySelectorAll(".nifty-strategy__label")
-    .some((node) => node.textContent.startsWith("COMBINED BE ")));
+  const combinedSummary = rails.querySelector(".nifty-strategy-combined-summary");
+  assert.ok(combinedSummary);
+  assert.match(combinedSummary.textContent, /COMBINED · B1 \+ B2/);
+  assert.match(combinedSummary.textContent, /MARGIN REQUIRED₹1\.20L/,
+    "exact full broker basket evidence is reused for B1+B2 without estimation");
+  assert.doesNotMatch(combinedSummary.textContent, /broker:|%3A|::leg::/i,
+    "combined title never exposes encoded storage identity");
+  const combinedLabels = rails.querySelectorAll(".nifty-strategy__label")
+    .map((node) => node.textContent)
+    .filter((text) => text.includes("· COMBINED"));
+  assert.equal(combinedLabels.length, 1);
+  assert.match(combinedLabels[0], /^BE [\d,]+ · COMBINED$/);
 });
 
 test("Call and Put headers start above highest visible broker control", async () => {
@@ -5144,8 +5445,8 @@ test("colliding manual and broker Calls collapse through restored Call-only posi
   assert.equal(rails.querySelectorAll(".nifty-position-spine__compact")
     .filter((node) => node.classList.contains("is-call")
       && node.classList.contains("is-grouped")
-      && node.querySelector(".nifty-position-spine__marker")?.textContent === "C1").length, 1,
-  "group hides full broker C1 control, not only its checkbox");
+      && node.querySelector(".nifty-position-spine__marker")?.textContent === "B1").length, 1,
+  "group hides full broker B1 control, not only its checkbox");
 
   selector.dispatch("click", { stopPropagation() {} });
   await h.settle();
@@ -5155,7 +5456,7 @@ test("colliding manual and broker Calls collapse through restored Call-only posi
   const manualRow = flyout.querySelectorAll(".nifty-position-spine__cluster-row")
     .find((row) => row.textContent.startsWith("T1 "));
   const brokerRow = flyout.querySelectorAll(".nifty-position-spine__cluster-row")
-    .find((row) => row.textContent.startsWith("C1 "));
+    .find((row) => row.textContent.startsWith("B1 "));
   assert.ok(manualRow && brokerRow);
   const manualIdentitySelector = manualRow.querySelector(".nifty-position-spine__cluster-row-select");
   h.document.dispatch("pointerdown", { target: manualIdentitySelector });
@@ -5164,22 +5465,19 @@ test("colliding manual and broker Calls collapse through restored Call-only posi
 
   rails = h.strategyRails();
   selector = rails.querySelector(".nifty-position-spine__cluster-select");
-  assert.equal(selector.getAttribute("aria-expanded"), "false",
-    "selecting exact T identity closes grouped choices so they cannot cover chart evidence");
-  assert.equal(rails.querySelector(".nifty-position-spine__cluster-flyout"), null);
-  selector.dispatch("click", { stopPropagation() {} });
-  await h.settle();
-  rails = h.strategyRails();
+  assert.equal(selector.getAttribute("aria-expanded"), "true",
+    "selecting exact T identity keeps grouped choices open for multi-select");
+  assert.ok(rails.querySelector(".nifty-position-spine__cluster-flyout"));
   const selectedFlyout = rails.querySelector(".nifty-position-spine__cluster-flyout");
   const selectedManual = selectedFlyout.querySelectorAll(".nifty-position-spine__cluster-row")
     .find((row) => row.textContent.startsWith("T1 "));
   const unselectedBroker = selectedFlyout.querySelectorAll(".nifty-position-spine__cluster-row")
-    .find((row) => row.textContent.startsWith("C1 "));
+    .find((row) => row.textContent.startsWith("B1 "));
   assert.equal(selectedManual.querySelector(".nifty-position-spine__cluster-row-select")
     .getAttribute("aria-pressed"), "true");
   assert.equal(unselectedBroker.querySelector(".nifty-position-spine__cluster-row-select")
     .getAttribute("aria-pressed"), "false",
-  "exact T selection never absorbs adjacent broker C1");
+  "exact T selection never absorbs adjacent broker B1");
 
   h.document.dispatch("pointerdown", { target: { closest() { return null; } } });
   rails = h.strategyRails();
@@ -5439,7 +5737,7 @@ test("live broker strategy storage update adds exact Call marker and matching la
   assert.equal(badge.dataset.source, "BROKER_POSITION");
   const marker = h.strategyRails().querySelector(".nifty-position-spine__marker");
   assert.equal(marker.className, "nifty-position-spine__marker is-call is-buy");
-  assert.equal(marker.textContent, "C2");
+  assert.equal(marker.textContent, "B1");
   assert.ok(marker.parent.classList.contains("is-call"));
   assert.ok(marker.parent.querySelector(".nifty-position-spine__compact-select"));
   assert.match(marker.getAttribute("aria-label"), /Call BUY, 2 lots, strike 23,800/);
@@ -5771,7 +6069,13 @@ test("new leg waits for explicit chart strategy ownership before any write", asy
 
 test("production ladder shows visible strikes while clipped siblings stay hidden", async () => {
   const h = createBreakEvenLifecycleHarness({
-    plotRect: { left: 0, top: 100, right: 1200, bottom: 160 }
+    plotRect: { left: 0, top: 100, right: 1200, bottom: 160 },
+    elementBounds(node) {
+      if (node.classList.contains("nifty-axis-ladder__row")) {
+        return { left: 100, top: 20, right: 340, bottom: 28 };
+      }
+      return null;
+    }
   });
   await h.settle();
 
@@ -6610,7 +6914,7 @@ test("neutral Put double-click beside one saved Call opens fresh Put ADD editor"
   assert.equal(h.manualEntries()[0].id, entry.id, "saved Call stays untouched");
 });
 
-test("saved manual editor paints above its dynamically stacked badge row", async () => {
+test("saved manual editor and ownership chooser paint above every semantic ladder row layer", async () => {
   const entry = savedManualEntry({ id: "stacked-manual" });
   const h = createBreakEvenLifecycleHarness({
     manualEntries: [entry],
@@ -6621,10 +6925,18 @@ test("saved manual editor paints above its dynamically stacked badge row", async
   h.doubleClick(23750);
   await h.retryPlacement();
 
-  const rowIndex = Number(h.row(23750).style.zIndex);
-  const editorIndex = Number(h.editor(23750).style.zIndex);
-  assert.ok(rowIndex > 10, "saved badge row owns a dynamic foreground layer");
-  assert.ok(editorIndex > rowIndex, "manual editor must paint above its owning badge row");
+  assert.equal(h.row(23750).style.zIndex, "",
+    "chart Y coordinate never creates a row stacking layer");
+  assert.equal(h.editor(23750).style.zIndex || "", "",
+    "editor relies on fixed semantic CSS layer, not owning-row arithmetic");
+
+  h.editor(23750).querySelector(".nifty-manual-editor__close").dispatch("click", {});
+  h.doubleClick(23900);
+  chooseCallSellEditor(h, 23900);
+  const editor = h.editor(23900);
+  commitManualEditor(h, 23900, { chooseOwnership: false });
+  assert.ok(editor.querySelector(".nifty-strategy-owner"),
+    "ownership chooser remains mounted in foreground editor layer");
 });
 
 test("closing editor cannot resurrect prior saved face", async () => {
@@ -7624,7 +7936,15 @@ test("same-label SPA URL navigation clears selection without treating timeframe 
 });
 
 test("off-screen rails pin top and bottom markers to plot edges before lane-zero rows", async () => {
-  const harness = createBreakEvenLifecycleHarness({ plotRect: { left: 0, top: 80, right: 1200, bottom: 230 } });
+  const harness = createBreakEvenLifecycleHarness({
+    plotRect: { left: 0, top: 80, right: 1200, bottom: 230 },
+    elementBounds(node) {
+      if (node.classList.contains("nifty-axis-ladder__row")) {
+        return { left: 100, top: 20, right: 340, bottom: 28 };
+      }
+      return null;
+    }
+  });
   await harness.settle();
 
   harness.select(24000);
@@ -7646,7 +7966,15 @@ test("off-screen rails pin top and bottom markers to plot edges before lane-zero
 });
 
 test("visible rail labels stay within plot bounds near top and bottom", async () => {
-  const harness = createBreakEvenLifecycleHarness({ plotRect: { left: 0, top: 75, right: 1200, bottom: 253 } });
+  const harness = createBreakEvenLifecycleHarness({
+    plotRect: { left: 0, top: 75, right: 1200, bottom: 253 },
+    elementBounds(node) {
+      if (node.classList.contains("nifty-axis-ladder__row")) {
+        return { left: 100, top: 20, right: 340, bottom: 28 };
+      }
+      return null;
+    }
+  });
   await harness.settle();
 
   for (const strike of [24000, 23450]) {

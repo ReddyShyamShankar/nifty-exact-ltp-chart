@@ -1,17 +1,20 @@
 "use strict";
 
-importScripts("overlay-utils.js", "side-panel.js", "manual-plan.js", "strategy-store.js");
+importScripts("overlay-utils.js", "side-panel.js", "manual-plan.js", "strategy-store.js", "seller-ledger.js", "margin-evidence.js");
 
 NiftySidePanel.install(chrome);
 
 const manualPlanApi = globalThis.NiftyManualPlan;
 const strategyStoreApi = globalThis.OptionsStrategyStore;
+const sellerLedgerApi = globalThis.NiftySellerLedger;
+const marginEvidenceApi = globalThis.OptionsMarginEvidence;
 const MANUAL_PLAN_MUTATION = "MUTATE_MANUAL_PLANS";
 const MANUAL_STRATEGY_MUTATION = "MUTATE_MANUAL_STRATEGY";
 const STRATEGY_BOOK_MUTATION = "MUTATE_STRATEGY_BOOK";
 const STRATEGY_BOOK_MIGRATION = "MIGRATE_MANUAL_PLANS";
 const CHAIN_FETCH = "FETCH_NIFTY_CHAIN";
 const HISTORY_FETCH = "FETCH_OPTION_HISTORY";
+const BROKER_REFRESH = "REFRESH_BROKER_SNAPSHOT";
 const BRIDGE_API = "http://127.0.0.1:8787";
 const LEGACY_MANUAL_LOT_SIZE = 65;
 let storageMutationTail = Promise.resolve();
@@ -72,6 +75,147 @@ function isChainFetchMessage(type) {
 
 function isHistoryFetchMessage(type) {
   return type === HISTORY_FETCH;
+}
+
+function isBrokerRefreshMessage(type) {
+  return type === BROKER_REFRESH;
+}
+
+async function bridgeJson(url, options = {}, fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error || "Broker refresh failed.");
+  return data;
+}
+
+function brokerStrategyLabel(expiry) {
+  const date = new Date(`${expiry}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) return "BROKER";
+  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  return `BROKER · ${months[date.getUTCMonth()]} ${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function storedBrokerStrategy(book, expiry) {
+  return Object.values(book?.strategies || {}).find((strategy) => {
+    if (strategy?.status !== "ACTIVE" || strategy.expiry !== expiry) return false;
+    const version = book?.versions?.[strategy.currentVersionId];
+    const legs = (version?.legIds || []).map((id) => book?.legs?.[id]).filter(Boolean);
+    return legs.length > 0 && legs.every((leg) => leg.source === "BROKER_POSITION");
+  }) || null;
+}
+
+function syncBrokerStrategyBook(book, positions, expiry, updatedAt) {
+  const existing = storedBrokerStrategy(book, expiry);
+  if (!positions.length && !existing) return book;
+  const underlying = positions[0]?.underlying || existing?.underlying;
+  const exchange = positions[0]?.exchange || String(existing?.instrumentKey || "BROKER:NFO:NIFTY").split(":")[1] || "NFO";
+  const instrumentKey = positions.length ? `BROKER:${exchange}:${underlying}` : existing.instrumentKey;
+  if (positions.some((position) => position.underlying !== underlying
+    || position.exchange !== exchange || position.expiry !== expiry)) {
+    throw new Error("Broker snapshot mixes strategy instruments or expiries.");
+  }
+  const encodedKey = encodeURIComponent(instrumentKey);
+  const snapshotId = encodeURIComponent(updatedAt);
+  return strategyStoreApi.applyCommand(book, {
+    id: `broker-sync:${encodedKey}:${expiry}:${snapshotId}`,
+    type: "SYNC_BROKER_POSITIONS",
+    strategyId: existing?.id || `broker:${encodedKey}:${expiry}`,
+    versionId: `broker-version:${encodedKey}:${expiry}:${snapshotId}`,
+    snapshotId,
+    label: brokerStrategyLabel(expiry),
+    instrumentKey,
+    underlying,
+    expiry,
+    positions
+  }, updatedAt);
+}
+
+async function refreshBrokerSnapshot(selectedIds = [], fetchImpl = globalThis.fetch) {
+  const stored = await chrome.storage.local.get({
+    expiry: "current_month",
+    sellerSafetyLedger: null,
+    sellerSafetyChainsByExpiry: {},
+    sellerSafetyRefreshFailuresByExpiry: {},
+    strategyBook: strategyStoreApi.emptyBook()
+  });
+  const expiry = stored.expiry;
+  if (!manualPlanApi.isIsoDate(expiry)) throw new Error("Select one exact NIFTY expiry first.");
+  const data = await bridgeJson(
+    `${BRIDGE_API}/api/seller-refresh?expiry=${encodeURIComponent(expiry)}`,
+    { cache: "no-store" },
+    fetchImpl
+  );
+  if (typeof data?.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt))
+    || !Array.isArray(data.positions) || !Array.isArray(data.trades)
+    || data.chain?.expiry !== expiry || !Number.isFinite(Number(data.chain?.spot))
+    || !Number.isInteger(data.chain?.lotSize) || data.chain.lotSize <= 0
+    || !Array.isArray(data.chain?.rows)) {
+    throw new Error("Bridge returned an invalid seller refresh snapshot.");
+  }
+  const ledger = stored.sellerSafetyLedger?.version === 1
+    ? stored.sellerSafetyLedger : sellerLedgerApi.emptyLedger();
+  const reconciled = sellerLedgerApi.reconcilePositions(ledger, data.positions, { expiry });
+  const nextLedger = sellerLedgerApi.ingestBrokerTrades(reconciled, {
+    trades: data.trades,
+    expiry,
+    observedAt: data.updatedAt
+  });
+  const strategyBook = syncBrokerStrategyBook(
+    stored.strategyBook || strategyStoreApi.emptyBook(),
+    data.positions,
+    expiry,
+    data.updatedAt
+  );
+  let brokerMarginEvidence = { version: 1, updatedAt: null, funds: null, baskets: {} };
+  try {
+    const requests = marginEvidenceApi.requestsForBook(strategyBook, selectedIds);
+    const marginData = await bridgeJson(`${BRIDGE_API}/api/zerodha/margins`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requests })
+    }, fetchImpl);
+    brokerMarginEvidence = marginEvidenceApi.normalizeRefreshEvidence(marginData);
+  } catch (_) {
+    // Margin stays fail-closed while broker positions and quotes still refresh.
+  }
+  const chainSnapshot = {
+    version: 1,
+    updatedAt: data.updatedAt,
+    expiry,
+    lotSize: data.chain.lotSize,
+    spot: Number(data.chain.spot),
+    rows: data.chain.rows
+  };
+  const candidateId = `refresh:${encodeURIComponent(data.updatedAt)}`;
+  const failures = { ...(stored.sellerSafetyRefreshFailuresByExpiry || {}) };
+  delete failures[expiry];
+  await chrome.storage.local.set({
+    strategyBook,
+    sellerSafetyLedger: nextLedger,
+    sellerSafetyPending: {
+      version: 1,
+      candidateId,
+      updatedAt: data.updatedAt,
+      positionCount: data.positions.length,
+      tradeCount: data.trades.length,
+      chain: { candidateId, expiry, spot: Number(data.chain.spot), updatedAt: data.updatedAt, daysToExpiry: null }
+    },
+    sellerSafetyChartView: {
+      version: 1,
+      candidateId,
+      canPublish: false,
+      priority: { kind: "review", label: nextLedger.reviewChanges.length ? "REVIEW POSITION CHANGES" : "REVIEW REFRESH SNAPSHOT" },
+      expiry,
+      brokerUpdatedAt: data.updatedAt,
+      brokerSessionExpiresAt: null
+    },
+    sellerSafetyChain: chainSnapshot,
+    sellerSafetyChainsByExpiry: { ...(stored.sellerSafetyChainsByExpiry || {}), [expiry]: chainSnapshot },
+    sellerSafetyRefreshFailuresByExpiry: failures,
+    brokerMarginEvidence
+  });
+  return { ok: true, positionCount: data.positions.length, updatedAt: data.updatedAt };
 }
 
 function isStrategyMutationMessage(type) {
@@ -678,18 +822,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const manualStrategyMutation = isManualStrategyMutationMessage(message?.type);
   const chainFetch = isChainFetchMessage(message?.type);
   const historyFetch = isHistoryFetchMessage(message?.type);
+  const brokerRefresh = isBrokerRefreshMessage(message?.type);
   const strategyMutation = isStrategyMutationMessage(message?.type);
   const strategyMigration = isStrategyMigrationMessage(message?.type);
-  if (!isCaptureMessage(message?.type) && !manualMutation && !manualStrategyMutation && !chainFetch && !historyFetch
+  if (!isCaptureMessage(message?.type) && !manualMutation && !manualStrategyMutation && !chainFetch && !historyFetch && !brokerRefresh
     && !strategyMutation && !strategyMigration) return;
-  const trustedStrategySender = (strategyMutation || strategyMigration) && isExtensionSender(sender);
-  if (!isTradingViewSender(sender) && !trustedStrategySender) {
+  const trustedExtensionSender = (strategyMutation || strategyMigration || brokerRefresh) && isExtensionSender(sender);
+  if (!isTradingViewSender(sender) && !trustedExtensionSender) {
     sendResponse({
       ok: false,
       error: historyFetch
         ? "Option history is limited to TradingView tabs."
         : chainFetch
         ? "Option-chain refresh is limited to TradingView tabs."
+        : brokerRefresh
+        ? "Broker refresh is limited to Options Ladder controls."
         : strategyMutation || strategyMigration
         ? "Strategy mutations are limited to TradingView tabs."
         : manualStrategyMutation
@@ -698,12 +845,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ? "Manual plan mutations are limited to TradingView tabs."
         : "Axis capture is limited to TradingView tabs."
     });
-    return chainFetch || historyFetch || strategyMutation || strategyMigration || undefined;
+    return chainFetch || historyFetch || brokerRefresh || strategyMutation || strategyMigration || undefined;
   }
   const operation = chainFetch
     ? fetchNiftyChain(message.expiry).then((chain) => ({ ok: true, chain }))
     : historyFetch
     ? fetchOptionHistory(message).then((history) => ({ ok: true, history }))
+    : brokerRefresh
+    ? refreshBrokerSnapshot(Array.isArray(message.selectedIds) ? message.selectedIds : [])
     : strategyMutation
     ? enqueueStrategyMutation(message.command)
       .then((strategyBook) => ({ ok: true, strategyBook }))
@@ -736,6 +885,7 @@ if (typeof module !== "undefined" && module.exports) {
     extractAxisPrices,
     fetchNiftyChain,
     fetchOptionHistory,
+    isBrokerRefreshMessage,
     isCaptureMessage,
     isChainFetchMessage,
     isHistoryFetchMessage,
@@ -745,6 +895,7 @@ if (typeof module !== "undefined" && module.exports) {
     manualEntryMatchesLeg,
     isStrategyMigrationMessage,
     isStrategyMutationMessage,
+    refreshBrokerSnapshot,
     enqueueStrategyMigration,
     enqueueStrategyMutation
   };

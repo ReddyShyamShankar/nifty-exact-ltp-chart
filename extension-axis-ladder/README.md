@@ -67,15 +67,15 @@ The TradingView-owned compact status badge is cosmetic. LIVE uses green; OFFLINE
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Choose **Load unpacked** and select this `extension-axis-ladder` directory.
-4. Open logged-in TradingView NIFTY chart, select one exact expiry, click pinned Options Ladder icon, then choose **Refresh ladder**.
+4. Open logged-in TradingView NIFTY chart, select one exact expiry, click pinned Options Ladder icon, then choose **REFRESH ALL**.
 
 Existing Pine-sync extension v0.14.0 remains a separate untouched backup.
 
 ## Compact toolbar popup and read-only seller-safety baseline
 
-Click the pinned Options Ladder icon on a TradingView tab to open a compact popup. **Refresh ladder** updates chart option numbers and reports progress in the popup. **Open side panel** opens the full-height seller-safety controls. Clicking outside closes the popup. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes an open panel.
+Click the pinned Options Ladder icon on a TradingView tab to open a compact popup. **REFRESH ALL** captures connected-broker evidence, updates chart option numbers, and reports progress in the popup. **Open side panel** opens the full-height seller-safety controls. Clicking outside closes the popup. The side panel is TradingView-only and retains the same seller-safety UI as the version 0.4.0 baseline. Switching tabs closes an open panel.
 
-Popup refresh updates ladder option numbers only. Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
+Popup REFRESH ALL first captures connected-broker positions, funds, and margin evidence, then refreshes ladder option numbers. Opening, closing, or resizing the side panel makes no seller-refresh, positions, trades, or option-chain requests. Panel open retains existing bridge-health, expiry-list, and Zerodha-status checks. Daily, use CONNECT ZERODHA, then press REFRESH ALL manually.
 
 The seller-safety baseline remains independent from manual plans:
 
