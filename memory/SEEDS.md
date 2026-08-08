@@ -219,3 +219,27 @@ Both branches pushed; feature `58e8d11`, product repair `239ad4e`, 986-green bro
 - Should destructive REMOVE, merge, split, restore, and archive flows run after snapshotting user storage?
 - When should real broker authorization and exact authenticated refresh fan-out be verified?
 - When should `codex/arbdesk-theme-system` merge into primary branch?
+
+## Checkpoint #010 — 2026-08-08T22:15:11+05:30
+
+### Changed since previous seed
+- Added commits `32062ab` and `63e3d41` on `codex/arbdesk-theme-system`; prior seed ended at pushed `58e8d11`.
+- Restored real in-range strike visibility across zoom instead of filtering to sparse native ticks; dense rendering now samples safely and preserves true ATM.
+- Corrected selector/token visual roles: selector squares white; B/T/+N identity tokens black.
+- Unified quick Call/Put and combined BE rail geometry; live Chrome measured matching labels.
+- Live Chrome audit found combined summary covering its BE label; fixed in `63e3d41`, but latest revision has not yet been reloaded and replayed live.
+
+## STATE
+Options Ladder worktree `.worktrees/timeframe-axis-ladder` is clean on `codex/arbdesk-theme-system` at `63e3d41`. Full regression suite passed before final collision commit; final targeted content contract passed 295/295, syntax/diff checks pass. Live Chrome proved strikes survive baseline and zoom-out, white selectors/black identity tokens, and matching Call/Put BE geometry; final combined-summary clearance needs latest reload plus replay.
+
+## NEXT_LINE
+Reload Options Ladder at `chrome://extensions`, reload TradingView chart, refresh side-panel `REFRESH ALL`, select B1+B2, and prove combined summary rectangle does not intersect `BE … · COMBINED` label.
+
+## MEMORY_KEY
+Zoom-visible strikes plus white selectors/black B-T tokens; `63e3d41` moves combined summary away from combined BE, final live reload proof pending.
+
+## OPEN_QUESTIONS
+- Does `63e3d41` pass exact combined-summary/BE live geometry after unpacked extension reload?
+- Does live zoom-in and zoom-out maintain safely sampled strike cards without body or badge collisions at extreme density?
+- When should real broker authorization and exact authenticated refresh fan-out be verified?
+- When should `codex/arbdesk-theme-system` merge into primary branch?

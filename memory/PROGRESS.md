@@ -183,3 +183,18 @@ Added `docs/testing/2026-08-05-post-repair-verification.md` beside 202-workflow 
 Committed and pushed every local change
 
 Feature repairs, tests, workflow catalog, and evidence were committed as product commit `239ad4e`, followed by verification metadata `58e8d11`, then pushed to `origin/codex/arbdesk-theme-system`. Checkpoint memory, ChatGPT context, and reference visuals were committed on `codex/timeframe-axis-ladder-base`; every registered worktree was checked and contains no uncommitted files.
+
+## #032 — 2026-08-08T22:15:11+05:30 — fix
+Restored visible strike cards through zoom
+
+Changed selected-contract membership so TradingView native ticks calibrate visible price bounds but do not filter out real in-range 50-point strikes. Dense views now sample safely placeable real rows and keep true ATM instead of concealing whole ladder. Commit `32062ab` includes regression coverage and selector visual correction.
+
+## #033 — 2026-08-08T22:15:11+05:30 — test
+Ran live chart zoom and typography audit
+
+After manual side-panel refresh, live Chrome showed `LIVE`, white selector squares, black B/T identity tokens, 27 baseline strikes and 29 strikes after zoom-out, with no in-viewport ladder-card collision. Clicking saved 24,450 position showed Call/Put BE labels sharing 310px × 22px geometry, 10px line height, and identical padding.
+
+## #034 — 2026-08-08T22:15:11+05:30 — fix
+Prevented combined summary from covering combined BE evidence
+
+Live audit found `BE 24,497 · COMBINED` under the combined summary card. Added summary placement that clears every combined rail and regression contract; commit `63e3d41` is clean and targeted suite passes 295/295. Latest commit still requires unpacked-extension reload and exact live replay before completion claim.

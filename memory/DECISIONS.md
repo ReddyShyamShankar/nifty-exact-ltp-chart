@@ -188,3 +188,19 @@ Use Upstox as option and candle data source, after proving the account's live ma
 - Batch all fixes then inspect once — rejected because regression source becomes unclear.
 - Declare project perfect from automated suite — rejected because prior green suites missed live failures.
 **Status:** ACTIVE
+
+## D28 — 2026-08-08T22:15:11+05:30
+**Decision:** Native TradingView ticks define price bounds only. Every real selected-expiry strike inside those bounds stays eligible; when density exceeds safe row placement, render a non-overlapping real-strike sample that includes true ATM.
+**Why:** User requires strike cards to remain visible through zoom-in and zoom-out. Coarse axis labels must not erase valid contracts between labels.
+**Alternatives considered:**
+- Filter to printed native ticks — rejected because it hid most real 50-point strikes.
+- Conceal all rows when density is too high — rejected because it erased ladder entirely.
+**Status:** ACTIVE
+
+## D29 — 2026-08-08T22:15:11+05:30
+**Decision:** Combined summary must move clear of combined BE chart evidence whenever their vertical geometry intersects.
+**Why:** Combined BE must remain readable at its exact TradingView price rail; summary cannot cover it.
+**Alternatives considered:**
+- Raise combined label above summary — rejected because it still obscures summary evidence.
+- Leave summary fixed at chart top — rejected after live collision.
+**Status:** ACTIVE

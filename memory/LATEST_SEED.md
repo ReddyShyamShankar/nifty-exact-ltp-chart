@@ -1,14 +1,14 @@
 ## STATE
-All local project changes are committed and pushed. `codex/arbdesk-theme-system` is synchronized with GitHub at `58e8d11`, containing product repair commit `239ad4e`; `codex/timeframe-axis-ladder-base` contains checkpoint/context commits and will include this final memory state. All four registered worktrees are clean, while full 202-workflow live execution, authenticated broker fan-out, and snapshot-backed destructive workflows remain pending.
+Options Ladder worktree `.worktrees/timeframe-axis-ladder` is clean on `codex/arbdesk-theme-system` at `63e3d41`. Full regression suite passed before final collision commit; final targeted content contract passed 295/295, syntax/diff checks pass. Live Chrome proved strikes survive baseline and zoom-out, white selectors/black identity tokens, and matching Call/Put BE geometry; final combined-summary clearance needs latest reload plus replay.
 
 ## NEXT_LINE
-Continue `docs/testing/2026-08-05-options-ladder-202-e2e-workflows.md` at next unverified non-destructive workflow using Computer Use; after each fix, rerun targeted tests, reload extension, and repeat exact live Chrome workflow before proceeding.
+Reload Options Ladder at `chrome://extensions`, reload TradingView chart, refresh side-panel `REFRESH ALL`, select B1+B2, and prove combined summary rectangle does not intersect `BE … · COMBINED` label.
 
 ## MEMORY_KEY
-Both branches pushed; feature `58e8d11`, product repair `239ad4e`, 986-green broker → manual T39 → live-selected BE → Escape-neutral proof.
+Zoom-visible strikes plus white selectors/black B-T tokens; `63e3d41` moves combined summary away from combined BE, final live reload proof pending.
 
 ## OPEN_QUESTIONS
-- Which remaining non-destructive workflow should run next from 202-workflow catalog?
-- Should destructive REMOVE, merge, split, restore, and archive flows run after snapshotting user storage?
+- Does `63e3d41` pass exact combined-summary/BE live geometry after unpacked extension reload?
+- Does live zoom-in and zoom-out maintain safely sampled strike cards without body or badge collisions at extreme density?
 - When should real broker authorization and exact authenticated refresh fan-out be verified?
 - When should `codex/arbdesk-theme-system` merge into primary branch?
