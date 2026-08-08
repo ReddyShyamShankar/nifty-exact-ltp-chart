@@ -149,7 +149,7 @@ No workflow qualifies as `FULL`: repository contains no versioned full-browser e
 | WF-BRK-006 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “nearby broker Call and Put positions remain in separate type columns” |
 | WF-BRK-007 | PARTIAL | `extension-axis-ladder/manual-ui.test.cjs` — “row model renders broker Call and Put lot badges like manual positions” |
 | WF-BRK-008 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “document pointer capture plus broker badge click opens exact read-only card without clearing quick rails” |
-| WF-BRK-009 | PARTIAL | Coverage conflict: `extension-axis-ladder/content-contract.test.cjs` — “ordinary cell double-click from broker face opens fresh manual editor”; badge click is covered separately, but required owned-position double-click journey is not. |
+| WF-BRK-009 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “real double-click on exact broker ladder badge leaves exact read-only card open” |
 | WF-BRK-010 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “broker spine opens one compact P&L card and shows break-even rail only on request” |
 | WF-BRK-011 | PARTIAL | `extension-axis-ladder/strategy-panel.test.cjs` — “broker strategy card derives open P&L from broker position evidence” |
 | WF-BRK-012 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “broker spine compact selectors build combined preview without opening P&L cards” |
@@ -175,7 +175,7 @@ No workflow qualifies as `FULL`: repository contains no versioned full-browser e
 | WF-POS-011 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “overlapping Call strategy and off-grid Call tokens use restored position group without absorbing nearby Put” |
 | WF-POS-012 | PARTIAL | `extension-axis-ladder/position-layout-100-evals.test.cjs` — “POS_COLOR_100 grouped rows preserve Buy green and Sell red identity rails” |
 | WF-POS-013 | PARTIAL | `extension-axis-ladder/position-layout-100-evals.test.cjs` — “POS_LAYER_099 grouped flyout renders above ladder and compact controls” |
-| WF-POS-014 | LIVE-ONLY | No dedicated automated test for outside-click dismissal of an open position-group flyout without selection/data mutation. |
+| WF-POS-014 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “colliding manual and broker Calls collapse through restored Call-only position group” verifies outside pointer closes flyout while exact prior checkbox selection survives reopen. |
 | WF-POS-015 | PARTIAL | `extension-axis-ladder/position-layout-100-evals.test.cjs` — “POS_LAYOUT_001 reserves source-neutral Call and Put columns before ladder” |
 | WF-POS-016 | PARTIAL | `extension-axis-ladder/position-layout-100-evals.test.cjs` — “BE_CLEAR_101 stops quick break-even text before every position-control lane” |
 | WF-POS-017 | PARTIAL | `extension-axis-ladder/content-contract.test.cjs` — “OI rank badges use a separate top band and cannot collide with position badges” |

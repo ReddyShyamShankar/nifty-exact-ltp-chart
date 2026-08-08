@@ -88,8 +88,42 @@
 | `WF-MAN-EDIT-016` | PASS | TradingView reload plus refresh restored exact Put badge, expiry ownership, and snapshot. |
 | `WF-MAN-EDIT-017` | PASS | Far expiry restored two T49 entries at 24,000 with no T50; returning restored one T50 entry at 25,000 with no T49. |
 | `WF-MAN-EDIT-018` | PASS (CONTROLLED AUTOMATION) | Injected storage SAVE/REMOVE failure preserves old plan, keeps exact editor actionable, and reports `PLAN NOT SAVED`. |
+| `WF-BRK-001` | PASS (CONTROLLED AUTOMATION) | Connect accepts only bridge-provided official Zerodha v3 login URL and exposes no secret material. |
+| `WF-BRK-002` | PASS (CONTROLLED AUTOMATION) | Authorization fixture exchanges request token with literal SHA-256 checksum and stores session only until next 06:00 IST. |
+| `WF-BRK-003` | PASS (CONTROLLED AUTOMATION) | One coordinated refresh fetched positions, current-day trades, and selected-expiry chain exactly once each. |
+| `WF-BRK-004` | PASS (CONTROLLED AUTOMATION) | First broker sync created broker strategy without consuming next manual T sequence. |
+| `WF-BRK-005` | PASS (CONTROLLED AUTOMATION) | Imported Call produced exact Call-lane marker and matching source-aware ladder badge. |
+| `WF-BRK-006` | PASS (CONTROLLED AUTOMATION) | Imported Put remained in separate right Put lane at exact coordinate. |
+| `WF-BRK-007` | PASS (CONTROLLED AUTOMATION) | Broker Call/Put legs rendered source-aware C/P lot badges like manual positions. |
+| `WF-BRK-008` | PASS (CONTROLLED AUTOMATION) | Exact broker badge opened exact read-only P&L card without manual ADD editor. |
+| `WF-BRK-009` | PASS (CONTROLLED AUTOMATION) | Real broker-badge double-click retained exact read-only broker card and created no manual strategy. |
+| `WF-BRK-010` | PASS (CONTROLLED AUTOMATION) | Compact broker token opened its exact position card only. |
+| `WF-BRK-011` | PASS (CONTROLLED AUTOMATION) | Broker card derived matching live P&L, side, direction, lots, and strike from imported evidence. |
+| `WF-BRK-012` | PASS (CONTROLLED AUTOMATION) | Broker compact selectors synchronized exact strategy selection without opening unrelated cards. |
+| `WF-BRK-013` | PASS (CONTROLLED AUTOMATION) | Show BE Rail rendered only selected broker-position rail. |
+| `WF-BRK-014` | PASS (CONTROLLED AUTOMATION) | CLOSE removed broker card and owned rail while independent group, selection, and positions remained. |
+| `WF-BRK-015` | PASS (CONTROLLED AUTOMATION) | Flat broker snapshot archived live strategy while preserving version evidence. |
+| `WF-BRK-016` | PASS (CONTROLLED AUTOMATION) | Disconnect hid broker chart spine without deleting stored accepted strategy evidence. |
+| `WF-POS-001` | PASS (CONTROLLED AUTOMATION) | Manual and broker controls shared source-neutral Call/Put columns. |
+| `WF-POS-002` | PASS (CONTROLLED AUTOMATION) | Layout exposed no third manual-only lane. |
+| `WF-POS-003` | PASS (CONTROLLED AUTOMATION) | Same-coordinate Call stayed left and Put stayed right. |
+| `WF-POS-004` | PASS (CONTROLLED AUTOMATION) | Safely separated same-side controls stayed directly visible. |
+| `WF-POS-005` | PASS (CONTROLLED AUTOMATION) | Same-side collision collapsed into one informational +N group. |
+| `WF-POS-006` | PASS (CONTROLLED AUTOMATION) | Call and Put collisions formed separate side-specific groups. |
+| `WF-POS-007` | PASS (CONTROLLED AUTOMATION) | Closed +N count selected nothing. |
+| `WF-POS-008` | PASS (CONTROLLED AUTOMATION) | Group square opened flyout without selecting trade. |
+| `WF-POS-009` | PASS (CONTROLLED AUTOMATION) | Flyout contained every hidden exact identity once. |
+| `WF-POS-010` | PASS (CONTROLLED AUTOMATION) | Flyout checkbox changed only exact identity selection. |
+| `WF-POS-011` | PASS (CONTROLLED AUTOMATION) | Flyout label opened only exact details/P&L. |
+| `WF-POS-012` | PASS (CONTROLLED AUTOMATION) | Grouped Buy/Sell rows retained green/red identity rails. |
+| `WF-POS-013` | PASS (CONTROLLED AUTOMATION) | Flyout rendered above ladder and compact controls. |
+| `WF-POS-014` | PASS (CONTROLLED AUTOMATION) | Outside pointer closed flyout; reopening preserved prior exact checkbox selection and data. |
+| `WF-POS-015` | PASS (CONTROLLED AUTOMATION) | Dense controls retained fixed checkbox, token, and lane alignment. |
+| `WF-POS-016` | PASS (CONTROLLED AUTOMATION) | Quick BE text stopped before every position-control lane. |
+| `WF-POS-017` | PASS (CONTROLLED AUTOMATION) | OI rank badges stayed in separate top band without position-badge collision. |
+| `WF-POS-018` | PASS (CONTROLLED AUTOMATION) | Position spine stayed bounded by first and last visible strikes. |
 
-Current candidate tally: **74 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
+Current candidate tally: **108 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FAIL** across workflows executed in this run.
 
 ## `WF-SHL-008` repair evidence
 
@@ -251,6 +285,18 @@ Current candidate tally: **74 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 - Opposite-side identity and injected storage-failure paths passed deterministic guards because production UI/provider deliberately prevents ambiguous side mutation and storage fault injection.
 - Controlled records remain local-only; no broker or exchange action occurred.
 
+## `WF-BRK-001` through `WF-BRK-016` controlled evidence
+
+- Live Zerodha authorization was not attempted: it requires user credentials/2FA and would create live financial-account access.
+- Fifteen deterministic integration tests covered official login URL, authorization checksum/session deadline, coordinated refresh, import sequence, exact Call/Put markers and badges, badge/token/card interaction, synchronized selectors, owned BE rail, CLOSE isolation, flat-snapshot archive, and disconnect hiding.
+- Result: `15/15` passed. No credential, session, position, trade, or broker account state changed.
+
+## `WF-POS-001` through `WF-POS-018` controlled evidence
+
+- Seventeen targeted lane/collision tests plus one direct outside-dismiss group test passed `18/18`.
+- Coverage includes source-neutral two-column layout, side separation, safe direct controls, +N grouping, non-selecting opener, exact flyout identities/actions, Buy/Sell colors, stacking, outside dismissal with preserved selection, dense alignment, BE clearance, OI band, and bounded spine.
+- Automation coverage map corrected: broker-badge double-click and outside group dismissal already have direct production integration assertions.
+
 ## Screenshots
 
 - `evidence/2026-08-06-202-workflow-run/WF-SHL-001-002-popup-ready.png`
@@ -319,4 +365,4 @@ Current candidate tally: **74 PASS · 1 PARTIAL · 1 DEFERRED · 0 unresolved FA
 
 ## Next workflow
 
-Run `WF-BRK-001` through `WF-BRK-016`, using deterministic broker mocks where live Zerodha authorization or destructive/external account mutation is unavailable. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
+Run strategy rails, selection, preview, and version workflows next. Keep `WF-SHL-004` deferred until controlled failure injection is available; finish remaining `WF-SHL-007` URL classes when browser can retain those unsafe URLs for inspection.
