@@ -621,7 +621,7 @@ test("timeframe, zoom, pan, and storage redraw reuse one manual chain snapshot",
   assert.ok(riskPlacements >= 4);
 });
 
-test("Zerodha client surface is NIFTY-read-only and has no order operation", async () => {
+test("Zerodha client surface is evidence-only and has no order operation", async () => {
   const { createZerodhaClient } = await import("../data-bridge/zerodha-client.js");
   const requests = [];
   const client = createZerodhaClient({
@@ -636,7 +636,9 @@ test("Zerodha client surface is NIFTY-read-only and has no order operation", asy
       };
     }
   });
-  assert.deepEqual(Object.keys(client).sort(), ["getPositions", "getTrades"]);
+  assert.deepEqual(Object.keys(client).sort(), [
+    "calculateBasketMargins", "getFunds", "getInstrumentsNfo", "getPositions", "getTrades"
+  ]);
   await client.getPositions();
   await client.getTrades();
   assert.deepEqual(requests.map((request) => request.url), [

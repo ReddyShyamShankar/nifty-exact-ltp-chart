@@ -59,6 +59,12 @@ select, input { color-scheme: dark; }
 .contract-bar { margin: 13px 14px 0; border: 1px solid var(--line-2); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
 .broker-state { min-height: 42px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
 .broker-state strong { color: var(--ink-dim); font-size: 9px; letter-spacing: .07em; }
+.broker-funds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--line); background: var(--panel); }
+.broker-funds > div { min-width: 0; padding: 9px 8px; border-right: 1px solid var(--line); }
+.broker-funds > div:last-child { border-right: 0; }
+.broker-funds span, .broker-funds strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.broker-funds span { color: var(--ink-dim); font-size: 7px; letter-spacing: .04em; }
+.broker-funds strong { margin-top: 4px; color: var(--ink); font-size: 10px; }
 .connect-link { padding: 5px 7px; border: 1px solid var(--accent); border-radius: var(--control-radius); background: var(--accent-soft); color: var(--accent); font-size: 8px; letter-spacing: .07em; }
 .expiry-control { min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .expiry-control select { min-width: 0; height: 43px; padding: 0 12px; border: 0; border-right: 1px solid var(--line); outline: 0; background: transparent; color: var(--ink); font-size: 10px; }

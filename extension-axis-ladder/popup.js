@@ -2,6 +2,10 @@
 
 const API = "http://127.0.0.1:8787";
 const SELLER_SAFETY_STALE_MS = 15 * 60 * 1000;
+const marginEvidenceApi = globalThis.OptionsMarginEvidence || {
+  formatMoney: () => "—", requestsForBook: () => [],
+  normalizeRefreshEvidence: () => ({ version: 1, updatedAt: null, funds: null, baskets: {} })
+};
 const DEFAULTS = {
   enabled: false,
   expiry: "current_month",
@@ -22,7 +26,8 @@ const DEFAULTS = {
   sidePanelView: "ladder",
   brokerConnectPending: false,
   brokerConnection: null,
-  brokerStrategyBootstrapVersion: 0
+  brokerStrategyBootstrapVersion: 0,
+  brokerMarginEvidence: { version: 1, updatedAt: null, funds: null, baskets: {} }
 };
 const $ = (selector) => document.querySelector(selector);
 let state = { ...DEFAULTS };
@@ -591,6 +596,17 @@ function renderStrategies() {
   select.value = state.selectedStrategyId;
 }
 
+function renderBrokerFunds() {
+  const funds = state.brokerMarginEvidence?.funds;
+  const availableMargin = $("#fund-available-margin");
+  const usedMargin = $("#fund-used-margin");
+  const availableCash = $("#fund-available-cash");
+  if (!availableMargin || !usedMargin || !availableCash) return;
+  availableMargin.textContent = marginEvidenceApi.formatMoney(funds?.availableMargin);
+  usedMargin.textContent = marginEvidenceApi.formatMoney(funds?.usedMargin);
+  availableCash.textContent = marginEvidenceApi.formatMoney(funds?.availableCash);
+}
+
 function renderAllocations(view) {
   const selected = ledger.strategies.find((strategy) => strategy.id === state.selectedStrategyId);
   const list = $("#allocation-list");
@@ -703,6 +719,7 @@ function renderView(view, { pending = false, preserveEvidence = false } = {}) {
   renderTradeReviews(shown);
   $("#review-panel").hidden = !(pending || shown.reviewChanges.length || shown.tradeReviews?.length);
   renderStrategyDashboard();
+  renderBrokerFunds();
 }
 
 function selectedStrategy() {
@@ -1015,6 +1032,20 @@ async function clearChartBreakEvenSelection() {
   }
 }
 
+async function refreshMarginEvidence() {
+  await readChartStrategyPreview().catch(() => null);
+  const requests = marginEvidenceApi.requestsForBook(state.strategyBook, strategyPreviewState.selectedIds);
+  const data = await responseData(await fetch(`${API}/api/zerodha/margins`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requests })
+  }));
+  const evidence = marginEvidenceApi.normalizeRefreshEvidence(data);
+  await persist({ brokerMarginEvidence: evidence });
+  return evidence;
+}
+
 async function refreshAll() {
   const button = $("#refresh-all");
   const label = $("#refresh-label");
@@ -1029,6 +1060,9 @@ async function refreshAll() {
     const data = await responseData(await fetch(`${API}/api/seller-refresh?expiry=${encodeURIComponent(state.expiry)}`, { cache: "no-store" }));
     const candidate = validateRefreshPayload(data);
     await syncBrokerStrategy(data.positions, data.updatedAt);
+    await refreshMarginEvidence().catch(() => persist({
+      brokerMarginEvidence: { version: 1, updatedAt: null, funds: null, baskets: {} }
+    }));
     const failuresByExpiry = { ...(state.sellerSafetyRefreshFailuresByExpiry || {}) };
     delete failuresByExpiry[state.expiry];
     const chainsByExpiry = { ...(state.sellerSafetyChainsByExpiry || {}) };
@@ -1054,6 +1088,7 @@ async function refreshAll() {
     try { await clearPendingCandidate(); } catch (_clearError) { /* in-memory candidate already cleared */ }
     const failure = failedRefreshChartView();
     await persist({
+      brokerMarginEvidence: { version: 1, updatedAt: null, funds: null, baskets: {} },
       sellerSafetyChartView: failure,
       sellerSafetyRefreshFailuresByExpiry: {
         ...(state.sellerSafetyRefreshFailuresByExpiry || {}),

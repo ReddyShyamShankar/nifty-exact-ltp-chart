@@ -64,6 +64,6 @@ The coordinated refresh response contains the only chain snapshot used for that 
 
 ## Read-only guarantee
 
-The Zerodha client exposes only `GET /portfolio/positions` and `GET /trades`. No-order placement, modification, cancellation, conversion, or exit endpoint exists. The bridge filters output to NFO NIFTY options matching the requested exact expiry and returns no API secret or access token. Canonical IDs include `YYYY-MM-DD`; weekly contracts with the same strike/right on different dates never collide.
+The Zerodha client exposes read-only evidence calls for positions, trades, funds, and the NFO instrument dump, plus `POST /margins/basket?consider_positions=false` for broker margin calculation. The margin request uses exact saved legs, original saved premiums, quantities, and NFO symbols resolved from Zerodha's instrument evidence. Hedge-aware combined margin comes only from Zerodha's `final.total`; missing or stale evidence stays unavailable. No order placement, modification, cancellation, conversion, or exit endpoint exists. The bridge filters position/trade output to NFO NIFTY options matching the requested exact expiry and returns no API secret or access token. Canonical IDs include `YYYY-MM-DD`; weekly contracts with the same strike/right on different dates never collide.
 
 Supported relative modes: `current_week`, `next_week`, `far_week`, `current_month`, `next_month`, `far_month`. Exact `YYYY-MM-DD` dates returned by `/api/nifty-expiries` are also supported.

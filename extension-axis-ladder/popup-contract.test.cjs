@@ -38,8 +38,19 @@ test("popup loads pure seller scripts before browser orchestration", () => {
 
   assert.deepEqual(scripts, [
     "theme.js", "seller-view-identity.js", "seller-risk.js", "seller-ledger.js", "tradebook-csv.js", "popup-view.js",
-    "strategy-store.js", "strategy-panel.js", "popup.js"
+    "strategy-store.js", "strategy-panel.js", "margin-evidence.js", "popup.js"
   ]);
+});
+
+test("side panel shows exactly three fail-closed broker fund fields", () => {
+  const html = read("popup.html");
+  const js = read("popup.js");
+  const labels = ["AVAILABLE MARGIN", "USED MARGIN", "AVAILABLE CASH"];
+  labels.forEach((label) => assert.match(html, new RegExp(label)));
+  assert.equal((html.match(/class="broker-funds"/g) || []).length, 1);
+  assert.match(js, /marginEvidenceApi\.requestsForBook/);
+  assert.match(js, /\/api\/zerodha\/margins/);
+  assert.match(js, /brokerMarginEvidence:\s*\{ version: 1, updatedAt: null, funds: null, baskets: \{\} \}/);
 });
 
 test("side panel exposes permanent strategy save, versions, split, restore, archive, and ledger history", () => {
@@ -565,10 +576,14 @@ test("real REFRESH ALL clears chart selection before successful or failed networ
     const expectedMessages = [{
       tabId: 7,
       message: { type: "CLEAR_BREAK_EVEN_SELECTION" }
-    }];
+    }, ...(options.refreshPayload ? [] : [{
+      tabId: 7,
+      message: { type: "GET_STRATEGY_PREVIEW_STATE" }
+    }])];
     const expectedEvents = [
       "message:CLEAR_BREAK_EVEN_SELECTION",
-      "network:seller-refresh"
+      "network:seller-refresh",
+      ...(options.refreshPayload ? [] : ["message:GET_STRATEGY_PREVIEW_STATE"])
     ];
     assert.deepEqual(harness.chartMessages, expectedMessages);
     assert.deepEqual(harness.refreshEvents, expectedEvents);
@@ -584,7 +599,8 @@ test("chart-clear delivery failure stays isolated from seller refresh", async ()
   assert.equal(harness.requests.filter((url) => url.includes("/api/seller-refresh")).length, 1);
   assert.deepEqual(harness.refreshEvents, [
     "message:CLEAR_BREAK_EVEN_SELECTION",
-    "network:seller-refresh"
+    "network:seller-refresh",
+    "message:GET_STRATEGY_PREVIEW_STATE"
   ]);
 });
 

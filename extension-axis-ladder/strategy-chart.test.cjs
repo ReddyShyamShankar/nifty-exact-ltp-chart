@@ -122,6 +122,10 @@ test("expanded strategy card height includes every trade and disclosure row", ()
     disclosure: "EXCLUDING UNKNOWN CHARGES"
   }, null), 24);
   assert.equal(chart.strategyCardHeight({ kind: "COMBINED" }, "s1"), 24);
+  assert.equal(chart.strategyCardHeight({
+    kind: "STRATEGY", strategyId: "s1", entries: [{ id: "leg-1" }],
+    disclosure: "EXCLUDING UNKNOWN CHARGES", extraDetailRows: 2
+  }, "s1"), 118, "leg plus combined margin rows stay inside expanded card placement");
 });
 
 test("accessible labels expose identity, exact price, edge direction, and action", () => {

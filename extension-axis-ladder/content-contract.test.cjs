@@ -2309,7 +2309,7 @@ test("collapsed manual strategy shows BE after strike click while checkbox contr
     assert.ok(label.children[0].classList.contains("nifty-strategy__rail-token"));
     assert.equal(label.children.length, 3,
       "strike-clicked control contains token, divider, and real BE evidence");
-    assert.equal(label.querySelector(".nifty-strategy__rail-text").textContent, "23,900");
+    assert.equal(label.querySelector(".nifty-strategy__rail-text").textContent, "BE 23,900 | Margin —");
   });
 
   cards[0].querySelector(".nifty-strategy__selector")
@@ -2323,7 +2323,7 @@ test("collapsed manual strategy shows BE after strike click while checkbox contr
   const checked = cards.find((card) => card.querySelector(".nifty-strategy__selector")
     ?.getAttribute("aria-pressed") === "true");
   assert.ok(checked.querySelector(".nifty-strategy__rail-divider"));
-  assert.equal(checked.querySelector(".nifty-strategy__rail-text").textContent, "23,900");
+  assert.equal(checked.querySelector(".nifty-strategy__rail-text").textContent, "BE 23,900 | Margin —");
 });
 
 test("collapsed and open strategy cards cap quick BE labels without changing rail values or Y", async () => {
@@ -2842,6 +2842,7 @@ function createBreakEvenLifecycleHarness({
   omitStoredChain = false,
   strategyBook = null,
   strategySupport = strategyBook !== null,
+  brokerMarginEvidence = null,
   initialAxisPairs = null,
   elementBounds = null
 } = {}) {
@@ -3109,7 +3110,8 @@ function createBreakEvenLifecycleHarness({
       OptionsStrategyStore: strategyStore,
       OptionsStrategyPreview: strategyPreviewApi,
       OptionsStrategyChart: strategyChartApi,
-      OptionsStrategyPanel: require("./strategy-panel.js")
+      OptionsStrategyPanel: require("./strategy-panel.js"),
+      OptionsMarginEvidence: require("./margin-evidence.js")
     } : {}),
     NiftyRiskOverlay: require("./risk-overlay.js"),
     NiftySellerViewIdentity: viewIdentity,
@@ -3228,7 +3230,8 @@ function createBreakEvenLifecycleHarness({
                 sellerSafetyChain: snapshot,
                 sellerSafetyChainsByExpiry: { [snapshot.expiry]: snapshot }
               }),
-              ...(strategySupport ? { strategyBook: storedStrategyBook } : {})
+              ...(strategySupport ? { strategyBook: storedStrategyBook } : {}),
+              ...(brokerMarginEvidence ? { brokerMarginEvidence } : {})
             });
           },
           async set(value) {
@@ -3687,7 +3690,22 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
     }]
   }, at);
   const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
-  const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries });
+  const marginApi = require("./margin-evidence.js");
+  const manualStrategy = strategyStore.activeStrategies(book, "NSE_DLY:NIFTY", "2026-08-25")[0];
+  const marginLegs = strategyStore.legsForStrategy(book, manualStrategy.id);
+  const brokerMarginEvidence = {
+    version: 1,
+    updatedAt: "2026-08-08T10:00:00.000Z",
+    funds: null,
+    baskets: {
+      [`strategy:${manualStrategy.id}`]: {
+        fingerprint: marginApi.fingerprint(marginLegs),
+        total: 120000,
+        legs: marginLegs.map((entry, index) => ({ entryId: entry.id, total: index ? 39000 : 450000 }))
+      }
+    }
+  };
+  const h = createBreakEvenLifecycleHarness({ strategyBook: book, manualEntries, brokerMarginEvidence });
   await h.settle();
 
   let rails = h.strategyRails();
@@ -3712,8 +3730,9 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   const owningPosition = rails.querySelectorAll(".nifty-position-spine__compact")
     .find((node) => node.querySelector(".nifty-position-spine__marker")?.textContent.includes("T1"));
   assert.ok(owningPosition, "selected manual face retains its owning persistent T control");
-  assert.equal(owningPosition.querySelector(".nifty-position-spine__marker").textContent, "T1|23,900",
-    "strike click exposes real saved-strategy breakeven beside persistent T token");
+  assert.equal(owningPosition.querySelector(".nifty-position-spine__marker").textContent,
+    "T1|BE 23,900|Margin ₹1.20L",
+    "strike click exposes real saved-strategy breakeven and broker margin beside persistent T token");
   assert.equal(owningPosition.querySelector(".nifty-position-spine__compact-select")
     .getAttribute("aria-pressed"), "false",
     "showing BE evidence never silently selects strategy");
@@ -3737,6 +3756,14 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   assert.equal(rails.querySelectorAll(".nifty-strategy__card")
     .filter((node) => node.classList.contains("is-open")).length, 1,
     "T click opens existing detail card without creating another card");
+  assert.match(rails.querySelector(".nifty-strategy__card").textContent, /MARGIN REQUIRED ₹1\.20L/,
+    "existing detail card shows broker combined margin without creating a new card");
+  assert.match(rails.querySelector(".nifty-strategy__card").textContent, /MARGIN ₹(?:4\.50L|39\.00K)/,
+    "existing detail card shows individual-leg margin evidence");
+  const openedPersistentControl = rails.querySelectorAll(".nifty-position-spine__compact")
+    .find((node) => node.querySelector(".nifty-position-spine__marker")?.textContent.includes("T1"));
+  assert.equal(openedPersistentControl.hidden, true,
+    "open detail card temporarily hides same T control so visible UI never duplicates or collides");
 
   rails.querySelectorAll(".nifty-strategy__selector")[0]
     .dispatch("click", { stopPropagation() {} });
@@ -3744,7 +3771,7 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   rails = h.strategyRails();
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail").length, 1,
     "checking one T reveals only that strategy BE rail");
-  assert.equal(rails.querySelector(".nifty-position-spine__marker-be").textContent, "23,900",
+  assert.equal(rails.querySelector(".nifty-position-spine__marker-be").textContent, "BE 23,900",
     "checked rail never removes strike-click BE evidence from persistent T control");
   assert.equal(rails.querySelectorAll(".nifty-strategy__selector")
     .filter((node) => node.getAttribute("aria-pressed") === "true").length, 1);
@@ -3782,7 +3809,7 @@ test("strike click shows owning strategy BE while checkbox alone owns its rail",
   assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__card").length, 1);
   assert.equal(h.strategyRails().querySelector(".nifty-strategy__card")
     .classList.contains("is-spine-evidence-proxy"), true);
-  assert.equal(h.strategyRails().querySelector(".nifty-position-spine__marker-be").textContent, "23,900");
+  assert.equal(h.strategyRails().querySelector(".nifty-position-spine__marker-be").textContent, "BE 23,900");
   h.document.dispatch("keydown", { key: "Escape", target: { closest() { return null; } } });
   await h.settle();
   rails = h.strategyRails();
@@ -4092,7 +4119,7 @@ test("production strategy rails open details, synchronize squares, preview combi
   let rails = h.strategyRails();
   assert.ok(rails, "strategy rail layer rendered");
   let labels = rails.querySelectorAll(".nifty-strategy__label");
-  assert.deepEqual(labels.map((node) => node.textContent.trim()).sort(), ["T1 23,900"]);
+  assert.deepEqual(labels.map((node) => node.textContent.trim()).sort(), ["T1 BE 23,900 | Margin —"]);
   assert.equal(h.manualRails(), null, "legacy anonymous plan rails stay hidden after migration");
 
   labels[0].dispatch("click", { stopPropagation() {} });
@@ -4111,7 +4138,7 @@ test("production strategy rails open details, synchronize squares, preview combi
   rails = h.strategyRails();
   assert.deepEqual(rails.querySelectorAll(".nifty-strategy__label").map((node) => node.textContent).sort(), [
     "COMBINED BE 23,600", "COMBINED BE 24,000",
-    "T1 BE 23,900", "T2 23,700"
+    "T1 BE 23,900", "T2 BE 23,700 | Margin —"
   ]);
   assert.ok(rails.querySelector(".nifty-strategy-preview"));
   assert.equal(rails.querySelectorAll(".nifty-strategy__rail")
@@ -5189,6 +5216,12 @@ test("rendered broker and strategy blockers cap quick break-even labels at their
     "no rendered blocker preserves existing label placement");
 });
 
+test("live quick BE labels reserve full risk-label gap from expanded strategy controls", () => {
+  assert.match(contentSource,
+    /breakEvenLabelRightForRenderedBlockers\([\s\S]*?renderedStrategyBlockerRects\([\s\S]*?RISK_LABEL_GAP_PX\s*\)/,
+    "expanded T | BE | Margin control needs human-visible separation from quick BE label");
+});
+
 test("quick BE blocker collector includes legacy plus-N edge groups and flyouts", () => {
   const collector = contentSource.match(/function renderedStrategyBlockerRects\(rootNodeValue\)\s*\{([\s\S]*?)\n  \}/)?.[1] || "";
   for (const selector of [
@@ -5427,7 +5460,7 @@ test("combined preview saves permanently from chart after explicit destination c
   h.click(23800);
   await h.settle();
   assert.deepEqual(h.strategyRails().querySelectorAll(".nifty-strategy__label")
-    .map((node) => node.textContent.trim()), ["T3 23,600", "T3 24,000"]);
+    .map((node) => node.textContent.trim()), ["T3 BE 23,600 | Margin —", "T3 BE 24,000 | Margin —"]);
   assert.equal(h.strategyRails().querySelectorAll(".nifty-strategy__rail").length, 0,
     "new saved T3 BE rails remain hidden until its checkbox is selected");
 });

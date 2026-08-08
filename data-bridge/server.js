@@ -8,6 +8,7 @@ import { createAsyncCache } from "./chain-cache.js";
 import { createHistoryCache } from "./history-cache.js";
 import { createOptionHistoryLoader } from "./option-history.js";
 import { createZerodhaClient } from "./zerodha-client.js";
+import { buildBasketOrders, normalizeBasketMargin, normalizeBrokerFunds, parseNfoInstruments } from "./zerodha-margin.js";
 import { createZerodhaSessionStore, ZERODHA_CALLBACK_FAILURE_MESSAGE } from "./zerodha-session.js";
 import { normalizeNiftyPositions, normalizeNiftyTrades } from "./zerodha-normalize.js";
 
@@ -361,6 +362,44 @@ function exactIsoDate(value) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+function readJsonBody(request, maxBytes = 256 * 1024) {
+  return new Promise((resolveBody, reject) => {
+    const chunks = [];
+    let size = 0;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(Object.assign(new Error("Margin request is too large."), { status: 413, kind: "invalid_request" }));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => {
+      try { resolveBody(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+      catch { reject(Object.assign(new Error("Margin request must be valid JSON."), { status: 400, kind: "invalid_request" })); }
+    });
+    request.on("error", reject);
+  });
+}
+
+function exactMarginRequests(value) {
+  const requests = value?.requests;
+  if (!Array.isArray(requests) || requests.length > 100) {
+    throw Object.assign(new Error("Margin request requires 0 to 100 baskets."), { status: 400, kind: "invalid_request" });
+  }
+  return requests.map((request) => {
+    if (!request || typeof request.key !== "string" || !request.key
+      || typeof request.fingerprint !== "string" || !request.fingerprint
+      || !Array.isArray(request.legs) || !request.legs.length || request.legs.length > 100) {
+      throw Object.assign(new Error("Each margin basket requires a key, fingerprint, and 1 to 100 saved legs."), {
+        status: 400, kind: "invalid_request"
+      });
+    }
+    return request;
+  });
+}
+
 export function createRequestHandler({
   sessionStore = defaultZerodhaSessionStore(),
   zerodhaClientFactory = createZerodhaClient,
@@ -374,7 +413,7 @@ export function createRequestHandler({
   now = () => new Date()
 } = {}) {
   const allowedOrigin = validatedExtensionOrigin(extensionOrigin);
-  const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/seller-refresh", "/api/option-history"]);
+  const accountPaths = new Set(["/api/zerodha/status", "/api/zerodha/login-url", "/api/zerodha/margins", "/api/seller-refresh", "/api/option-history"]);
   let expiryLoadInFlight = null;
 
   function loadExpiryMetadataOnce() {
@@ -436,7 +475,8 @@ export function createRequestHandler({
     respondJson(response, 403, { error: "Forbidden origin." }, null);
     return;
   }
-  if (request.method !== "GET") {
+  const isMarginPost = request.method === "POST" && url.pathname === "/api/zerodha/margins";
+  if (request.method !== "GET" && !isMarginPost) {
     if (accountPath) respondJson(response, 404, { error: "Not found" }, allowedOrigin);
     else respondPublic(404, { error: "Not found" });
     return;
@@ -480,6 +520,33 @@ export function createRequestHandler({
       respondJson(response, 200, await sessionStore.exchangeRequestToken(requestToken), null);
     } catch (error) {
       respondJson(response, error.status || 502, { error: ZERODHA_CALLBACK_FAILURE_MESSAGE, kind: error.kind || "upstream" }, null);
+    }
+    return;
+  }
+  if (url.pathname === "/api/zerodha/margins") {
+    try {
+      const marginRequests = exactMarginRequests(await readJsonBody(request));
+      const credentials = await sessionStore.credentials();
+      const client = zerodhaClientFactory(credentials);
+      const [fundPayload, instrumentCsv] = await Promise.all([client.getFunds(), client.getInstrumentsNfo()]);
+      const instruments = parseNfoInstruments(instrumentCsv);
+      const baskets = [];
+      for (const marginRequest of marginRequests) {
+        const resolved = buildBasketOrders(marginRequest.legs, instruments);
+        const payload = await client.calculateBasketMargins(resolved.map((item) => item.order));
+        baskets.push({
+          key: marginRequest.key,
+          fingerprint: marginRequest.fingerprint,
+          ...normalizeBasketMargin(payload, resolved.map((item) => item.entryId))
+        });
+      }
+      respondJson(response, 200, {
+        updatedAt: new Date(now()).toISOString(),
+        funds: normalizeBrokerFunds(fundPayload),
+        baskets
+      }, allowedOrigin);
+    } catch (error) {
+      respondJson(response, error.status || 502, { error: error.message, kind: error.kind || "upstream" }, allowedOrigin);
     }
     return;
   }

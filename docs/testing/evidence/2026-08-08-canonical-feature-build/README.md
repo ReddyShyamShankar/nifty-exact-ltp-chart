@@ -12,3 +12,9 @@ Validation path: reload unpacked extension, reload TradingView, run explicit pop
 - `feature-2-buy-strike-seller-diff-guard.jpeg`: Chrome after clicking visible saved 25,000 BUY Call. Seller-only premium evidence is correctly omitted; Call/Put BE labels remain singular and unclipped.
 - Current live dataset has SELL positions T48/T51 only as off-grid position markers, not clickable ladder strike rows. Positive sold-row rendering therefore remains browser-contract verified rather than falsely claimed as live-visible evidence.
 - Contract evidence covers `440.00 - 654.85 = -214.85 pts`, matching-side-only display, explicit manual-refresh clear/re-click boundary, and zero automatic quote fetches during strike click or geometry retry.
+
+## Feature 3 — broker margin and funds
+
+- `feature-3-margin-detail-no-duplicates.png`: live Chrome after saved-strike click and T44 click. Existing card contains individual-leg `MARGIN —` plus combined `MARGIN REQUIRED —`; disconnected broker fails closed. Expanded card contains every row, persistent T44 control is temporarily hidden while card is open, and quick BE labels retain visible clearance.
+- `feature-3-broker-funds-three-fields.png`: live Chrome side panel shows exactly `AVAILABLE MARGIN`, `USED MARGIN`, and `AVAILABLE CASH`. Disconnected Zerodha displays `—` for all three without estimates.
+- Contract evidence verifies original saved premiums/legs/quantities, exact NFO instrument resolution, broker hedge-aware `final.total`, selected-strategy combined basket requests, stale fingerprint rejection, manual-refresh-only calls, and absence of every order-placement route.

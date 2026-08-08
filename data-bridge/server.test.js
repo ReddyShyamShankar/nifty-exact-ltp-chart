@@ -135,6 +135,14 @@ function accountFetch(server, path, origin = EXTENSION_ORIGIN) {
   return fetch(`${baseUrl(server)}${path}`, { headers: { Origin: origin } });
 }
 
+function accountPost(server, path, body, origin = EXTENSION_ORIGIN) {
+  return fetch(`${baseUrl(server)}${path}`, {
+    method: "POST",
+    headers: { Origin: origin, "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+}
+
 test("serves Zerodha status, login URL, and callback without returning any token", async (t) => {
   const exchanged = [];
   const sessionStore = {
@@ -670,4 +678,55 @@ test("fails closed when the requested expiry lacks cached Upstox metadata", asyn
   assert.equal(response.status, 502);
   assert.match(payload.error, /lot size.*positive integer/i);
   assert.equal(Object.hasOwn(payload, "positions"), false);
+});
+
+test("margin endpoint returns exact broker funds, leg margins, and hedge-aware basket final", async (t) => {
+  const marginOrders = [];
+  const server = await runningServer({
+    zerodhaClientFactory: () => ({
+      getFunds: async () => ({ status: "success", data: { equity: {
+        net: 250000, available: { cash: 125000 }, utilised: { debits: 75000 }
+      } } }),
+      getInstrumentsNfo: async () => `instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange
+1,11,NIFTY2682525000CE,NIFTY,0,2026-08-25,25000,0.05,65,CE,NFO-OPT,NFO`,
+      calculateBasketMargins: async (orders) => {
+        marginOrders.push(orders);
+        return { status: "success", data: { final: { total: 120000 }, orders: [{ total: 450000 }] } };
+      }
+    })
+  });
+  t.after(() => close(server));
+
+  const response = await accountPost(server, "/api/zerodha/margins", { requests: [{
+    key: "strategy:t43", fingerprint: "v1:abc", legs: [{
+      entryId: "leg-1", underlying: "NIFTY", expiry: "2026-08-25", strike: 25000,
+      optionType: "CALL", direction: "SELL", lots: 1, lotSize: 65, premium: 440, product: "NRML"
+    }]
+  }] });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    updatedAt: "2026-07-28T18:15:00.000Z",
+    funds: { availableMargin: 250000, usedMargin: 75000, availableCash: 125000 },
+    baskets: [{ key: "strategy:t43", fingerprint: "v1:abc", total: 120000,
+      legs: [{ entryId: "leg-1", total: 450000 }] }]
+  });
+  assert.equal(marginOrders[0][0].price, 440, "uses saved original premium");
+  assert.equal(marginOrders[0][0].quantity, 65);
+});
+
+test("margin endpoint rejects wrong origin and malformed baskets before broker calls", async (t) => {
+  let calls = 0;
+  const server = await runningServer({
+    zerodhaClientFactory: () => ({
+      getFunds: async () => { calls += 1; return {}; },
+      getInstrumentsNfo: async () => { calls += 1; return ""; },
+      calculateBasketMargins: async () => { calls += 1; return {}; }
+    })
+  });
+  t.after(() => close(server));
+  const forbidden = await accountPost(server, "/api/zerodha/margins", { requests: [] }, "https://evil.example");
+  assert.equal(forbidden.status, 403);
+  const malformed = await accountPost(server, "/api/zerodha/margins", { nope: [] });
+  assert.equal(malformed.status, 400);
+  assert.equal(calls, 0);
 });

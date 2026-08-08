@@ -114,7 +114,11 @@
     }
     const tradeCount = Array.isArray(model.entries) ? model.entries.length : 0;
     const detailCount = tradeCount + (model.disclosure ? 1 : 0);
-    return detailCount > 0 ? baseHeight + detailCount * 27 : baseHeight;
+    const extraDetailRows = Number.isInteger(model.extraDetailRows) && model.extraDetailRows > 0
+      ? model.extraDetailRows : 0;
+    return detailCount > 0 || extraDetailRows > 0
+      ? baseHeight + detailCount * 27 + extraDetailRows * 15 + (extraDetailRows ? 10 : 0)
+      : baseHeight;
   }
 
   function accessibleLabel(model) {

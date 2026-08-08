@@ -57,6 +57,12 @@
         </label>
       </section>
 
+      <section class="broker-funds" aria-label="Broker funds">
+        <div><span class="mono">AVAILABLE MARGIN</span><strong class="mono" id="fund-available-margin">—</strong></div>
+        <div><span class="mono">USED MARGIN</span><strong class="mono" id="fund-used-margin">—</strong></div>
+        <div><span class="mono">AVAILABLE CASH</span><strong class="mono" id="fund-available-cash">—</strong></div>
+      </section>
+
       <section class="strategy-bar" id="strategy-bar" aria-label="Accepted strategy view" hidden>
         <label class="field-label" for="selected-strategy">Selected strategy</label>
         <select id="selected-strategy" aria-label="Selected strategy"><option value="">Select strategy</option></select>
@@ -160,6 +166,7 @@
     <script src="popup-view.js"></script>
     <script src="strategy-store.js"></script>
     <script src="strategy-panel.js"></script>
+    <script src="margin-evidence.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

@@ -18,16 +18,18 @@ export function createZerodhaClient({ apiKey, accessToken, fetchImpl = fetch, on
     throw new Error("Invalid Zerodha client dependencies.");
   }
 
-  async function get(path) {
+  async function request(path, { method = "GET", body, responseType = "json" } = {}) {
     let response;
     try {
       response = await fetchImpl(`${API_BASE}${path}`, {
-        method: "GET",
+        method,
         headers: {
-          Accept: "application/json",
+          Accept: responseType === "text" ? "text/csv" : "application/json",
           Authorization: `token ${apiKey}:${accessToken}`,
-          "X-Kite-Version": "3"
-        }
+          "X-Kite-Version": "3",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" })
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) })
       });
     } catch (cause) {
       const error = new Error("Cannot reach Zerodha. Check the internet connection.");
@@ -37,16 +39,24 @@ export function createZerodhaClient({ apiKey, accessToken, fetchImpl = fetch, on
       throw error;
     }
 
-    const body = await response.json().catch(() => ({}));
+    const responseBody = responseType === "text"
+      ? await response.text().catch(() => "")
+      : await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 401) await onUnauthorized();
-      throw kiteError(body, response.status);
+      throw kiteError(responseBody, response.status);
     }
-    return body;
+    return responseBody;
   }
 
   return {
-    getPositions: () => get("/portfolio/positions"),
-    getTrades: () => get("/trades")
+    getPositions: () => request("/portfolio/positions"),
+    getTrades: () => request("/trades"),
+    getFunds: () => request("/user/margins"),
+    getInstrumentsNfo: () => request("/instruments/NFO", { responseType: "text" }),
+    calculateBasketMargins: (orders) => request("/margins/basket?consider_positions=false", {
+      method: "POST",
+      body: orders
+    })
   };
 }

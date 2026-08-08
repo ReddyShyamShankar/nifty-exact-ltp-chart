@@ -41,6 +41,8 @@
     || (typeof module !== "undefined" && module.exports ? require("./strategy-chart.js") : null);
   const strategyPanelApi = root.OptionsStrategyPanel
     || (typeof module !== "undefined" && module.exports ? require("./strategy-panel.js") : null);
+  const marginEvidenceApi = root.OptionsMarginEvidence
+    || (typeof module !== "undefined" && module.exports ? require("./margin-evidence.js") : null);
   const premiumHistoryModelApi = root.OptionsPremiumHistoryModel
     || (typeof module !== "undefined" && module.exports ? require("./premium-history-model.js") : null);
   const premiumChartTrialsApi = root.OptionsPremiumChartTrials
@@ -61,7 +63,8 @@
     manualPlans: manualPlanApi.emptyStore(),
     strategyBook: strategyStoreApi?.emptyBook?.() || {
       version: 1, nextSequence: 1, legs: {}, strategies: {}, versions: {}, quarantine: [], appliedCommands: {}
-    }
+    },
+    brokerMarginEvidence: { version: 1, updatedAt: null, funds: null, baskets: {} }
   };
 
   function quote(value) {
@@ -2041,6 +2044,16 @@
         .some((entry) => entry.id === entryId)) || null;
   }
 
+  function strategyMarginEvidence(strategyId) {
+    if (!strategyStoreApi || !marginEvidenceApi || !strategyId) return null;
+    const entries = strategyStoreApi.legsForStrategy(settings.strategyBook, strategyId);
+    return marginEvidenceApi.resolveBasket(settings.brokerMarginEvidence, `strategy:${strategyId}`, entries);
+  }
+
+  function strategyMarginText(strategyId) {
+    return marginEvidenceApi?.formatMoney?.(strategyMarginEvidence(strategyId)?.total) || "—";
+  }
+
   function openBrokerEntryDetails(entryId) {
     const entry = activeLadderEntries().find((candidate) => candidate.id === entryId) || null;
     if (entry?.source !== "BROKER_POSITION") return false;
@@ -2537,6 +2550,7 @@
       label: level.label,
       selected: ensureStrategyChartController()?.isSelected(strategyId) || false,
       entries,
+      extraDetailRows: entries.length + 1,
       detailHeight: viewKind === "BROKER_COMBINED"
         ? 72 + Math.max(callCount, putCount, 1) * 27 + (chargesComplete ? 0 : 27)
         : null,
@@ -2732,6 +2746,7 @@
     if (model.kind !== "STRATEGY" || openedStrategyId !== model.strategyId) return;
     if (model.viewKind === "BROKER_COMBINED") {
       appendBrokerMatrix(card, model);
+      appendStrategyMarginDetails(card, model.strategyId);
       return;
     }
     const details = document.createElement("span");
@@ -2752,6 +2767,28 @@
       disclosure.textContent = model.disclosure;
       details.append(disclosure);
     }
+    card.append(details);
+    appendStrategyMarginDetails(card, model.strategyId);
+  }
+
+  function appendStrategyMarginDetails(card, strategyId) {
+    const entries = strategyStoreApi?.legsForStrategy?.(settings.strategyBook, strategyId) || [];
+    if (!entries.length) return;
+    const basket = strategyMarginEvidence(strategyId);
+    const byEntry = new Map((basket?.legs || []).map((leg) => [leg.entryId, leg.total]));
+    const details = document.createElement("span");
+    details.className = "nifty-strategy__margins";
+    entries.forEach((entry) => {
+      const row = document.createElement("span");
+      row.className = "nifty-strategy__margin";
+      const side = entry.optionType === "CALL" ? "C" : "P";
+      row.textContent = `${side} ${Number(entry.strike).toLocaleString("en-IN")} MARGIN ${marginEvidenceApi?.formatMoney?.(byEntry.get(entry.id)) || "—"}`;
+      details.append(row);
+    });
+    const combined = document.createElement("span");
+    combined.className = "nifty-strategy__margin is-combined";
+    combined.textContent = `MARGIN REQUIRED ${marginEvidenceApi?.formatMoney?.(basket?.total) || "—"}`;
+    details.append(combined);
     card.append(details);
   }
 
@@ -2922,6 +2959,7 @@
       const lots = Math.max(1, Number(entry.lots) || 1);
       const compact = document.createElement("span");
       compact.className = `nifty-position-spine__compact is-${side}`;
+      compact.hidden = openedStrategyId === model.strategyId;
       compact.style.top = `${y - 9}px`;
       compact.style.right = side === "call"
         ? `${Math.max(0, window.innerWidth - spineX + POSITION_LANE_GAP_PX)}px`
@@ -2959,10 +2997,17 @@
         divider.textContent = "|";
         const evidence = document.createElement("span");
         evidence.className = "nifty-position-spine__marker-be";
-        evidence.textContent = evidenceValues
+        evidence.textContent = `BE ${evidenceValues
           .map((value) => Math.round(value).toLocaleString("en-IN"))
-          .join("/");
-        marker.append(divider, evidence);
+          .join("/")}`;
+        const marginDivider = document.createElement("span");
+        marginDivider.className = "nifty-position-spine__marker-divider";
+        marginDivider.setAttribute("aria-hidden", "true");
+        marginDivider.textContent = "|";
+        const margin = document.createElement("span");
+        margin.className = "nifty-position-spine__marker-margin";
+        margin.textContent = `Margin ${strategyMarginText(model.strategyId)}`;
+        marker.append(divider, evidence, marginDivider, margin);
       }
       marker.setAttribute("aria-expanded", String(openedStrategyId === model.strategyId));
       marker.setAttribute("aria-label", `${side === "call" ? "Call" : "Put"} ${entry.direction}, ${lots} ${lots === 1 ? "lot" : "lots"}, strike ${Number(entry.strike).toLocaleString("en-IN")}${evidenceValues.length ? `, strategy breakeven ${evidenceValues.map((value) => Math.round(value).toLocaleString("en-IN")).join(" and ")}` : ""}. Open P and L.`);
@@ -3362,7 +3407,7 @@
             const text = document.createElement("span");
             text.className = "nifty-strategy__rail-text";
             text.textContent = model.showStrikeEvidence
-              ? Math.round(Number(model.exact)).toLocaleString("en-IN")
+              ? `BE ${Math.round(Number(model.exact)).toLocaleString("en-IN")} | Margin ${strategyMarginText(model.strategyId)}`
               : strategyRailText(model);
             label.append(divider, text);
           }
@@ -4300,7 +4345,7 @@
           estimatedQuickLabelRight,
           rect,
           renderedStrategyBlockerRects(document.getElementById("nifty-strategy-rails")),
-          POSITION_LANE_GAP_PX
+          RISK_LABEL_GAP_PX
         );
         placeBreakEvenRails(toY, rect, quickLabelRight, railDecorations.quick, visualPlacementRevision);
       } else {
@@ -4772,6 +4817,10 @@
       discardStoredInteractionIdentities();
       clearStrategyRails();
       if (settings.enabled) void renderStorageStrategyBook();
+    }
+    if (changes.brokerMarginEvidence) {
+      settings.brokerMarginEvidence = changes.brokerMarginEvidence.newValue || DEFAULTS.brokerMarginEvidence;
+      if (settings.enabled) void controller?.place();
     }
     if (changes.expiry) {
       closePremiumHistory();
