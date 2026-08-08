@@ -3658,6 +3658,27 @@
     return placements.some(({ projection }) => !projection) ? null : placements;
   }
 
+  function quickPremiumDifference(kind) {
+    const entry = activeFaceEntry();
+    if (!entry || String(entry.direction).toUpperCase() !== "SELL") return null;
+    const optionKind = String(entry.optionType).toLowerCase();
+    if (optionKind !== String(kind).toLowerCase()) return null;
+    const savedPremium = Number(entry.premium);
+    const row = (controller?.membership()?.rows || [])
+      .find((candidate) => Number(candidate?.strike) === Number(entry.strike));
+    const livePremium = Number(row?.[optionKind]);
+    if (!Number.isFinite(savedPremium) || !Number.isFinite(livePremium)) return null;
+    const difference = savedPremium - livePremium;
+    return Math.abs(difference) < 0.005 ? 0 : difference;
+  }
+
+  function quickBreakEvenLabel(level) {
+    const difference = quickPremiumDifference(level?.kind);
+    return Number.isFinite(difference)
+      ? `${level.label} · ${difference.toFixed(2)} pts`
+      : level.label;
+  }
+
   function sharedRailDecorations(toY, rect, { includeManual = true } = {}) {
     const quick = quickRailPlacements(toY, rect);
     const manual = includeManual ? manualRailPlacements(toY, rect) : null;
@@ -3704,14 +3725,14 @@
         label.dataset.exact = String(level.exact);
         label.style.right = `${window.innerWidth - railRight}px`;
         label.style.top = `${labelDecorations[index].top}px`;
-        label.textContent = level.label;
+        label.textContent = quickBreakEvenLabel(level);
         element.append(label);
       } else {
         element.style.left = "";
         element.style.right = `${window.innerWidth - railRight}px`;
         element.style.top = `${labelDecorations[index].top}px`;
         element.classList.add(`is-${projection.edge}`);
-        element.textContent = level.label;
+        element.textContent = quickBreakEvenLabel(level);
       }
       rails.append(element);
     });

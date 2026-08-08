@@ -3801,6 +3801,38 @@ test("closed strike-evidence proxy stays visually hidden after collapsed-card di
     "collapsed detail proxy must beat normal collapsed-card display in CSS cascade");
 });
 
+test("sold saved strike appends saved-minus-live premium points only after explicit refresh", async () => {
+  const entry = savedManualEntry({ premium: 440, callSnapshot: 440 });
+  const h = createBreakEvenLifecycleHarness({ manualEntries: [entry], strategySupport: true });
+  await h.settle();
+  const fetchesBeforeClick = h.fetchCalls();
+
+  h.click(23750);
+  await h.settle();
+  let labels = h.rails().querySelectorAll(".nifty-break-even__label");
+  assert.equal(labels.find((label) => label.classList.contains("is-call")).textContent,
+    "CALL BE 23,869 · SELL BELOW ↓ · 321.00 pts");
+  assert.doesNotMatch(labels.find((label) => label.classList.contains("is-put")).textContent, /pts/,
+    "premium difference belongs only to saved option side");
+  assert.equal(h.fetchCalls(), fetchesBeforeClick,
+    "strike click uses cached manual-refresh evidence and never starts quote loop");
+
+  await h.refreshOptionNumbers({ byStrike: { 23750: { call: 654.85, put: 219 } } });
+  assert.equal(h.rails(), null, "manual refresh preserves existing explicit clear boundary");
+  h.click(23750);
+  await h.settle();
+  labels = h.rails().querySelectorAll(".nifty-break-even__label");
+  assert.equal(labels.find((label) => label.classList.contains("is-call")).textContent,
+    "CALL BE 24,405 · SELL BELOW ↓ · -214.85 pts");
+  const fetchesAfterManualRefresh = h.fetchCalls();
+
+  await h.retryPlacement();
+  await h.settle();
+  assert.equal(h.fetchCalls(), fetchesAfterManualRefresh,
+    "geometry retries never refresh quotes automatically");
+  assert.match(h.rails().textContent, /-214\.85 pts/);
+});
+
 test("same-strike broker face keeps two quick rails without leaking unrelated manual T controls", async () => {
   const book = chartStrategyBookWithSameStrikeBroker();
   const manualEntries = Object.values(book.legs).filter((entry) => entry.source === "MANUAL");
